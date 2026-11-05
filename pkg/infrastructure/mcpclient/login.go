@@ -67,7 +67,9 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return errors.New("MCP login failed: check server OAuth support, consent, and configured scopes")
+		// The cause names the failed OAuth step (registration, consent, token exchange, missing refresh token).
+		// OAuth error responses carry no credentials, so it is safe to show.
+		return fmt.Errorf("MCP login failed: %w", err)
 	}
 	defer session.Close()
 	source, _ := handler.TokenSource(ctx)
