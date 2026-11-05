@@ -6,12 +6,13 @@ This document lists what a survey on 2026-11-04 found, and what noctiluca adopts
 
 | Source | Content | Use in noctiluca |
 |---|---|---|
-| [Letta MemFS](https://docs.letta.com/letta-agent/concepts/memfs) | Memory is a git repository of markdown, with a commit for each edit. A separate agent consolidates it in a worktree. | The shape of the memory repository itself. noctiluca uses only the idea and does not depend on Letta. |
+| [Letta MemFS](https://docs.letta.com/letta-agent/concepts/memfs) | Memory is a git repository of markdown, with a commit for each edit. Temporary worktrees support memory history operations. | The shape of the memory repository itself. noctiluca uses only the idea and does not depend on Letta. |
 | [Letta sleep-time agents](https://arxiv.org/abs/2504.13171) | While the main agent is idle, a separate agent rewrites the shared memory. | consolidate runs in the background. |
-| [ACE](https://arxiv.org/abs/2510.04618) | It fixes the memory (a playbook) with small diffs, one item at a time. A full rewrite shrinks the content and lowers accuracy (context collapse). Optimization tends toward short, generic sentences (brevity bias). | One change adds, merges, generalizes, or deletes one item. No change rewrites a whole document. |
+| [ACE](https://arxiv.org/abs/2510.04618) | It fixes the memory (a playbook) with small diffs, one item at a time. A full rewrite shrinks the content and lowers accuracy (context collapse). Optimization tends toward short, generic sentences (brevity bias). | Factual corrections change one item. Behavioral changes become proposals for the owner. No change rewrites a whole document. |
 | [Reflexion](https://arxiv.org/abs/2303.11366), [ReasoningBank](https://arxiv.org/abs/2509.25140) | They extract reusable strategies in words from both successful and failed trajectories. | The failure signals (corrections, tool errors, a "cannot" that contradicts a capability) are the input. |
-| [Voyager](https://arxiv.org/abs/2305.16291) | It keeps verified procedures in a library and retrieves them when needed. | Procedures live as Claude Code skills. |
-| [GEPA](https://arxiv.org/abs/2507.19457) | It keeps the candidate that wins on each case, not only the candidate with the best average. | noctiluca rejects a change that fixes common cases but breaks a rare case that passed before. |
+| [Voyager](https://arxiv.org/abs/2305.16291) | It keeps verified procedures in a library and retrieves them when needed. | Procedures live in memory files and native model skills. |
+| [GEPA](https://arxiv.org/abs/2507.19457) | It compares candidates on individual cases as well as their averages. | The owner-requested hillclimbing procedure rejects changes that break previously passing cases. |
+| [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/) | Separate training and held-out cases, measure noise, and revert changes without a held-out gain. | The on-demand hillclimbing procedure uses model tools. The harness has no experiment runner. |
 | [Claude Code memory](https://code.claude.com/docs/en/memory) | It reads the `MEMORY.md` index (the first 200 lines or 25 KB) every time, and reads topic documents when needed. | The structure of a core plus documents linked from it. |
 
 ## Rejected

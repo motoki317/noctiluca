@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build archives and checksums
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          revision=$(git rev-parse HEAD)
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist"
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="noctiluca_${VERSION}_${os}_${arch}"
+            package="$RUNNER_TEMP/$name"
+            mkdir -p "$package"
+            GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION -X main.revision=$revision" \
+              -o "$package/noctiluca" ./cmd/noctiluca
+            cp LICENSE README.md "$package/"
+            tar -C "$package" -czf "$dist/$name.tar.gz" noctiluca LICENSE README.md
+          done
+          cd "$dist"
+          sha256sum ./*.tar.gz > SHA256SUMS
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" "$RUNNER_TEMP"/dist/*.tar.gz "$RUNNER_TEMP/dist/SHA256SUMS" \
+            --verify-tag --generate-notes

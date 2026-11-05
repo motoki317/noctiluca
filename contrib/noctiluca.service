@@ -1,0 +1,13 @@
+[Unit]
+Description=noctiluca agent
+
+[Service]
+ExecStart=%h/.local/bin/noctiluca run --config %h/.config/noctiluca/config.yaml
+Environment="PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-%h/.config/noctiluca/environment
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

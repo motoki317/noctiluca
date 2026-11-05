@@ -77,6 +77,7 @@ func TestVersionAndHelpSkipConfig(t *testing.T) {
 		{args: []string{"version"}, want: "dev (unknown)\n"},
 		{args: []string{"--version"}, want: "noctiluca version dev (unknown)\n"},
 		{args: []string{"--help"}, want: "Usage:"},
+		{args: []string{"run", "--help"}, want: "Usage:"},
 	} {
 		t.Run(tt.args[0], func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
