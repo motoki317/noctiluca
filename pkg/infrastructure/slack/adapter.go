@@ -24,7 +24,7 @@ type Config struct {
 }
 
 type adapter struct {
-	acceptConversation func(domain.ConversationRef) bool
+	acceptConversation func(domain.ConversationRef, bool) bool
 	life               lifecycle.Group
 	bot, reader        *sdk.Client
 	history            domain.EventRepository
@@ -145,11 +145,6 @@ func Conversation(channel, thread string) domain.ConversationRef {
 	return domain.ConversationRef("slack:" + channel + ":" + thread)
 }
 
-func (*adapter) DirectConversation(ref domain.ConversationRef) bool {
-	channel, _, err := destination(ref)
-	return err == nil && strings.HasPrefix(channel, "D")
-}
-
 func destination(ref domain.ConversationRef) (string, string, error) {
 	parts := strings.Split(string(ref), ":")
 	if len(parts) != 3 || parts[0] != "slack" || parts[1] == "" || strings.ContainsAny(parts[1], " \t\n\r") {
@@ -205,6 +200,6 @@ func (a *adapter) DirectMessage(ctx context.Context, user string) (domain.Conver
 	return Conversation(channel.ID, ""), nil
 }
 
-func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef) bool) {
+func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef, bool) bool) {
 	a.acceptConversation = accept
 }

@@ -138,9 +138,22 @@ func TestRunCLIHelper(t *testing.T) {
 		for _, name := range []string{"reply", "watch", "wake_at", "schedule_add", "memory_read", "slack_read_history"} {
 			require.True(t, names[name], name)
 		}
+		var source struct {
+			Channel, Thread string
+			OwnerTarget     string `json:"owner_target"`
+		}
+		header, _, _ := strings.Cut(capture.Input, "\n")
+		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(header, "Source: ")), &source))
+		target := source.Channel
+		if source.Thread != "top level" && source.Thread != "background continuation" {
+			target = source.Thread
+		}
+		if source.OwnerTarget != "" {
+			target = source.OwnerTarget
+		}
 		if !recovery {
 			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "watch", Arguments: map[string]any{
-				"command": `NOCTILUCA_RUN_CHILD=1 exec "$NOCTILUCA_RUN_TEST_BINARY" -test.run=TestRunCLIHelper`, "cwd": os.Getenv("NOCTILUCA_RUN_TEST_DIR"),
+				"target": target, "command": `NOCTILUCA_RUN_CHILD=1 exec "$NOCTILUCA_RUN_TEST_BINARY" -test.run=TestRunCLIHelper`, "cwd": os.Getenv("NOCTILUCA_RUN_TEST_DIR"),
 			}})
 			require.NoError(t, err)
 			require.False(t, result.IsError, "%+v", result.Content)
@@ -148,7 +161,8 @@ func TestRunCLIHelper(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &watched))
 			capture.WatchPID = watched.PID
 		}
-		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "reply", Arguments: map[string]any{"text": "**Hello** from the hub"}})
+
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "reply", Arguments: map[string]any{"target": target, "text": "**Hello** from the hub"}})
 		require.NoError(t, err)
 		require.False(t, result.IsError, "%+v", result.Content)
 		require.NoError(t, session.Close())
@@ -477,7 +491,7 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 	inbox := repository.NewInboxRepository(app.db)
 	makeItem := func(name, text string) domain.InboxItem {
 		ref := slack.Conversation("D_"+name, "")
-		return domain.InboxItem{SourceKey: name, SessionKey: domain.SessionKey(ref), Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: ref, Actor: domain.ActorOwner, Workdir: dir}}}
+		return domain.InboxItem{SourceKey: name, SessionKey: domain.SessionKey(ref), Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: ref, Direct: true, Actor: domain.ActorOwner, Workdir: dir}}}
 	}
 	pending := makeItem("PENDING", "pending-success")
 	recovered := makeItem("RECOVERED", "recover-success")

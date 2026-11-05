@@ -155,7 +155,7 @@ func TestPermanentRejectionHasNoRetryOrNotice(t *testing.T) {
 			return ""
 		}
 		return domain.ActorOwner
-	}, Prepare: func(context.Context, domain.InboxItem, bool) (domain.UserInput, error) {
+	}, Prepare: func(context.Context, domain.InboxItem) (domain.UserInput, error) {
 		return domain.UserInput{}, domain.ErrRejected
 	}})
 	f.start(t)
@@ -195,7 +195,7 @@ func TestScheduleToolRequiresFiveFields(t *testing.T) {
 }
 
 func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {
-	f := newDeliveryRig(t, Config{Prepare: func(_ context.Context, item domain.InboxItem, _ bool) (domain.UserInput, error) {
+	f := newDeliveryRig(t, Config{Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
 		if item.Payload.Input.Text == "rejected" {
 			return domain.UserInput{}, domain.ErrRejected
 		}
@@ -311,7 +311,7 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 			if notice {
 				cfg.NotifyOwner = func(ctx context.Context, _ string) error { return blockFirst(ctx) }
 			} else {
-				cfg.Prepare = func(ctx context.Context, item domain.InboxItem, _ bool) (domain.UserInput, error) {
+				cfg.Prepare = func(ctx context.Context, item domain.InboxItem) (domain.UserInput, error) {
 					return item.Payload.Input, blockFirst(ctx)
 				}
 			}

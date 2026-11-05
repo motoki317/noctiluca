@@ -23,7 +23,7 @@ func TestSessionContextRoundTrip(t *testing.T) {
 	saved, err := repo.Get(ctx, "old")
 	require.NoError(t, err)
 	require.Nil(t, saved.Context)
-	saved.Context = &domain.SessionContext{Conversation: "thread", Parent: "room", Actor: domain.ActorMember, Workdir: "/tmp/work"}
+	saved.Context = &domain.SessionContext{Conversation: "thread", Direct: true, Actor: domain.ActorMember, Workdir: "/tmp/work"}
 	require.NoError(t, repo.Save(ctx, saved))
 	require.NoError(t, db.Close())
 	db, err = New(ctx, config)

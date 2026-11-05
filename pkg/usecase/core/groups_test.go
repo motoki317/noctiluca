@@ -44,22 +44,22 @@ func TestGroupRefreshRetiresOwnerAndResumesMember(t *testing.T) {
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
-	require.Equal(t, domain.ActorOwner, f.hub.actor("thread"))
+	require.Equal(t, domain.ActorOwner, f.hub.actor("room"))
 	take(t, calls)
 	responses <- response{err: errors.New("temporary outage")}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- e
 	take(t, s.inputs)
-	require.Equal(t, domain.ActorOwner, f.hub.actor("thread"))
+	require.Equal(t, domain.ActorOwner, f.hub.actor("room"))
 	take(t, calls)
 	responses <- response{members: []string{"owner", "member"}}
-	require.Equal(t, domain.SessionKey("thread"), take(t, f.hub.closed))
+	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
 	e.Sender.ID = "member"
 	f.messaging.in <- e
 	resumed := take(t, f.model.opened)
 	take(t, resumed.inputs)
-	require.Equal(t, "resume-thread", resumed.config.ResumeToken)
-	require.Equal(t, domain.ActorMember, f.hub.actor("thread"))
+	require.Equal(t, "resume-room", resumed.config.ResumeToken)
+	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
 	require.NotEqual(t, s.config.ToolHub.BearerToken, resumed.config.ToolHub.BearerToken)
 }
 
@@ -100,28 +100,27 @@ func TestGroupStartupFailure(t *testing.T) {
 	take(t, called)
 }
 
-func (m *fakeMessaging) DirectConversation(ref domain.ConversationRef) bool {
-	return ref == "direct" || ref == "direct-thread" || ref == "blocked-direct"
-}
-
 func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	f := setup(t, Config{Owner: "owner", DirectMessages: &domain.AcceptRule{Groups: []string{"team"}}, UserGroups: map[string][]string{"team": {"owner"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"blocked-direct": {}}}, nil)
-	f.messaging.in <- message("blocked-direct", "owner", "denied override")
+	blocked := message("blocked-direct", "owner", "denied override")
+	blocked.Direct = true
+	f.messaging.in <- blocked
 	f.messaging.in <- message("unknown", "owner", "denied channel")
 	e := message("direct-thread", "owner", "first")
 	e.Parent = "direct"
+	e.Direct = true
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	require.Contains(t, take(t, s.inputs).Text, "first")
-	require.Equal(t, domain.ActorOwner, f.hub.actor("direct-thread"))
+	require.Equal(t, domain.ActorOwner, f.hub.actor("direct"))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	require.Eventually(t, func() bool {
 		items, err := f.core.(*core).inbox.Active(t.Context())
 		return err == nil && len(items) == 0
 	}, time.Second, time.Millisecond)
 	require.NoError(t, f.core.UpdateUserGroups(t.Context(), map[string][]string{"team": {"owner", "member"}}))
-	require.Equal(t, domain.SessionKey("direct-thread"), take(t, f.hub.closed))
-	item, err := f.core.(*core).workItem(t.Context(), "direct-thread")
+	require.Equal(t, domain.SessionKey("direct"), take(t, f.hub.closed))
+	item, err := f.core.(*core).workItem(t.Context(), "direct")
 	require.NoError(t, err)
 	item.SourceKey = "wake-test"
 	item.ReadyAt = time.Now()
@@ -130,11 +129,13 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	f.core.(*core).reconciler.Notify()
 	resumed := take(t, f.model.opened)
-	require.Equal(t, "resume-direct-thread", resumed.config.ResumeToken)
+	require.Equal(t, "resume-direct", resumed.config.ResumeToken)
 	require.Contains(t, take(t, resumed.inputs).Text, "wake after close")
-	require.Equal(t, domain.ActorMember, f.hub.actor("direct-thread"))
+	require.Equal(t, domain.ActorMember, f.hub.actor("direct"))
 	resumed.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.messaging.in <- message("direct-thread", "member", "accepted member")
+	e.Sender.ID = "member"
+	e.Text = "accepted member"
+	f.messaging.in <- e
 	require.Contains(t, take(t, resumed.inputs).Text, "accepted member")
 	select {
 	case <-f.model.opened:

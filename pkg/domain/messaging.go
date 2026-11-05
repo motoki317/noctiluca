@@ -15,19 +15,17 @@ type MessagingAdapter interface {
 	ToolNotes() string
 }
 
+// UserGroupProvider refreshes accept-rule membership.
 type UserGroupProvider interface {
 	UserGroups(ctx context.Context, ids []string) (map[string][]string, error)
 }
 
-type DirectConversationProvider interface {
-	DirectConversation(ConversationRef) bool
-}
-
+// DirectMessageProvider resolves owner notifications and task replies.
 type DirectMessageProvider interface {
 	DirectMessage(context.Context, string) (ConversationRef, error)
 }
 
-// ConversationFilter avoids remote lookups for channels without an accept rule.
+// ConversationFilter avoids sender lookups for reactions in unaccepted channels.
 type ConversationFilter interface {
-	SetConversationFilter(func(ConversationRef) bool)
+	SetConversationFilter(func(ConversationRef, bool) bool)
 }
