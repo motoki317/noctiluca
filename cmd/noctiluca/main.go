@@ -33,6 +33,28 @@ func newRootCommand() *cobra.Command {
 	}
 	root.PersistentFlags().StringVarP(&configPath, "config", "c", "", "YAML config file (default: config.yaml, if present)")
 	root.AddCommand(&cobra.Command{
+		Use:   "run",
+		Short: "Run noctiluca",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			config, err := loadConfig(configPath)
+			if err != nil {
+				return err
+			}
+			logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: config.logLevel}))
+			previous := slog.Default()
+			slog.SetDefault(logger)
+			defer slog.SetDefault(previous)
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			app, err := newApplication(ctx, config, logger)
+			if err != nil {
+				return err
+			}
+			logger.InfoContext(ctx, "Starting noctiluca", "version", version, "revision", revision)
+			return app.Start(ctx)
+		},
+	}, &cobra.Command{
 		Use:   "version",
 		Short: "Print the version",
 		Args:  cobra.NoArgs,

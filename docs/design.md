@@ -1,196 +1,231 @@
 # Design
 
-This is the first design draft. It builds on the requirements in [requirements.md](requirements.md) and the lessons in [lessons-from-openclaw.md](lessons-from-openclaw.md). There is no code yet.
+noctiluca runs one agent with replaceable messaging and model adapters, a durable SQLite inbox, and a Git memory repository.
+[requirements.md](requirements.md) records the workloads. [lessons-from-openclaw.md](lessons-from-openclaw.md) explains the operating constraints.
 
 ## Principles
 
-- noctiluca carries no unneeded features. This is the main reason to build a harness instead of using OpenClaw. Before you add a feature, check that a row of the table "Can the current workloads run on this design" below needs it.
-- One instance runs one agent (one soul). For several agents, the user starts several instances, and the agents talk to each other on the messaging platform.
-- An agent never waits with `sleep` or polling. When it must wait, it hands control back to the core (`watch`, `wake_at`) and ends its turn.
+- Carry only features that a current workload needs.
+- Run one agent per instance. Separate instances communicate through the messaging platform.
+- Return control when waiting for external work. Register `watch` or `wake_at`, then end the turn.
+- Keep platform and provider names out of the core interfaces.
 
 ## Overall structure
 
-```
- Slack ─┐                                            ┌─ claude CLI (subscription)
-Discord ┼─ messaging adapter ─ core ─ model adapter ─┤
-  …    ─┘ (also provides tools) │                    └─ Codex, others
-                                ├─ tool hub (MCP)
-                                ├─ sessions and history (SQLite)
-                                ├─ memory repository (git)
-                                └─ scheduler and background queue
+```text
+Messaging adapter ── event + inbox transaction ── SQLite
+                                                     │
+Schedules ── fire + advance transaction ── inbox ── reconciler
+Watch process ── outcome + inbox transaction ──────── │
+wake_at ── future inbox row ───────────────────────── │
+                                                     ├─ session pumps ── model adapter
+                                                     ├─ tool hub (MCP)
+                                                     └─ memory repository (Git)
 ```
 
-The core knows no platform name and no model name. It talks to the adapters on both sides only through the types in the next section.
+SQLite owns pending work. Model processes are disposable caches of session state.
+One reconciler decides which rows to dispatch, retry, finish, or mark dead.
+Session pumps perform model startup, prompt assembly, and input delivery outside that loop.
 
 ## Messaging adapter
 
-### Types that the core handles
+`ConversationRef` is an opaque destination string. The core does not interpret its encoding.
+An `InboundEvent` carries its source key, conversation, parent conversation, sender, text, attachments, mention flag, and receipt time.
+Its kind is `message`, `message_edited`, or `reaction`.
 
-- `ConversationRef`: an opaque string that identifies where a reply goes. The Slack adapter builds it as, for example, `slack:<channel>:<thread_ts>`, but the core does not interpret it.
-- `InboundEvent`: an event that the adapter passes to the core. There are three kinds: `message`, `message_edited`, and `reaction`.
-  - Common fields: `conversation` (`ConversationRef`), `parent` (the `ConversationRef` of the parent conversation for a thread, otherwise empty), `sender` (`{ id, displayName, kind: "human" | "bot" }`), `text`, `attachments` (file references), `mentionsMe`, `receivedAt`
-- To send, the core makes one call to the adapter: `send(conversation, { text, attachments })`. It returns only the message ID.
+The adapter passes each event to the core through a callback.
+The core commits the event and inbox row in one transaction before the callback returns.
+The adapter acknowledges delivery only after that return succeeds.
+A unique source key makes repeated delivery a no-op. Rejected events remain in history, with a completed inbox row.
 
-### Tools that the adapter provides
+The Slack adapter uses Socket Mode and ignores its own messages.
+An edit with unchanged text and files does not start a turn, including an unfurl update.
+The adapter provides read, search, download, upload, reaction, and send tools, plus short usage notes for the prompt.
+An optional user token supplies reads. Posts use the bot token.
 
-The adapter registers platform-specific operations with the core as tool definitions (name, description, JSON Schema, implementation). The core shows them to the model through the tool hub and does not interpret their meaning. The Slack adapter provides these tools first.
+## Core and reconciler
 
-| Tool | Purpose |
-|---|---|
-| `slack_read_thread` / `slack_read_history` | Read any channel or thread. The config can make them use a user token. |
-| `slack_search` | `search.messages` |
-| `slack_download_file` / `slack_upload_file` | Download and post files |
-| `slack_react` | Reactions |
-| `slack_send` | Post to another conversation, including "also send to channel" (broadcast) |
+### Acceptance and routing
 
-With a tool, the adapter can register a short note on its use (for example, which custom emoji to use). The core loads these notes next to the memory core.
+Conversation rules list accepted user IDs and groups, whether bots count, and whether a mention is required.
+Threads inherit their parent conversation's rule. Explicit rules override the default DM rule.
+Group membership refreshes periodically.
 
-## Core
+Each conversation or thread has one session key. Its first input includes the parent conversation's last 30 recorded events.
+A model session opens with the saved resume token when one exists.
 
-### From an incoming event to a turn
+A session has actor `owner` only if its rule permits the owner alone. Other accepted sessions have actor `member`.
+The actor stays fixed for that process. A permissions change that removes an owner grant retires the process and revokes its token.
+A later process uses the current rule. Background tasks have actor `owner`.
 
-1. **Acceptance check**: config rules decide whether the core accepts an `InboundEvent`. The rules live in one place. For each conversation, they state whose messages start a turn: a list of user IDs, a user group, whether bots count, and whether a mention is required. The history keeps rejected events too, as context.
-2. **Session assignment**: one function, `routeSession(event) → SessionKey`, maps an event to a session key. By default, each thread gets its own session, the top level of a channel shares one session, and each DM partner gets one session. A new thread session starts by reading the recent history of its parent channel.
-3. **Turn**: if no turn runs in the session, the model adapter starts a new turn. If a turn runs, the message goes into the session's inbox (next section).
+### Durable work
+
+Every input is an `inbox` row: inbound chat, a timed note, a watch outcome, or a schedule firing.
+The row holds a unique source key, session key, actor, input and context, readiness time, lane, status, attempts, retry time, deadline, and last error.
+Statuses are `pending`, `dispatched`, `done`, and `dead`.
+
+The reconciler wakes on a notification or the next due time. Each pass:
+
+1. Retire sessions past their turn deadline or idle timeout.
+2. Fire due schedules and advance their next run in the same transaction. Missed runs coalesce into one firing.
+3. Claim ready inbox rows and hand them to session pumps.
+
+A successful `Send` marks its inbox row done. Turn state belongs to the session and lasts until `turn_finished`.
+Conversation inputs reach the live process while it is busy. The model CLI queues them.
+Independent conversation sessions run concurrently. The task lane permits one busy session across heartbeat, cron, and consolidation.
+Conversation turns do not occupy the task worker.
+The reconciler never waits for HTTP, process startup, or turn completion.
+
+Delivery failures before a successful `Send` persist an attempt count and exponential backoff, starting at one second.
+After three failed attempts, the item becomes dead and a separate durable inbox row requests one owner DM notice.
+Notice delivery also retries, without creating recursive notices.
+Missing accept rules and rejected senders mark their rows dead immediately, without owner notices.
+A rejected sender does not interrupt another sender's running turn.
+Model startup, prompt, and send failures remain local to that session.
+Unusable shared persistence or the hub listener stops the process.
+
+At startup, pending rows remain pending. Dispatched rows return to pending, including owner notices. Delivery deadlines also return unsent rows to pending.
+The subprocess write and SQLite commit cannot form one atomic operation. A crash between them can repeat delivery.
+A deadline, mid-turn process exit, or restart of a busy session records an interruption event.
+A task turn deadline stops the task and queues one owner notice, without a continuation.
+Other task interruptions allow one continuation with a short interruption note. Its count persists with the input and running turn.
+An interrupted continuation stops without another continuation. Conversation interruptions create no continuation or owner notice.
+
+### Session lifecycle
+
+A pump owns the model process lifetime. The reconciler records its events and persists its resume token and running turn.
+Events from a replaced process are ignored.
+Task turn deadlines default to 30 minutes through `tasks.timeout`. Conversation turn deadlines default to two hours through `model.turn_timeout`.
+Steering does not extend the current turn's deadline.
+An idle process closes after `model.idle_timeout`, default one hour, only when no turn or background task remains.
+Retirement revokes the hub token and cancels the process. The session key stays reserved until the pump closes the process and exits.
+A later input resumes from the saved token.
 
 ### Replies
 
-The model replies with the tool `reply`, which sends to the current conversation. The final text of a turn goes nowhere. A turn that sends nothing posts nothing. The history of the destination conversation also records what the agent posted there. For example, the DM session can later read a preview that a morning scheduled run sent to the DM.
+Only tools post messages. Final assistant text remains private, and a silent turn posts nothing.
+`reply` copies the destination under the session lock, then sends synchronously outside the lock and records the send.
+Task replies go to the owner's DM. Conversation replies go to that conversation.
+There is no reply outbox because platform posts are not idempotent.
 
-### Permissions
+## Trust model
 
-The core compares `InboundEvent.sender` with the `owner` in the config, and tags the turn with `actor: owner | member`. The tool hub uses this value to gate tools that only the owner can use, such as registering a schedule or editing the memory core.
+Accepted members get the model's full native tools under the same Unix user.
+Hub checks restrict edits to `owner/`, `procedures/`, and `core.md`, plus access to owner-only tools.
+These checks prevent mistakes, not a determined member.
+Real isolation requires a separate Unix user or sandbox and is out of scope.
 
 ## Model adapter
 
-### Interface
+`ModelAdapter.Open` accepts a session key, resume token, system prompt, tool-hub endpoint, and working directory.
+It returns a `ModelSession` with `Send`, `Events`, `ResumeToken`, `Idle`, and `Close`.
+Events include turn start, text, tool calls and results, turn finish, errors, and background completion.
 
-```ts
-interface ModelAdapter {
-  // Open a session. With a resumeToken, continue the previous conversation.
-  open(session: { key: string; resumeToken?: string; systemPrompt: string; toolHub: McpEndpoint; workdir: string }): ModelSession
-}
+`model.workdir` defaults to `work/` beside the database, created with mode `0700`.
+Config validation keeps config, database, token files, and memory outside this directory. Schedules use it unless they specify a working directory.
 
-interface ModelSession {
-  // Pass a user message. If no turn runs, start a new turn.
-  // If a turn runs, pass the message to that turn (steer).
-  send(input: UserInput): void
-  events: AsyncIterable<ModelEvent>  // turn_started, text, tool_call, turn_finished, error
-  resumeToken(): string | undefined
-  close(): Promise<void>
-}
-```
+The Claude adapter runs one subscription-authenticated CLI process per session with stream-json input and output.
+It passes the hub through `--mcp-config`, retains user, project, and local settings, and never passes `--bare`.
+Native tools remain available to accepted member sessions under the owner's host-access policy.
+Claude handles shell execution, subagents, and compaction.
 
-To the core, an extra message for a running turn (R2) is one `send` call. If a model cannot take input in the middle of a turn, the adapter queues the message itself and passes it as the next turn right after `turn_finished`. The core does not know which method an adapter uses.
-
-### Claude adapter
-
-- It starts the official `claude` CLI with the subscription login as is. OpenClaw 2026.10.10 also starts it with `claude --print --input-format stream-json --output-format stream-json --verbose --replay-user-messages …` (`dist/cli-runtime-args-*.mjs`).
-- It keeps one process per session and writes stream-json user messages to stdin. The CLI picks up a message written during a run at its next break point.
-- It passes the tool hub with `--mcp-config`. It uses the user's `~/.claude` (skills, subagents, rules) as is.
-- Claude Code itself handles shell execution, subagents, and context compaction.
-
-`--bare` will become the default for `-p` in the future, and bare mode does not use the subscription login or `~/.claude`. The adapter either passes explicit flags that keep it out of bare mode, or pins the CLI version ([go-stack.md](go-stack.md)).
-
-### Codex adapter (future)
-
-It uses `codex app-server` (JSON-RPC 2.0). `turn/steer` adds input to a running turn, so `send` maps directly to steer.
+Measured CLI behavior queues mid-turn input for a subsequent turn. Conversation steering forwards each input as soon as its delivery slot is free.
+CLI versions below 2.1.316 are refused. A newer major or minor version produces a warning.
+[claude-cli.md](claude-cli.md) records the protocol measurements and commands.
 
 ## Tool hub
 
-The core runs one MCP server and passes only that server to the model. The server combines these three sources:
+One loopback streamable-HTTP MCP server, named `noctiluca`, combines core tools, messaging adapter tools, and external MCP tools.
+A bearer token identifies one model session and its actor. It lasts until that process closes, including between turns and during background subagent work.
+Handlers receive the session identity through context. `OwnerOnly` is the hub's tool permission gate.
+Memory writes also enforce permissions for their requested path.
 
-- Core tools: `reply`, memory search, read, and write, todo, schedules, search over past sessions, and `watch` and `wake_at` (below)
-- Tools that the messaging adapter registered
-- External MCP servers (an issue tracker, a wiki, an error tracker). The core connects to them as a client and stores their OAuth tokens. With this, a different model adapter uses the same login.
+Tool results contain the handler's JSON as text, or the external server's result text.
+One client per external server shares the owner's OAuth login across sessions.
+Servers without login are skipped with a warning. Reconnect refreshes the registry.
+External tool-list changes apply to new model sessions only.
+External servers require the owner by default. A server can opt members in with `members: true`.
 
-Tool results are short (success or failure, ID, body). The processes of external MCP servers live as long as the core, and the core does not create them per session.
+### Waiting tools
 
-### `watch`: wait for a long job to finish
+`watch({command, cwd})` commits a watch row before spawning a shell process group.
+On exit, one transaction stores the outcome and a new input with the exit code and last 4 KB of combined output.
+A failed delivery uses the inbox retry policy. It does not stop the service.
+Shutdown kills watch process groups. At startup, unfinished watches produce an interruption notice with an unknown exit status.
+Commands are never rerun during recovery.
 
-For a job that takes more than 10 minutes, such as a Codex run or starting a local k3d cluster, the core runs `watch({ command, cwd })` as a child process. When the process exits, the core sends a summary of the result to the original session as a message and starts a new turn (or steers the running turn). The model side's shell time limit does not apply. `wake_at({ at, note })` sends `note` to the original session at the given time. It covers waits with no process that signals the end, such as waiting for a PR review.
+`wake_at({at, note})` inserts an inbox row with a future readiness time.
+The originating session receives the note after that time. Task continuations use the task lane.
+Neither continuation replaces its note with the scheduled procedure text.
 
 ## Memory
 
-### Location
+Memory lives in a Git repository, initialized when missing. Each tool write commits its message and preserves unrelated local edits.
 
-Memory lives in the git-managed directory `memory/`. Every change is a commit and can be undone.
-
-| Path | Loaded | Who can edit |
+| Path | Loaded | Tool write/delete permission |
 |---|---|---|
-| `memory/owner/` (the persona, the user's preferences) | Every turn | The owner only |
-| `memory/core.md` (the tool index, important rules) | Every turn | The agent. Limit: 8 KB |
-| `memory/topics/*.md`, `memory/procedures/*.md` | When needed, from index links and search | The agent |
-| `evals/` | Only during memory consolidation | The agent |
+| `owner/` | Every turn | Owner |
+| `core.md` | Every turn | Owner |
+| `topics/` | On demand | Owner or member |
+| `procedures/` | On demand, or by a scheduled task | Owner |
 
-The tool index in `core.md` lists one line per entry, in the form "what to do → the tool to use" (for example, "read any Slack conversation → `slack_read_thread`"). The agent forgot the user token because no such line loaded every turn.
+The prompt combines owner files, `core.md`, and messaging adapter notes.
+`core.md` contains the tool index and rules that must load every turn.
+Its write cap defaults to 8 KB. Oversized files remain readable at startup and in prompts so the owner can repair them.
+`memory_sizes` reports the revision, per-file sizes, core size, total size, file count, and configured caps.
+File, total, and count caps reject growth while permitting reductions toward the limits.
 
-While there are a few dozen documents, the agent greps the memory repository, and noctiluca builds no search index. When grep is not enough, noctiluca adds an FTS5 trigram index and embeddings in SQLite ("Search" in [memory-research.md](memory-research.md)). Each item records the date it was last useful, and consolidate uses that date to pick candidates to forget.
+Memory search uses literal Git grep over the managed files, without an index.
+Shipped procedures also appear in memory reads and search when no local override exists.
+They do not consume the repository's size caps. An empty override suppresses a scheduled procedure.
 
-### History
+`memory_revert` reverts one commit without discarding later unrelated edits.
+Temporary snapshots live under the repository's `.git/noctiluca-snapshots/` directory.
+Startup sweeps that directory and prunes stale worktree registrations. It preserves unrelated owner worktrees.
 
-SQLite stores the incoming events, turns, and tool calls of all sessions. A tool searches past sessions, and memory consolidation reads this history as its input (episodes).
+SQLite separately records inbound events, sends, and model events.
+Its event-text search uses FTS5 trigram matching, with `LIKE` for queries shorter than three characters.
 
 ## Background tasks
 
-### Queue and lock
+Schedules persist as rows with name, cron expression, timezone, prompt, working directory, actor, and next run.
+The config and owner-only schedule tools create them. User cron expressions require exactly five fields, without descriptors.
+A cron parser computes the next due time.
+Heartbeat and consolidation are ordinary rows with reserved names.
+Config-defined jobs return on restart if removed through a tool. Disabled built-in jobs are removed at startup.
 
-Scheduled runs, cron tasks, and memory consolidation all go into one queue, and one worker runs them in order (R6). Conversation turns do not go into the queue and run in parallel. If the previous task still runs when a task's start time comes, the new task runs after it.
-
-A task never waits inside itself. A task that waits for CI or a long build registers `watch` or `wake_at(time, note)` with the core, ends its turn, and releases the lock. When the wait ends, the core queues the continuation as a new task. As a result, no task holds the worker for long, and a task with a fixed time, such as the evening photo post, does not fall far behind.
-
-### Scheduled run (heartbeat)
-
-Once an hour, the agent runs the procedure in `memory/procedures/heartbeat.md` in one turn. The procedure lists items that the user added, such as "check the todo list" and "photo post". A cron task is `{ name, cron, tz, prompt, workdir }`, and the config or an owner tool registers it.
+Heartbeat reads `procedures/heartbeat.md` hourly by default. A missing or empty file skips its turn.
+A task that needs to wait registers `watch` or `wake_at`, ends its turn, and releases the worker.
+A hung turn loses its process at the deadline so another task can run.
 
 ### Memory consolidation (consolidate)
 
-The name "sleep" is easy to confuse with the shell `sleep`, so this task is called consolidate. It goes into the queue once a day (for example, at 4 a.m.) and when the number of new episodes reaches a set count.
+Consolidation is optional and defaults to 04:00 UTC when enabled. The config controls its cron expression and timezone.
+It reads `procedures/consolidate.md`, with a shipped default if no override exists.
 
-By default, consolidate works on the agent's own memory. Its proposals have no limit on scope, though. If it judges that the harness code, its config, or the user's operations need a change, it sends that proposal to the owner.
+The procedure reads recent episodes, commits facts the owner taught and clear factual corrections, and sends behavioral proposals to the owner.
+Tool limitations, harness changes, and memory restructuring also become proposals.
+Mechanical signals include correction keywords, edits, deletions, negative reactions, tool errors, and repeated identical calls.
+They guide inspection and do not prove a failure.
 
-The steps follow. The approach follows [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/).
+Consolidation excludes its own model events from episodes. After a successful procedure turn, the checkpoint advances to the turn-finish time.
+Failed or skipped turns leave it unchanged. `reply` sends the summary to the owner's DM.
 
-1. **Collect**: read the episodes since the last run. Pick up failure signals mechanically: user corrections ("I didn't say stop"), negative reactions, tool errors, repeats of the same operation, and facts that the owner taught later.
-2. **Classify causes**: put the cause of each failure into one class: the knowledge was missing, the knowledge existed but did not load, the instructions contradicted each other, the tool could not do it, or a harness bug. Memory cannot fix the last two, so they become proposals to the owner.
-3. **Fix without measuring**: commit additions of facts that the owner taught and corrections of clear errors as they are. Measure only changes to behavior rules or to the structure of the memory.
-4. **Pick cases**: measure each change to behavior on cases of the current run. Each run picks its cases again from recent episodes, both failures and successes. A set of only failures measures only the current model's weak points and drifts away from the real distribution of work. When the cases are picked, they split at random into a training set and a test set, and the consolidating agent never sees the test set. A pass condition is a checkable claim ("calls `slack_read_thread`", "does not say it cannot read").
-5. **Fix**: make one change at a time, as a patch that fixes the cause. A change adds, merges, generalizes, or deletes one item, and never rewrites a whole document. ACE reports that a full rewrite shrinks the content and lowers accuracy. Do not tune wording. Do not paste the text of a failed conversation into memory. Write a generalized rule or a tool index line instead.
-6. **Measure**: first, run the unchanged state twice to find how much results vary by chance (the noise). Run both the training set and the test set before and after the change. Adopt the change only if the test set improves by more than the noise. Reject a change that raises the average but fails a case that passed before. If only the training set improves, treat it as overfitting and revert. Also revert on a regression. During the runs, tools with side effects, such as sends and file writes, are replaced with stubs that only record the call. A different model grades the runs (for example, Codex grades Claude's cases).
-7. **When stuck**: after two or three runs in a row with no adopted change, stop making changes, and only classify the remaining failures by cause. If a case fails every time, suspect an error in the case or in the grading.
-8. **Shrink**: if memory exceeds the limit of `core.md`, the limit per document, or the limit on the total size of all documents, merge, generalize, or delete items to get back within the limits. The goal of this step is a smaller memory with the same score, and the test set must show no regression. At equal scores, the smaller memory wins, so forgetting and generalizing count as improvements, not as risks.
-9. **Keep**: commit the adopted changes, and send a summary to the owner.
+The separate `procedures/hillclimb.md` runs only at the owner's request.
+It guides an experiment through the model's Bash, Git worktree, and subagent tools.
+The harness contains no behavior-experiment runner or case store.
+[Memory research](memory-research.md) and [third-party notices](../THIRD_PARTY_NOTICES.md) attribute the procedure's design ideas.
 
-Cases do not pile up into a permanent regression suite. The case store has a cap on the number of cases and an expiry. Cases that pass every time and cases past their expiry are discarded. This keeps the memory from hardening around old failures.
+## Workload coverage
 
-## Can the current workloads run on this design
-
-This table maps the work that OpenClaw handles today to the parts of the new design that cover it.
-
-| Current work | What it needs | How the new design covers it |
-|---|---|---|
-| A DM with the owner | DM events, the owner check | Slack adapter, acceptance check, permissions |
-| A team channel where any member of a user group can start a turn without a mention | Permission by user group, replies in threads | Acceptance check (group), `routeSession`, `reply` |
-| A channel where the agent replies only when called | Read as context, and the model decides whether to reply | An accepted event posts nothing unless the model calls `reply` |
-| Alert channels where bot posts start an investigation | Turns started by bot messages, one session per channel | Acceptance check (bots allowed), `routeSession` |
-| A reaction marks an alert done | Reaction events | The `reaction` kind of `InboundEvent` |
-| An hourly heartbeat over a todo list (check `memory/todo.md`, report `[urgent]` items) | Scheduled runs, todo, posts to a report channel | heartbeat, todo, `slack_send` |
-| A daily photo post: a morning DM preview, and an evening post to a channel thread with "also send to channel" | cron with a time zone, image posts, a DM reply that replaces the preview | cron, `slack_upload_file`, `slack_send` (broadcast), history records of sends |
-| Long PR-review runs on a local cluster (k3d starts in about 5 minutes) with browser automation | Long shell runs, browser automation | Claude Code's Bash, `watch` |
-| Delegating implementation to Codex for more than 10 minutes | Waiting for a long job to finish | `watch` |
-| External MCP servers (an issue tracker, a wiki, an error tracker) with a shared OAuth login, plus a read-only metrics/logs CLI | MCP (shared OAuth login), a CLI | External MCP in the tool hub, Claude Code's Bash |
-| Reading files and images from chat | Downloads with a user token | `slack_download_file` |
-| Searching past sessions (for example, a channel session looks up what a DM said) | History and search over all sessions | History in SQLite and a search tool |
-| Dreaming (daily memory promotion at 3 a.m.) | Memory consolidation | consolidate |
-
-## Decided
-
-- The name is noctiluca.
-- The implementation language is Go. The layout follows traPtitech/NeoShowcase. [go-stack.md](go-stack.md) lists the libraries and the layout.
-- One instance runs one agent. The first migration moves only `main`.
-- As today, the Claude subscription also serves turns that team members start.
-
-## Open questions
-
-1. With stream-json input to the `claude` CLI, what line format does a message written during a run take, and at which break point does it reach the turn? The docs do not say. The plan is to read the implementation in OpenClaw #159816 and test it by running the CLI.
-2. If the core holds the OAuth tokens for external MCP servers, do the issue tracker, wiki, and error tracker servers in use actually accept dynamic client registration? The plan is to log in to each one and check.
+| Workload | Support |
+|---|---|
+| Owner DMs and allowed team channels | Acceptance rules, group refresh, per-conversation sessions |
+| Mention-only and bot-alert channels | Mention and sender-kind rules |
+| Thread investigations and reactions | Opaque thread destinations, parent history, reaction events |
+| Scheduled previews and posts | Persistent cron rows, task replies, adapter send/upload/broadcast tools |
+| Long builds, reviews, and delegated commands | Native model tools, durable watches, timed notes |
+| External issue, wiki, and error tools | Shared MCP clients and persisted OAuth credentials |
+| Files and images in chat | Adapter downloads and attachments |
+| Factual memory maintenance | Scheduled consolidation and Git commits |
+| Owner-requested behavior improvement | On-demand hillclimbing procedure |
