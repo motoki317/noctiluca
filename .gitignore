@@ -1,1 +1,7 @@
 docs/plans/
+/bin/
+/noctiluca.db*
+/config.yaml
+/memory/
+/result
+/result-*

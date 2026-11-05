@@ -1,0 +1,94 @@
+# Third-party notices
+
+noctiluca uses the [MIT License](LICENSE). The following projects and research informed its implementation.
+
+## OpenClaw
+
+Source: [openclaw/openclaw](https://github.com/openclaw/openclaw), version 2026.10.10. License: MIT.
+
+The Go adapter in `pkg/infrastructure/claude/` reimplements the Claude CLI invocation, stream-json messages, control handshake, and follow-up input protocol.
+It follows OpenClaw and the CLI measurements in [docs/claude-cli.md](docs/claude-cli.md).
+No OpenClaw source files or implementation code were copied. CLI argument values and JSON field names follow the reference protocol.
+The adapter tests, the fake CLI in `cmd/noctiluca/run_test.go`, and the measurement script in `docs/claude-cli.md` exercise that protocol.
+
+The reference files are `dist/cli-runtime-args-*.mjs`, `dist/invoke-agent-cli-claude-params-*.mjs`, `dist/cli-transport-*.mjs`, and `dist/extensions/anthropic/cli.runtime.js`.
+OpenClaw's notice follows. It covers the reference project, not the separately distributed Claude CLI.
+
+```text
+MIT License
+
+Copyright (c) 2026 OpenClaw Foundation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## traPtitech/NeoShowcase
+
+Source: [traPtitech/NeoShowcase](https://github.com/traPtitech/NeoShowcase/tree/06fa2e6c52e74f760f09a84ac36cab12b3f4e947), commit `06fa2e6c52e74f760f09a84ac36cab12b3f4e947`. License: MIT.
+
+- `.golangci.yml` copies the upstream file verbatim, apart from the attribution header.
+- `mise.toml` adapts the task-file style and reuses the `APP_VERSION` and `APP_REVISION` entries.
+- The package layout, domain interfaces, constructors, and CLI conventions follow NeoShowcase, as described in [docs/go-stack.md](docs/go-stack.md).
+
+The full upstream notice follows, with its copyright holder's name unchanged:
+
+```text
+MIT License
+
+Copyright (c) 2020 東京工業大学デジタル創作同好会traP
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Research and design
+
+These credits acknowledge ideas, not copied research code or paper text. They do not apply noctiluca's MIT License to the referenced works.
+[docs/memory-research.md](docs/memory-research.md) records the adopted ideas. The original procedure text in `pkg/usecase/consolidate/procedures/` uses these ideas under noctiluca's MIT License. [docs/design.md](docs/design.md#memory-consolidation-consolidate) specifies their use in consolidation.
+
+| Source | Influence on noctiluca |
+|---|---|
+| [ACE](https://arxiv.org/abs/2510.04618) | Small changes to individual memory items instead of whole-document rewrites. |
+| [Reflexion](https://arxiv.org/abs/2303.11366) | Reusable lessons from failures and corrective feedback. |
+| [ReasoningBank](https://arxiv.org/abs/2509.25140) | Generalized strategies from successful and failed trajectories. |
+| [Letta MemFS](https://docs.letta.com/letta-agent/concepts/memfs) | Memory stored as files in a Git repository. |
+| [Letta sleep-time compute](https://arxiv.org/abs/2504.13171) | Memory consolidation as background work. |
+| [GEPA](https://arxiv.org/abs/2507.19457) | Per-case evaluation that protects previously passing cases. |
+| [Voyager](https://arxiv.org/abs/2305.16291) | A library of reusable procedures. |
+| [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/) | Fresh cases, checkable claims, held-out evaluation, noise measurement, and rollback of unsuccessful changes. |
+| [Claude Code memory](https://code.claude.com/docs/en/memory) | A short memory index with documents read on demand. |
+
+## Go dependencies
+
+Go module dependencies retain their own licenses and notices, which are not vendored here.
