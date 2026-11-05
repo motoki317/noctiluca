@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -28,7 +29,10 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	if err != nil {
 		return fmt.Errorf("listen for OAuth redirect: %w", err)
 	}
-	defer listener.Close()
+	// One callback server serves the whole login: the SDK can ask for authorization more than
+	// once (for example after a scope challenge), and a per-request server would close the listener.
+	callbacks := serveCallbacks(listener)
+	defer callbacks.close()
 	redirect := "http://" + listener.Addr().String() + "/callback"
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
 		RedirectURL:                     redirect,
@@ -42,7 +46,7 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 		// Explicit scopes must match registration. Include offline_access in config if the server requires it.
 		Client: oauthHTTPClient(),
 		AuthorizationCodeFetcher: func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
-			return receiveCode(ctx, listener, args.URL, output)
+			return callbacks.receive(ctx, args.URL, output)
 		},
 		NewTokenSource: func(_ context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
 			if token.RefreshToken == "" {
@@ -79,56 +83,74 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	return nil
 }
 
-func receiveCode(ctx context.Context, listener net.Listener, authorizationURL string, output io.Writer) (*auth.AuthorizationResult, error) {
+type callbackResult struct {
+	result *auth.AuthorizationResult
+	err    error
+}
+
+type callbackServer struct {
+	server  *http.Server
+	serve   chan error
+	mu      sync.Mutex
+	state   string              // state of the authorization request being waited for
+	results chan callbackResult // capacity 1: the browser can return before receive starts waiting
+}
+
+func serveCallbacks(listener net.Listener) *callbackServer {
+	c := &callbackServer{serve: make(chan error, 1), results: make(chan callbackResult, 1)}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /callback", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		c.mu.Lock()
+		valid := c.state != "" && q.Get("state") == c.state
+		if valid {
+			c.state = ""
+		}
+		c.mu.Unlock()
+		if !valid {
+			http.Error(w, "Invalid authorization state", http.StatusBadRequest)
+			return
+		}
+		var result callbackResult
+		if q.Get("error") != "" || q.Get("code") == "" {
+			result.err = fmt.Errorf("authorization denied: %s", q.Get("error"))
+		} else {
+			result.result = &auth.AuthorizationResult{Code: q.Get("code"), State: q.Get("state"), Iss: q.Get("iss")}
+		}
+		c.results <- result
+		fmt.Fprintln(w, "Authorization response received. Check the terminal for the login result.")
+	})
+	c.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { c.serve <- c.server.Serve(listener) }()
+	return c
+}
+
+// receive prints the authorization URL and waits for the browser's redirect for that request.
+func (c *callbackServer) receive(ctx context.Context, authorizationURL string, output io.Writer) (*auth.AuthorizationResult, error) {
 	u, err := url.Parse(authorizationURL)
 	if err != nil {
 		return nil, err
 	}
-	state := u.Query().Get("state")
-	type callback struct {
-		result *auth.AuthorizationResult
-		err    error
-	}
-	results := make(chan callback, 1)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /callback", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if state == "" || q.Get("state") != state {
-			http.Error(w, "Invalid authorization state", http.StatusBadRequest)
-			return
-		}
-		var result callback
-		if q.Get("error") != "" || q.Get("code") == "" {
-			result.err = errors.New("authorization denied")
-		} else {
-			result.result = &auth.AuthorizationResult{Code: q.Get("code"), State: q.Get("state"), Iss: q.Get("iss")}
-		}
-		select {
-		case results <- result:
-			fmt.Fprintln(w, "Authorization response received. Check the terminal for the login result.")
-		default:
-			http.Error(w, "Authorization response already received", http.StatusConflict)
-		}
-	})
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if server.Shutdown(shutdownCtx) != nil {
-			_ = server.Close()
-		}
-	}()
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- server.Serve(listener) }()
+	c.mu.Lock()
+	c.state = u.Query().Get("state")
+	c.mu.Unlock()
 	if _, err := fmt.Fprintln(output, authorizationURL); err != nil {
 		return nil, err
 	}
 	select {
-	case result := <-results:
-		return result.result, result.err
-	case err := <-serveErr:
+	case r := <-c.results:
+		return r.result, r.err
+	case err := <-c.serve:
 		return nil, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+func (c *callbackServer) close() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if c.server.Shutdown(ctx) != nil {
+		_ = c.server.Close()
 	}
 }
