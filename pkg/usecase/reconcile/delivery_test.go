@@ -363,3 +363,23 @@ func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 		})
 	}
 }
+
+func TestAutonomousTurnHasDeadlineWithoutNewInboxItem(t *testing.T) {
+	f := newDeliveryRig(t, Config{TurnTimeout: 150 * time.Millisecond})
+	f.start(t)
+	id := f.enqueue(t, "room", "start background work")
+	s := take(t, f.model.opened)
+	take(t, s.inputs)
+	f.status(t, id, "done")
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+	f.turn(t, "room", false)
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+	saved := f.turn(t, "room", true)
+	require.WithinDuration(t, time.Now().Add(150*time.Millisecond), saved.Turn.Deadline, 100*time.Millisecond)
+	take(t, s.closed)
+	f.status(t, id, "done")
+	var count int
+	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&count))
+	require.Equal(t, 1, count)
+}
