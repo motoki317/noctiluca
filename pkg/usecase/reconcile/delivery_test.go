@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -181,6 +182,16 @@ func TestSkippedProcedurePreservesResumeToken(t *testing.T) {
 	f.status(t, id, "done")
 	require.Equal(t, "saved", f.turn(t, "task:heartbeat", false).ResumeToken)
 	require.Empty(t, f.model.opened)
+}
+
+func TestScheduleToolRequiresFiveFields(t *testing.T) {
+	r := New(Config{}, nil, nil, nil, nil, nil, nil)
+	for _, expression := range []string{"@daily", "@every 1h", "CRON_TZ=UTC 0 4 * * *", "0 0 4 * * *", "TZ=UTC\t*\t*\t*\t*"} {
+		raw, err := json.Marshal(map[string]string{"name": "test", "cron": expression, "tz": "UTC", "prompt": "work"})
+		require.NoError(t, err)
+		_, err = r.Tools()[0].Handler(t.Context(), raw)
+		require.ErrorContains(t, err, "five fields")
+	}
 }
 
 func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {

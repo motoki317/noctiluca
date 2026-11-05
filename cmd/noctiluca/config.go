@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/motoki317/noctiluca/pkg/infrastructure/mcpclient"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Database repository.Config `mapstructure:"database"`
-	Log      struct {
+	MCPServers []mcpclient.ServerConfig `mapstructure:"mcp_servers"`
+	Database   repository.Config        `mapstructure:"database"`
+	Log        struct {
 		Level string `mapstructure:"level"`
 	} `mapstructure:"log"`
 	path     string
@@ -61,5 +63,5 @@ func loadConfig(path string) (Config, error) {
 		return filepath.Join(dir, path)
 	}
 	config.Database.Path = absolute(config.Database.Path)
-	return config, nil
+	return config, mcpclient.Validate(config.MCPServers)
 }
