@@ -7,9 +7,9 @@ noctiluca uses the [MIT License](LICENSE). The following projects and research i
 Source: [openclaw/openclaw](https://github.com/openclaw/openclaw), version 2026.10.10. License: MIT.
 
 The Go adapter in `pkg/infrastructure/claude/` reimplements the Claude CLI invocation, stream-json messages, control handshake, and follow-up input protocol.
-It follows OpenClaw and the CLI measurements in [docs/claude-cli.md](docs/claude-cli.md).
+The measured protocol is summarized in `pkg/infrastructure/claude/doc.go`.
 No OpenClaw source files or implementation code were copied. CLI argument values and JSON field names follow the reference protocol.
-The adapter tests, the fake CLI in `cmd/noctiluca/run_test.go`, and the measurement script in `docs/claude-cli.md` exercise that protocol.
+The adapter tests, the fake CLI in `cmd/noctiluca/run_test.go`, and the live test in `cmd/noctiluca/run_live_test.go` exercise that protocol.
 
 The reference files are `dist/cli-runtime-args-*.mjs`, `dist/invoke-agent-cli-claude-params-*.mjs`, `dist/cli-transport-*.mjs`, and `dist/extensions/anthropic/cli.runtime.js`.
 OpenClaw's notice follows. It covers the reference project, not the separately distributed Claude CLI.
@@ -44,7 +44,7 @@ Source: [traPtitech/NeoShowcase](https://github.com/traPtitech/NeoShowcase/tree/
 
 - `.golangci.yml` copies the upstream file verbatim, apart from the attribution header.
 - `mise.toml` adapts the task-file style and reuses the `APP_VERSION` and `APP_REVISION` entries.
-- The package layout, domain interfaces, constructors, and CLI conventions follow NeoShowcase, as described in [docs/go-stack.md](docs/go-stack.md).
+- The package layout, domain interfaces, constructors, and CLI conventions follow NeoShowcase (`pkg/domain`, `pkg/usecase`, `pkg/infrastructure`, constructors that return domain interfaces).
 
 The full upstream notice follows, with its copyright holder's name unchanged:
 
@@ -75,7 +75,7 @@ SOFTWARE.
 ## Research and design
 
 These credits acknowledge ideas, not copied research code or paper text. They do not apply noctiluca's MIT License to the referenced works.
-[docs/memory-research.md](docs/memory-research.md) records the adopted ideas. The original procedure text in `pkg/usecase/consolidate/procedures/` uses these ideas under noctiluca's MIT License. [docs/design.md](docs/design.md#memory-consolidation-consolidate) specifies their use in consolidation.
+The original procedure text in `pkg/usecase/consolidate/procedures/` uses these ideas under noctiluca's MIT License. [docs/design.md](docs/design.md#memory) says how consolidation uses them.
 
 | Source | Influence on noctiluca |
 |---|---|
