@@ -210,6 +210,18 @@ func TestNoticeRetrySurvivesRestart(t *testing.T) {
 	cancel()
 	require.NoError(t, take(t, done))
 }
+func TestToolScheduleUsesDefaultWorkdir(t *testing.T) {
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
+	require.NoError(t, err)
+	defer db.Close()
+	schedules := repository.NewScheduleRepository(db)
+	r := New(Config{Workdir: "/work"}, nil, schedules, nil, nil, nil, nil)
+	_, err = r.Tools()[0].Handler(t.Context(), []byte(`{"name":"daily","cron":"0 4 * * *","tz":"UTC","prompt":"work"}`))
+	require.NoError(t, err)
+	jobs, err := schedules.List(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "/work", jobs[0].Workdir)
+}
 
 func TestEmptyProcedureDoesNotOpenModel(t *testing.T) {
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})

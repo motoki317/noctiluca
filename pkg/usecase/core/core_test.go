@@ -155,7 +155,7 @@ func setupMemory(t *testing.T, config Config, prompt domain.PromptAssembler, gro
 	if groups != nil {
 		messaging = &groupMessaging{fakeMessaging: f.messaging, groups: groups}
 	}
-	f.core, err = New(config, messaging, f.model, f.hub, f.events, f.sessions, prompt, repository.NewScheduleRepository(db), external, memory, repository.NewInboxRepository(db))
+	f.core, err = New(config, messaging, f.model, f.hub, f.events, f.sessions, prompt, repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, memory, repository.NewInboxRepository(db))
 	require.NoError(t, err)
 	go func() { f.done <- f.core.Start(context.Background()) }()
 	t.Cleanup(func() {
@@ -291,7 +291,7 @@ func TestAcceptRules(t *testing.T) {
 	m := &fakeMessaging{}
 	config := Config{Owner: "owner", UserGroups: map[string][]string{"team": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{
 		"room": {Groups: []string{"team"}, RequireMention: true}, "bots": {Users: []string{"bot"}, AllowBots: true}, "dm": {Users: []string{"owner"}}, "blocked": {}}}
-	c, err := New(config, m, &fakeModel{}, h, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, nil, nil, &unusedInbox{})
+	c, err := New(config, m, &fakeModel{}, h, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, &unusedWatches{}, nil, nil, &unusedInbox{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, c.Shutdown(context.Background())) })
 	impl := c.(*core)
@@ -326,6 +326,7 @@ func TestAcceptRules(t *testing.T) {
 type unusedEvents struct{ domain.EventRepository }
 type unusedSessions struct{ domain.SessionRepository }
 type unusedSchedules struct{ domain.ScheduleRepository }
+type unusedWatches struct{ domain.WatchRepository }
 
 func (*fakeMessaging) Shutdown(context.Context) error { return nil }
 
