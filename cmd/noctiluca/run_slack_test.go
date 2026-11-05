@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,23 @@ func newRunSlack(t *testing.T, beforePost func(context.Context, url.Values)) *ru
 			}
 			defer conn.Close()
 			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello"}`)))
+			// Socket Mode requires server pings even when the conversation is silent.
+			closed := make(chan struct{})
+			defer close(closed)
+			go func() {
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-closed:
+						return
+					case <-ticker.C:
+						if conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)) != nil {
+							return
+						}
+					}
+				}
+			}()
 			s.connections <- conn
 			for {
 				var ack struct {
