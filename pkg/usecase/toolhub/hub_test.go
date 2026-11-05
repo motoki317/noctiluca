@@ -329,3 +329,10 @@ func TestStartCancellationDrainsHandlers(t *testing.T) {
 	require.NoError(t, <-started)
 	<-callDone
 }
+
+func TestStartAfterShutdownReturns(t *testing.T) {
+	h, err := toolhub.New(toolhub.Config{})
+	require.NoError(t, err)
+	require.NoError(t, h.Shutdown(context.Background()))
+	require.NoError(t, h.Start(context.Background()))
+}

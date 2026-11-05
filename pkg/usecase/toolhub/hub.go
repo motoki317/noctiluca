@@ -57,9 +57,14 @@ func New(config Config) (domain.ToolHub, error) {
 // Start blocks until Shutdown or cancellation, as other services do under an errgroup.
 func (h *hub) Start(ctx context.Context) error {
 	h.mu.Lock()
-	if h.closed || h.started {
+	// A shutdown that wins the race with Start leaves nothing to serve; that is not an error.
+	if h.closed {
 		h.mu.Unlock()
-		return errors.New("tool hub is closed or already started")
+		return nil
+	}
+	if h.started {
+		h.mu.Unlock()
+		return errors.New("tool hub is already started")
 	}
 	h.started = true
 	h.mu.Unlock()
