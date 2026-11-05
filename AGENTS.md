@@ -6,3 +6,4 @@
 - An agent never waits by polling or by `sleep`. A task that must wait hands control back to the core (`watch`, `wake_at`) and ends its turn.
 - Follow the layout and conventions of [traPtitech/NeoShowcase](https://github.com/traPtitech/NeoShowcase).
 - Write everything in the repository (code, comments, docs, commit messages) in English. Tracked files must be publishable: no personal names, internal IDs, or private history. Plans and working notes go in `docs/plans/`, which git ignores.
+- noctiluca is MIT-licensed. When you adapt code, a protocol, or a design from another project, credit it: a short header comment in the adapted file (source and license) and an entry in THIRD_PARTY_NOTICES.md. Copy third-party code only under a compatible license, with its copyright notice.

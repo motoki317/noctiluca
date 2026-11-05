@@ -1,0 +1,26 @@
+# Adapted from traPtitech/NeoShowcase (MIT): https://github.com/traPtitech/NeoShowcase
+# Copyright and license: THIRD_PARTY_NOTICES.md.
+
+[tools]
+go = "1.26.10"
+golangci-lint = "2.15.0"
+
+[env]
+APP_VERSION = "dev"
+APP_REVISION = "{{ exec(command='git describe --tags --dirty 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo local') }}"
+
+[tasks.build]
+description = "Build noctiluca"
+run = 'go build -ldflags "-X main.version=$APP_VERSION -X main.revision=$APP_REVISION" -o bin/noctiluca ./cmd/noctiluca'
+
+[tasks.test]
+description = "Run tests"
+run = "go test -shuffle=on ./..."
+
+[tasks.lint]
+description = "Run Go linters"
+run = "golangci-lint run"
+
+[tasks.generate]
+description = "Run go generate"
+run = "go generate ./..."

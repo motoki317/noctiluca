@@ -1,0 +1,28 @@
+# Copied from traPtitech/NeoShowcase (MIT): https://github.com/traPtitech/NeoShowcase
+# Copyright and license: THIRD_PARTY_NOTICES.md.
+
+version: "2"
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - sloglint
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+  settings:
+    sloglint:
+      context: scope
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
