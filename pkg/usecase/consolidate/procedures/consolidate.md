@@ -14,5 +14,5 @@ Send behavioral, structural, tool, and harness changes to the owner as proposals
 Do not implement these proposals during consolidation.
 For a requested behavior experiment, read `procedures/hillclimb.md` in a separate owner-requested turn.
 
-Call `reply` with a short summary of factual corrections and proposals, then end the turn.
+Call `reply` with `target: "owner"` and a short summary of factual corrections and proposals, then end the turn.
 The task's reply goes to the owner's DM.

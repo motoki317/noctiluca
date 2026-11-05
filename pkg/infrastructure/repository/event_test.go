@@ -17,7 +17,7 @@ import (
 func TestEventHistory(t *testing.T) {
 	r := repository.NewEventRepository(openDB(t))
 	at := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
-	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room",
+	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room", MessageRef: "message", Direct: true,
 		Sender: domain.Sender{ID: "user", DisplayName: "Member", Kind: domain.SenderHuman}, Text: "first",
 		Attachments: []domain.Attachment{{Ref: "file", Name: "image.png", MIMEType: "image/png"}}, MentionsMe: true, ReceivedAt: at}
 	require.NoError(t, r.SaveInbound(t.Context(), event))

@@ -81,8 +81,8 @@ func (w *watcher) complete(ctx context.Context, id int64, outcome string) error 
 
 func (w *watcher) Tools() []domain.Tool {
 	return []domain.Tool{
-		{Name: "wake_at", Description: "Schedule a note for this session at an RFC3339 time, then end this turn.", InputSchema: json.RawMessage(`{"type":"object","properties":{"at":{"type":"string"},"note":{"type":"string","minLength":1}},"required":["at","note"],"additionalProperties":false}`), Handler: w.wake},
-		{Name: "watch", Description: "Start a shell command and end this turn. Its exit code and output tail return as a new input.", InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","minLength":1},"cwd":{"type":"string","minLength":1}},"required":["command","cwd"],"additionalProperties":false}`), Handler: w.watch},
+		{Name: "wake_at", Description: "Schedule a note at an RFC3339 time, then end this turn. Copy Source.work_target exactly into target, including in DMs. The completion input carries this destination in its Source header.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy Source.work_target exactly. Work requested at top level belongs in the message thread, including in DMs."},"at":{"type":"string"},"note":{"type":"string","minLength":1}},"required":["target","at","note"],"additionalProperties":false}`), Handler: w.wake},
+		{Name: "watch", Description: "Start a shell command and end this turn immediately. Its exit code and output tail return as a new input. Copy Source.work_target exactly into target, including in DMs. The completion input carries this destination in its Source header.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy Source.work_target exactly. Work requested at top level belongs in the message thread, including in DMs."},"command":{"type":"string","minLength":1},"cwd":{"type":"string","minLength":1}},"required":["target","command","cwd"],"additionalProperties":false}`), Handler: w.watch},
 	}
 }
 
@@ -92,19 +92,21 @@ func (w *watcher) wake(ctx context.Context, raw json.RawMessage) (json.RawMessag
 		return nil, errors.New("tool session is required")
 	}
 	var in struct {
-		At   time.Time `json:"at"`
-		Note string    `json:"note"`
+		Target domain.ConversationRef `json:"target"`
+		At     time.Time              `json:"at"`
+		Note   string                 `json:"note"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	if in.At.IsZero() || in.Note == "" {
-		return nil, errors.New("at and note are required")
+	if in.At.IsZero() || in.Note == "" || in.Target == "" {
+		return nil, errors.New("target, at and note are required")
 	}
 	item, err := w.resolve(ctx, session.Key)
 	if err != nil {
 		return nil, err
 	}
+	item.Payload.Target = in.Target
 	item.SourceKey = "wake:" + uuid.NewString()
 	item.ReadyAt = in.At
 	item.Payload.Input.Text = in.Note
@@ -122,19 +124,21 @@ func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessa
 		return nil, errors.New("tool session is required")
 	}
 	var in struct {
-		Command string `json:"command"`
-		CWD     string `json:"cwd"`
+		Target  domain.ConversationRef `json:"target"`
+		Command string                 `json:"command"`
+		CWD     string                 `json:"cwd"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	if in.Command == "" || in.CWD == "" {
-		return nil, errors.New("command and cwd are required")
+	if in.Command == "" || in.CWD == "" || in.Target == "" {
+		return nil, errors.New("target, command and cwd are required")
 	}
 	item, err := w.resolve(ctx, session.Key)
 	if err != nil {
 		return nil, err
 	}
+	item.Payload.Target = in.Target
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.ctx == nil || w.ctx.Err() != nil {

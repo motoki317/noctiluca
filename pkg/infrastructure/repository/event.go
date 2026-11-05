@@ -29,10 +29,10 @@ func saveInbound(ctx context.Context, db executor, event domain.InboundEvent) er
 		return err
 	}
 	_, err = db.ExecContext(ctx, `INSERT INTO events
-		(kind, conversation, parent, sender_id, sender_display_name, sender_kind, text, attachments, mentions_me, received_at, deleted, accepted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(kind, conversation, parent, sender_id, sender_display_name, sender_kind, text, attachments, mentions_me, received_at, deleted, accepted, message_ref, direct)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.Kind, event.Conversation, event.Parent, event.Sender.ID, event.Sender.DisplayName,
-		event.Sender.Kind, event.Text, string(attachments), event.MentionsMe, event.ReceivedAt.UTC(), event.Deleted, event.Accepted)
+		event.Sender.Kind, event.Text, string(attachments), event.MentionsMe, event.ReceivedAt.UTC(), event.Deleted, event.Accepted, event.MessageRef, event.Direct)
 	return err
 }
 
@@ -47,7 +47,7 @@ func (r *eventRepository) SaveOutbound(ctx context.Context, message domain.SentM
 }
 
 const inboundColumns = `e.kind, e.conversation, e.parent, e.sender_id, e.sender_display_name,
-	e.sender_kind, e.text, e.attachments, e.mentions_me, e.received_at, e.deleted, e.accepted`
+	e.sender_kind, e.text, e.attachments, e.mentions_me, e.received_at, e.deleted, e.accepted, e.message_ref, e.direct`
 
 func (r *eventRepository) ListInbound(ctx context.Context, conversation domain.ConversationRef, limit int) ([]domain.InboundEvent, error) {
 	if limit <= 0 {
@@ -89,7 +89,7 @@ func (r *eventRepository) queryInbound(ctx context.Context, query string, args .
 		var event domain.InboundEvent
 		var attachments string
 		if err := rows.Scan(&event.Kind, &event.Conversation, &event.Parent, &event.Sender.ID, &event.Sender.DisplayName,
-			&event.Sender.Kind, &event.Text, &attachments, &event.MentionsMe, &event.ReceivedAt, &event.Deleted, &event.Accepted); err != nil {
+			&event.Sender.Kind, &event.Text, &attachments, &event.MentionsMe, &event.ReceivedAt, &event.Deleted, &event.Accepted, &event.MessageRef, &event.Direct); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(attachments), &event.Attachments); err != nil {

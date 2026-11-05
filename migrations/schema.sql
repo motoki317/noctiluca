@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS events (
     kind TEXT NOT NULL CHECK (kind IN ('message', 'message_edited', 'reaction')),
     conversation TEXT NOT NULL,
     parent TEXT NOT NULL,
+    message_ref TEXT NOT NULL DEFAULT '',
+    direct INTEGER NOT NULL DEFAULT 0 CHECK (direct IN (0, 1)),
     sender_id TEXT NOT NULL,
     sender_display_name TEXT NOT NULL,
     sender_kind TEXT NOT NULL CHECK (sender_kind IN ('human', 'bot')),

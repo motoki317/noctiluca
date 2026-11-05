@@ -122,6 +122,7 @@ func (p *parser) events(f frame) []domain.ModelEvent {
 		if f.ParentToolUseID != "" {
 			break
 		}
+		start()
 		// Complete tool inputs arrive here. Partial deltas and replayed text would duplicate them.
 		for _, c := range f.Content {
 			if c.Type == "tool_use" {

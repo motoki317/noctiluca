@@ -77,10 +77,6 @@ func TestSocketMapping(t *testing.T) {
 			_, _ = w.Write([]byte(`{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`))
 		case "/users.info":
 			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"UMEMBER","is_bot":false}}`))
-		case "/reactions.get":
-			require.NoError(t, r.ParseForm())
-			require.Equal(t, "CTEST", r.Form.Get("channel"))
-			_, _ = w.Write([]byte(`{"ok":true,"type":"message","message":{"ts":"124.000001","thread_ts":"123.000001"}}`))
 		default:
 			t.Errorf("unexpected API %s", r.URL.Path)
 		}
@@ -136,7 +132,7 @@ func TestSocketMapping(t *testing.T) {
 			}
 			if e.Kind == domain.InboundEventReaction {
 				require.Equal(t, domain.SenderHuman, e.Sender.Kind)
-				require.Equal(t, Conversation("CTEST", "123.000001"), e.Conversation)
+				require.Equal(t, Conversation("CTEST", ""), e.Conversation)
 				require.Contains(t, e.Text, "white_check_mark")
 			}
 			if e.Text == "alert" {
@@ -183,16 +179,15 @@ func TestBotReactionClassification(t *testing.T) {
 	}
 }
 
-func TestDirectConversation(t *testing.T) {
-	a := &adapter{}
-	for _, tc := range []struct {
-		ref    domain.ConversationRef
-		direct bool
-	}{
-		{Conversation("DTEST", ""), true}, {Conversation("DTEST", "1.2"), true},
-		{Conversation("CTEST", ""), false}, {Conversation("GTEST", ""), false}, {"invalid", false},
-	} {
-		require.Equal(t, tc.direct, a.DirectConversation(tc.ref))
+func TestMessageSourceReferences(t *testing.T) {
+	for _, channel := range []string{"DTEST", "CTEST", "GTEST"} {
+		for _, thread := range []string{"", "1.2"} {
+			event, ok := (&adapter{}).inbound(t.Context(), &slackevents.MessageEvent{Channel: channel, User: "U", TimeStamp: "2.3", ThreadTimeStamp: thread})
+			require.True(t, ok)
+			require.Equal(t, channel == "DTEST", event.Direct)
+			require.Equal(t, Conversation(channel, "2.3"), event.MessageRef)
+			require.Equal(t, Conversation(channel, thread), event.Conversation)
+		}
 	}
 }
 
@@ -246,7 +241,7 @@ func TestUnfurlEditsAreDropped(t *testing.T) {
 
 func TestDeniedReactionDoesNotReadRemoteUserOrMessage(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("unexpected lookup: %s", r.URL.Path) }, false)
-	a.SetConversationFilter(func(ref domain.ConversationRef) bool { return ref == Conversation("CALLOWED", "") })
+	a.SetConversationFilter(func(ref domain.ConversationRef, _ bool) bool { return ref == Conversation("CALLOWED", "") })
 	data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UMEMBER","reaction":"eyes","item":{"type":"message","channel":"CDENIED","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, present := a.inbound(t.Context(), data.InnerEvent.Data)

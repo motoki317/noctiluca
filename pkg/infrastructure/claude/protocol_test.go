@@ -103,3 +103,30 @@ func TestFailedResultDoesNotExposeBody(t *testing.T) {
 	var p parser
 	require.Equal(t, "answer", p.events(frame{Type: "result", Result: "answer"})[0].Text)
 }
+
+func TestAutonomousTurnWithoutInput(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		var p parser
+		p.events(frame{Type: "result", Subtype: "success"})
+		events := p.events(frame{Type: "system", Subtype: "task_notification", TaskID: "background", Status: "completed"})
+		require.Equal(t, domain.ModelEventBackgroundDone, events[0].Kind)
+		if partial {
+			f, err := parseFrame([]byte(`{"type":"stream_event","event":{"type":"message_start"}}`))
+			require.NoError(t, err)
+			events = p.events(f)
+			require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
+		}
+		f, err := parseFrame([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"reply","name":"reply","input":{"target":"thread","text":"done"}}]}}`))
+		require.NoError(t, err)
+		events = p.events(f)
+		if !partial {
+			require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
+			events = events[1:]
+		}
+		require.Len(t, events, 1)
+		require.Equal(t, domain.ModelEventToolCall, events[0].Kind)
+		require.True(t, p.active)
+		require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result"})[0].Kind)
+		require.False(t, p.active)
+	}
+}

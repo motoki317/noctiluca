@@ -56,7 +56,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 				sender.ID = m.BotID
 			}
 		}
-		event = domain.InboundEvent{Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">"), ReceivedAt: time.Now()}
+		event = domain.InboundEvent{MessageRef: Conversation(channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">"), ReceivedAt: time.Now()}
 		if deleted {
 			event.Text = "[message deleted]"
 			event.MentionsMe = false
@@ -73,7 +73,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		}
 		channel = e.Item.Channel
 		sender := domain.Sender{ID: e.User, Kind: domain.SenderBot}
-		if a.acceptConversation == nil || a.acceptConversation(Conversation(channel, "")) {
+		if a.acceptConversation == nil || a.acceptConversation(Conversation(channel, ""), strings.HasPrefix(channel, "D")) {
 			// Unknown senders must not bypass the core's bot restriction.
 			if user, err := a.bot.GetUserInfoContext(ctx, e.User); err == nil {
 				if !user.IsBot {
@@ -83,25 +83,17 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			} else {
 				slog.WarnContext(ctx, "Reaction sender lookup failed", "channel", channel, "error", err)
 			}
-			item, err := a.bot.GetReactionsContext(ctx, sdk.ItemRef{Channel: channel, Timestamp: e.Item.Timestamp}, sdk.NewGetReactionsParameters())
-			if err == nil && item.Message != nil {
-				thread = item.Message.ThreadTimestamp
-				if thread == item.Message.Timestamp {
-					thread = ""
-				}
-			}
-			if err != nil {
-				slog.WarnContext(ctx, "Reaction thread lookup failed", "channel", channel, "error", err)
-			}
+
 		}
 		// The target timestamp keeps the reaction useful even when its message is unavailable.
-		event = domain.InboundEvent{Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
+		event = domain.InboundEvent{MessageRef: Conversation(channel, e.Item.Timestamp), Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
 	default:
 		return event, false
 	}
 	if channel == "" || event.Sender.ID == "" {
 		return event, false
 	}
+	event.Direct = strings.HasPrefix(channel, "D")
 	event.Conversation = Conversation(channel, thread)
 	if thread != "" {
 		event.Parent = Conversation(channel, "")

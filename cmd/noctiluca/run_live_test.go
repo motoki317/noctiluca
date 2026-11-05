@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -47,7 +48,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "memory", "owner"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory", "owner", "smoke.md"), []byte("This is a smoke test. Follow each user request literally. Post only through the reply tool. Do not read or change files, use external services, or persist test words in memory. When asked to watch a command, call watch, end the turn immediately, and reply only after its exit notification.\n"), 0600))
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("owner: U_OWNER\nslack:\n  app_token: {env: TEST_APP_TOKEN}\n  bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude, name: haiku, turn_timeout: 2m}\nheartbeat: {enabled: false}\nconversations:\n  rules:\n    - {id: C_ROOM, users: [U_OWNER], require_mention: true}\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("owner: U_OWNER\nslack:\n  app_token: {env: TEST_APP_TOKEN}\n  bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude, name: haiku, turn_timeout: 2m}\nheartbeat: {enabled: false}\nconversations:\n  rules:\n    - {id: C_ROOM, users: [U_OWNER], require_mention: false}\n"), 0600))
 	config, err := loadConfig(path)
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -118,7 +119,11 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		return saved
 	}
 	run := func(name string, fn func(*testing.T)) {
-		if !t.Run(name, fn) {
+		if !t.Run(name, func(t *testing.T) {
+			started := time.Now()
+			defer func() { t.Logf("scenario duration: %s", time.Since(started).Round(time.Millisecond)) }()
+			fn(t)
+		}) {
 			t.FailNow()
 		}
 	}
@@ -158,17 +163,104 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		reply(t, "D_OWNER", "", "QUEUE_SECOND")
 		idle(t, "slack:D_OWNER:")
 	})
-	run("3_thread_parent_history", func(t *testing.T) {
-		marker := fmt.Sprintf("PARENT-%d", time.Now().UnixNano())
-		send(t, "C_ROOM", "", "Parent-only code: "+marker)
+	run("a_concurrent_threads", func(t *testing.T) {
+		send(t, "C_ROOM", "200.000001", "<@U_BOT> What is 2 + 3? Please answer with just the number.")
+		send(t, "C_ROOM", "201.000001", "<@U_BOT> What is the capital of France? Please answer with just the city.")
+		seen := map[string]bool{}
+		for range 2 {
+			post := liveTake(t, slack.posts)
+			require.Equal(t, "C_ROOM", post.Get("channel"))
+			thread := post.Get("thread_ts")
+			require.False(t, seen[thread], "duplicate thread reply")
+			seen[thread] = true
+			switch thread {
+			case "200.000001":
+				require.Contains(t, post.Get("text"), "5")
+			case "201.000001":
+				require.Contains(t, post.Get("text"), "Paris")
+			default:
+				t.Fatalf("wrong reply thread: %+v", post)
+			}
+		}
+		idle(t, "slack:C_ROOM:")
+		var sessions int
+		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM sessions WHERE key LIKE 'slack:C_ROOM:%'").Scan(&sessions))
+		require.Equal(t, 1, sessions)
+	})
+	run("b_top_level_chat_and_work", func(t *testing.T) {
+		send(t, "C_ROOM", "", "<@U_BOT> Hi! How are you?")
+		post := liveTake(t, slack.posts)
+		require.Equal(t, "C_ROOM", post.Get("channel"))
+		require.Empty(t, post.Get("thread_ts"))
+		idle(t, "slack:C_ROOM:")
+		send(t, "C_ROOM", "", "<@U_BOT> Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
 		thread := fmt.Sprintf("%d.000001", sequence+100)
-		send(t, "C_ROOM", thread, "<@U_BOT> Reply with only the Parent-only code from the parent_history attached to this input, using the reply tool. Do not fetch history or read files.")
-		reply(t, "C_ROOM", thread, marker)
-		idle(t, domain.SessionKey("slack:C_ROOM:"+thread))
+		post = liveTake(t, slack.posts)
+		require.Equal(t, "C_ROOM", post.Get("channel"))
+		require.Equal(t, thread, post.Get("thread_ts"))
+		require.NotEmpty(t, post.Get("text"))
+		idle(t, "slack:C_ROOM:")
+	})
+	run("c_unaddressed_chatter", func(t *testing.T) {
+		var before int
+		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&before))
+		send(t, "C_ROOM", "", "<@U_COLLEAGUE> Lunch was great! Let's meet by the coffee machine later.")
+		require.Eventually(t, func() bool {
+			var after int
+			return app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&after) == nil && after > before
+		}, 90*time.Second, 20*time.Millisecond)
+		select {
+		case post := <-slack.posts:
+			t.Fatalf("replied to chatter: %+v", post)
+		default:
+		}
+	})
+	run("d_native_background_and_autonomous_turn", func(t *testing.T) {
+		started := time.Now()
+		var before int
+		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&before))
+		send(t, "C_ROOM", "300.000001", "<@U_BOT> Run exactly sleep 20; echo BGDONE using Bash with run_in_background=true. End your turn immediately after launching, without a chat acknowledgement, waiting, polling, or using watch. When the native completion notification arrives, report the output here.")
+		var launched time.Time
+		require.Eventually(t, func() bool {
+			events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), "slack:C_ROOM:", 100)
+			if err != nil {
+				return false
+			}
+			for _, event := range events {
+				call := event.Event.ToolCall
+				if call == nil || call.Name != "Bash" {
+					continue
+				}
+				var args struct {
+					Command    string
+					Background bool `json:"run_in_background"`
+				}
+				if json.Unmarshal(call.Input, &args) == nil && args.Command == "sleep 20; echo BGDONE" && args.Background {
+					launched = event.RecordedAt
+					return true
+				}
+			}
+			return false
+		}, 30*time.Second, 20*time.Millisecond)
+		require.Eventually(t, func() bool {
+			var after int
+			return app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&after) == nil && after > before
+		}, 10*time.Second, 20*time.Millisecond)
+		t.Logf("first turn ended %s after request; %s after background launch", time.Since(started).Round(time.Millisecond), time.Since(launched).Round(time.Millisecond))
+		send(t, "C_ROOM", "301.000001", "<@U_BOT> What is 7 + 8? Reply with just the number.")
+		reply(t, "C_ROOM", "301.000001", "15")
+		t.Logf("other thread answered %s after launch", time.Since(launched).Round(time.Millisecond))
+		require.Less(t, time.Since(launched), 20*time.Second, "second thread was blocked by background work")
+		reply(t, "C_ROOM", "300.000001", "BGDONE")
+		t.Logf("background result replied %s after launch", time.Since(launched).Round(time.Millisecond))
+		idle(t, "slack:C_ROOM:")
+		var autonomous int
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_started' AND id > (SELECT max(id) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='background_done')`).Scan(&autonomous))
+		require.Positive(t, autonomous, "completion must start a turn without another input")
 	})
 	run("4_watch_completion", func(t *testing.T) {
 		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use the reply tool to report its output.", config.Model.Workdir))
-		reply(t, "D_WATCH", "", "DONE")
+		reply(t, "D_WATCH", fmt.Sprintf("%d.000001", sequence+100), "DONE")
 		idle(t, "slack:D_WATCH:")
 		var finishedBeforeExit, finished int
 		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:D_WATCH:' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))

@@ -19,7 +19,7 @@ type Config struct {
 	TaskTimeout time.Duration
 	RetryDelay  time.Duration
 	MaxAttempts int
-	Prepare     func(context.Context, domain.InboxItem, bool) (domain.UserInput, error)
+	Prepare     func(context.Context, domain.InboxItem) (domain.UserInput, error)
 	Procedure   func(context.Context, string) (string, error)
 	NotifyOwner func(context.Context, string) error
 	Completed   func(context.Context, string, time.Time) error
@@ -327,7 +327,6 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 		}
 		emit(result{exited: true})
 	}()
-	first := token == ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -357,7 +356,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			}
 			if err == nil && r.config.Prepare != nil {
 				item.Payload.Input = input
-				input, err = r.config.Prepare(sendCtx, item, first)
+				input, err = r.config.Prepare(sendCtx, item)
 			}
 			if err == nil && model == nil {
 				model, err = r.model.Open(ctx, domain.ModelSessionConfig{Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: p.info.Workdir, SystemPrompt: "Use the reply tool to post messages. Final assistant text is private."})
@@ -377,7 +376,6 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				}
 				return
 			}
-			first = false
 		case event, ok := <-events:
 			if !ok {
 				emit(result{err: errors.New("model process exited")})

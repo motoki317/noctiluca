@@ -52,7 +52,7 @@ type Session struct {
 
 type SessionContext struct {
 	Conversation ConversationRef
-	Parent       ConversationRef
+	Direct       bool
 	Actor        Actor
 	Workdir      string
 	TaskName     string

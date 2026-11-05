@@ -38,6 +38,8 @@ type InboundEvent struct {
 	Kind         InboundEventKind
 	Conversation ConversationRef
 	Parent       ConversationRef
+	MessageRef   ConversationRef
+	Direct       bool
 	Sender       Sender
 	Text         string
 	Attachments  []Attachment

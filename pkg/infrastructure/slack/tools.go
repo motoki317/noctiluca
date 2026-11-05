@@ -31,7 +31,11 @@ type toolInput struct {
 }
 
 func (a *adapter) ToolNotes() string {
-	return "Use slack_read_thread, slack_read_history, and slack_search to retrieve conversation context. " +
+	return "One session covers the entire channel, including all threads. Each input starts with a Source header. " +
+		"Only respond when someone addresses you (Source.mentions_me=true, a direct request to you, or a DM); stay silent for chatter between other people even when it reaches you. " +
+		"Short chat uses Source.reply_target. Substantial work uses Source.work_target. This distinction applies to DMs too. Copy Source.work_target exactly to watch.target or wake_at.target. Their completion inputs carry the saved work_target: copy it exactly to reply.target. direct=true never overrides a thread destination. Never mix up concurrent threads. " +
+		"Run long work with Bash run_in_background or watch, end the turn immediately, and report completion to its original thread. Do not wait or poll. " +
+		"Use slack_read_thread, slack_read_history, and slack_search to retrieve conversation context. " +
 		"Reads use the configured user token when available. Posts always use the bot token. " +
 		"Pass bare channel IDs to Slack tools. To broadcast a thread upload, call slack_send with its permalink and broadcast=true."
 }
@@ -67,9 +71,9 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("slack_read_history", "Read recent channel messages. Returns messages and the next cursor.", map[string]any{"channel": str, "limit": limit, "cursor": str}, []string{"channel"}, a.readHistory),
 		tool("slack_search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
 		tool("slack_download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
-		tool("slack_upload_file", "Upload a local file. To broadcast a thread upload, use slack_send with its permalink.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str}, []string{"channel", "path"}, a.upload),
+		tool("slack_upload_file", "Upload a local file to the originating thread (thread_ts from Source.thread, or Source.message for top-level work). To broadcast a thread upload, use slack_send with its permalink.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str}, []string{"channel", "path"}, a.upload),
 		tool("slack_react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
-		tool("slack_send", "Post Markdown text. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
+		tool("slack_send", "Post Markdown text using the same target rules as reply: originating thread, top level for short chat, message thread for work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
 

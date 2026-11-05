@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -64,7 +65,7 @@ func toolContext(t *testing.T) context.Context {
 func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	_, inbox, factory := setup(t)
 	at := time.Now().Add(time.Hour).UTC()
-	payload, err := json.Marshal(map[string]any{"at": at, "note": "remember"})
+	payload, err := json.Marshal(map[string]any{"target": "thread-a", "at": at, "note": "remember"})
 	require.NoError(t, err)
 	_, err = factory().Tools()[0].Handler(toolContext(t), payload)
 	require.NoError(t, err)
@@ -75,6 +76,7 @@ func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, items[0].ReadyAt.Equal(at))
 	require.Equal(t, "pending", items[0].Status)
+	require.Equal(t, domain.ConversationRef("thread-a"), items[0].Payload.Target)
 	require.Equal(t, domain.SessionKey("origin"), items[0].SessionKey)
 	cancel()
 	require.NoError(t, take(t, done))
@@ -86,7 +88,7 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	cancel, done := start(t, w)
 	dir := t.TempDir()
 	call := func(command string) {
-		raw, err := json.Marshal(map[string]string{"command": command, "cwd": dir})
+		raw, err := json.Marshal(map[string]string{"target": "thread-a", "command": command, "cwd": dir})
 		require.NoError(t, err)
 		_, err = w.Tools()[1].Handler(toolContext(t), raw)
 		require.NoError(t, err)
@@ -138,7 +140,7 @@ func TestFailedSpawnIsDurable(t *testing.T) {
 	watches, inbox, factory := setup(t)
 	w := factory()
 	cancel, done := start(t, w)
-	raw, err := json.Marshal(map[string]string{"command": "true", "cwd": filepath.Join(t.TempDir(), "missing")})
+	raw, err := json.Marshal(map[string]string{"target": "thread-a", "command": "true", "cwd": filepath.Join(t.TempDir(), "missing")})
 	require.NoError(t, err)
 	_, err = w.Tools()[1].Handler(toolContext(t), raw)
 	require.Error(t, err)
@@ -146,6 +148,40 @@ func TestFailedSpawnIsDurable(t *testing.T) {
 	pending, err := watches.Unfinished(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, pending)
+	cancel()
+	require.NoError(t, take(t, done))
+}
+
+func TestThreadTargetsSurviveOutOfOrderCompletionAndRestart(t *testing.T) {
+	_, inbox, factory := setup(t)
+	w := factory()
+	cancel, done := start(t, w)
+	defer cancel()
+	dir := t.TempDir()
+	require.NoError(t, syscall.Mkfifo(filepath.Join(dir, "gate"), 0600))
+	call := func(target, command string) {
+		raw, err := json.Marshal(map[string]string{"target": target, "command": command, "cwd": dir})
+		require.NoError(t, err)
+		_, err = w.Tools()[1].Handler(toolContext(t), raw)
+		require.NoError(t, err)
+	}
+	call("thread-a", "cat gate")
+	call("thread-b", "echo SECOND")
+	require.Contains(t, nextNote(t, inbox, 1), "SECOND")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gate"), []byte("FIRST"), 0600))
+	require.Contains(t, nextNote(t, inbox, 2), "FIRST")
+	call("thread-c", "sleep 30")
+	cancel()
+	require.NoError(t, take(t, done))
+	cancel, done = start(t, factory())
+	defer cancel()
+	require.Contains(t, nextNote(t, inbox, 3), "interrupted by restart")
+	items, err := inbox.Active(t.Context())
+	require.NoError(t, err)
+	for i, target := range []domain.ConversationRef{"thread-b", "thread-a", "thread-c"} {
+		require.Equal(t, target, items[i].Payload.Target)
+		require.Equal(t, domain.SessionKey("origin"), items[i].SessionKey)
+	}
 	cancel()
 	require.NoError(t, take(t, done))
 }

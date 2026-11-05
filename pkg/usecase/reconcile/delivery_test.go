@@ -155,7 +155,7 @@ func TestPermanentRejectionHasNoRetryOrNotice(t *testing.T) {
 			return ""
 		}
 		return domain.ActorOwner
-	}, Prepare: func(context.Context, domain.InboxItem, bool) (domain.UserInput, error) {
+	}, Prepare: func(context.Context, domain.InboxItem) (domain.UserInput, error) {
 		return domain.UserInput{}, domain.ErrRejected
 	}})
 	f.start(t)
@@ -195,7 +195,7 @@ func TestScheduleToolRequiresFiveFields(t *testing.T) {
 }
 
 func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {
-	f := newDeliveryRig(t, Config{Prepare: func(_ context.Context, item domain.InboxItem, _ bool) (domain.UserInput, error) {
+	f := newDeliveryRig(t, Config{Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
 		if item.Payload.Input.Text == "rejected" {
 			return domain.UserInput{}, domain.ErrRejected
 		}
@@ -311,7 +311,7 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 			if notice {
 				cfg.NotifyOwner = func(ctx context.Context, _ string) error { return blockFirst(ctx) }
 			} else {
-				cfg.Prepare = func(ctx context.Context, item domain.InboxItem, _ bool) (domain.UserInput, error) {
+				cfg.Prepare = func(ctx context.Context, item domain.InboxItem) (domain.UserInput, error) {
 					return item.Payload.Input, blockFirst(ctx)
 				}
 			}
@@ -362,4 +362,24 @@ func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 			require.Never(t, func() bool { return sends.Load() != 1 }, 30*time.Millisecond, time.Millisecond)
 		})
 	}
+}
+
+func TestAutonomousTurnHasDeadlineWithoutNewInboxItem(t *testing.T) {
+	f := newDeliveryRig(t, Config{TurnTimeout: 150 * time.Millisecond})
+	f.start(t)
+	id := f.enqueue(t, "room", "start background work")
+	s := take(t, f.model.opened)
+	take(t, s.inputs)
+	f.status(t, id, "done")
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+	f.turn(t, "room", false)
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+	saved := f.turn(t, "room", true)
+	require.WithinDuration(t, time.Now().Add(150*time.Millisecond), saved.Turn.Deadline, 100*time.Millisecond)
+	take(t, s.closed)
+	f.status(t, id, "done")
+	var count int
+	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&count))
+	require.Equal(t, 1, count)
 }

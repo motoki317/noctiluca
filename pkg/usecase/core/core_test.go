@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -182,7 +183,7 @@ func take[T any](t *testing.T, ch <-chan T) T {
 	}
 }
 func message(to domain.ConversationRef, user, text string) domain.InboundEvent {
-	return domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: to, Sender: domain.Sender{ID: user, Kind: domain.SenderHuman}, Text: text, ReceivedAt: time.Now()}
+	return domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: to, MessageRef: to + "-message", Sender: domain.Sender{ID: user, Kind: domain.SenderHuman}, Text: text, ReceivedAt: time.Now()}
 }
 
 func TestConversationFlow(t *testing.T) {
@@ -211,7 +212,7 @@ func TestConversationFlow(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "background done"}
 	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room", Actor: domain.ActorMember})
-	result, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"text":"visible"}`))
+	result, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"room","text":"visible"}`))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"id":"sent"}`, string(result))
 	require.Equal(t, "visible", take(t, f.messaging.out).Message.Text)
@@ -239,20 +240,46 @@ func TestConversationFlow(t *testing.T) {
 	}
 }
 
-func TestThreadHistoryIdleAndResume(t *testing.T) {
-	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, nil)
-	for i := range 35 {
-		e := message("room", "denied", fmt.Sprintf("parent-%02d", i))
-		require.NoError(t, f.events.SaveInbound(t.Context(), e))
-	}
-	e := message("thread", "member", "new thread")
+func TestChannelThreadsIdleAndResume(t *testing.T) {
+	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
+		input.Text = "memory context\n" + input.Text
+		return input, nil
+	})
+	require.NoError(t, f.events.SaveInbound(t.Context(), message("room", "denied", "old parent history")))
+	e := message("thread-a", "member", "first")
 	e.Parent = "room"
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	input := take(t, s.inputs)
-	require.NotContains(t, input.Text, "parent-04")
-	require.Contains(t, input.Text, "parent-05")
-	require.Contains(t, input.Text, "parent-34")
+	require.True(t, strings.HasPrefix(input.Text, "Source: "))
+	require.Contains(t, input.Text, `"channel":"room","thread":"thread-a","sender":"member","message":"thread-a-message"`)
+	require.NotContains(t, input.Text, "old parent history")
+	require.Contains(t, input.Text, "memory context")
+	for _, ref := range []domain.ConversationRef{"thread-b", "room"} {
+		e = message(ref, "member", "queued")
+		if ref != "room" {
+			e.Parent = "room"
+		}
+		f.messaging.in <- e
+		input = take(t, s.inputs)
+		require.Contains(t, input.Text, `"channel":"room"`)
+		if ref == "room" {
+			require.Contains(t, input.Text, `"thread":"top level"`)
+		}
+	}
+	select {
+	case <-f.model.opened:
+		t.Fatal("opened a session per thread")
+	default:
+	}
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room", Actor: domain.ActorMember})
+	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"text":"missing target"}`))
+	require.ErrorContains(t, err, "target is required")
+	for _, target := range []string{"thread-a", "thread-b", "room", "room-message"} {
+		_, err = f.hub.tools["reply"].Handler(ctx, json.RawMessage(fmt.Sprintf(`{"target":%q,"text":"answer"}`, target)))
+		require.NoError(t, err)
+		require.Equal(t, domain.ConversationRef(target), take(t, f.messaging.out).Conversation)
+	}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	// A completed turn can still own background work and its tool grant.
 	select {
@@ -260,16 +287,16 @@ func TestThreadHistoryIdleAndResume(t *testing.T) {
 		t.Fatal("closed a busy session")
 	case <-time.After(80 * time.Millisecond):
 	}
-	require.Equal(t, domain.ActorMember, f.hub.actor("thread"))
+	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
 	s.idle.Store(true)
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "done"}
-	require.Equal(t, domain.SessionKey("thread"), take(t, f.hub.closed))
-	saved, err := f.sessions.Get(t.Context(), "thread")
+	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
+	saved, err := f.sessions.Get(t.Context(), "room")
 	require.NoError(t, err)
-	require.Equal(t, "resume-thread", saved.ResumeToken)
+	require.Equal(t, "resume-room", saved.ResumeToken)
 	f.messaging.in <- e
 	resumed := take(t, f.model.opened)
-	require.Equal(t, "resume-thread", resumed.config.ResumeToken)
+	require.Equal(t, "resume-room", resumed.config.ResumeToken)
 	require.NotEqual(t, s.config.ToolHub.BearerToken, resumed.config.ToolHub.BearerToken)
 	require.NotContains(t, take(t, resumed.inputs).Text, "parent_history")
 }
@@ -320,7 +347,7 @@ func TestAcceptRules(t *testing.T) {
 	thread.MentionsMe = true
 	_, ok = impl.accepted(thread)
 	require.True(t, ok)
-	require.Equal(t, domain.SessionKey("thread"), domain.SessionKey(thread.Conversation))
+	require.Equal(t, domain.ConversationRef("room"), channel(thread))
 }
 
 type unusedEvents struct{ domain.EventRepository }
@@ -346,3 +373,82 @@ func TestShutdownDuringInput(t *testing.T) {
 }
 
 type unusedInbox struct{ domain.InboxRepository }
+
+func TestSourceHeaderPreservesEventAndContinuationTargets(t *testing.T) {
+	rules, err := compileRules(Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}})
+	require.NoError(t, err)
+	c := &core{rules: rules, prompt: func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
+		return input, nil
+	}}
+	item := domain.InboxItem{SessionKey: "room", Actor: domain.ActorMember, SourceKey: "watch:1", Payload: domain.InboxPayload{Context: domain.SessionContext{Conversation: "room", Actor: domain.ActorMember}, Target: "thread-a"}}
+	for _, target := range []domain.ConversationRef{"thread-a", "thread-b", "room"} {
+		item.Payload.Target = target
+		input, err := c.prepare(t.Context(), item)
+		require.NoError(t, err)
+		thread := string(target)
+		if target == "room" {
+			thread = "top level"
+		}
+		require.Contains(t, input.Text, fmt.Sprintf(`"thread":%q`, thread))
+		require.Contains(t, input.Text, `"sender":"system","message":"watch:1"`)
+	}
+	event := message("thread-a", "member", "edited text")
+	event.Parent = "room"
+	event.Kind = domain.InboundEventMessageEdited
+	for _, mentioned := range []bool{false, true} {
+		event.MentionsMe = mentioned
+		item.Payload.Event = &event
+		input, err := c.prepare(t.Context(), item)
+		require.NoError(t, err)
+		require.Contains(t, input.Text, `"kind":"message_edited"`)
+		require.Contains(t, input.Text, fmt.Sprintf(`"mentions_me":%t`, mentioned))
+	}
+}
+
+func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
+	rules, err := compileRules(Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}})
+	require.NoError(t, err)
+	c := &core{rules: rules, prompt: func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
+		return input, nil
+	}}
+	header := func(item domain.InboxItem) map[string]any {
+		t.Helper()
+		input, err := c.prepare(t.Context(), item)
+		require.NoError(t, err)
+		line, _, _ := strings.Cut(input.Text, "\n")
+		var source map[string]any
+		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "Source: ")), &source))
+		return source
+	}
+	for _, direct := range []bool{false, true} {
+		for _, threaded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("direct=%t/threaded=%t", direct, threaded), func(t *testing.T) {
+				event := message("room", "member", "start work")
+				event.Direct = direct
+				event.MessageRef = "message-thread"
+				target := "message-thread"
+				if threaded {
+					event.Parent, event.Conversation = "room", "existing-thread"
+					target = "existing-thread"
+				}
+				item := domain.InboxItem{SessionKey: "room", Actor: domain.ActorMember, Lane: "conv", Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: "room", Direct: direct}}}
+				source := header(item)
+				require.Equal(t, target, source["work_target"])
+				require.Equal(t, string(event.Conversation), source["reply_target"])
+				for _, key := range []string{"watch:1", "wake:1"} {
+					item.SourceKey = key
+					item.Payload.Event = nil
+					item.Payload.Target = domain.ConversationRef(target)
+					continuation := header(item)
+					require.Equal(t, source["channel"], continuation["channel"])
+					require.Equal(t, target, continuation["thread"])
+					require.Equal(t, target, continuation["work_target"])
+					require.Equal(t, target, continuation["reply_target"])
+					require.Equal(t, direct, continuation["direct"])
+				}
+			})
+		}
+	}
+	source := header(domain.InboxItem{Lane: "task", Actor: domain.ActorOwner})
+	require.Equal(t, "owner", source["work_target"])
+}

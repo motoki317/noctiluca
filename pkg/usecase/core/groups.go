@@ -81,15 +81,10 @@ func compileRule(config Config, value domain.AcceptRule) (rule, error) {
 	return r, nil
 }
 
-func (c *core) findRule(rules compiledRules, conversation, parent domain.ConversationRef) (rule, bool) {
+func (c *core) findRule(rules compiledRules, conversation domain.ConversationRef, direct bool) (rule, bool) {
 	r, ok := rules.conversations[conversation]
-	if !ok && parent != "" {
-		r, ok = rules.conversations[parent]
-	}
-	if !ok && rules.direct != nil {
-		if provider, supported := c.messaging.(domain.DirectConversationProvider); supported && provider.DirectConversation(conversation) {
-			return *rules.direct, true
-		}
+	if !ok && direct && rules.direct != nil {
+		return *rules.direct, true
 	}
 	return r, ok
 }

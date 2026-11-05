@@ -59,7 +59,9 @@ The two ordinary results arrived about 3.9 and 6.4 seconds after startup. The re
 
 Replayed user messages have `type: user`, `isReplay: true`, and string `message.content`. Assistant messages use content arrays. The parser decodes assistant blocks separately and ignores user replays. It emits text from partial deltas and complete tool inputs from assistant blocks, without duplicating the final assistant text.
 
-`system/task_notification` becomes `background_done`, with the task ID, status, and summary in the event text. The parser accepts completion before or after `result`. The live run observed completion before `result`. Offline tests cover completion after `result`. Child agent text does not become parent text.
+`system/task_notification` becomes `background_done`, with the task ID, status, and summary in the event text. The parser accepts completion before or after `result`. Child agent text does not become parent text.
+
+A live run on 2026-11-05 used Claude Code 2.1.318, Haiku, and Bash with `run_in_background: true` to run `sleep 20; echo BGDONE`. The initial turn ended within a few seconds, and another thread received a reply while the command ran. After completion, the CLI emitted `task_notification`, then another assistant turn and `result`, without another user input. The adapter emits `turn_started` for this turn, and the reconciler applies the conversation turn deadline. Reproduce with `go test -tags live -run Live -v ./cmd/noctiluca`.
 
 A failed `result` emits `error` followed by `turn_finished`. Malformed frames, oversized frames, and unexpected process exit terminate the session with an error. Unknown frame types are ignored. Error messages omit raw CLI bodies and stderr because they can contain credentials or tool output.
 
