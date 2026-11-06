@@ -129,8 +129,8 @@ func TestMissingLoginSkipsAndDefaults(t *testing.T) {
 
 type failingTokens struct{ domain.OAuthTokenRepository }
 
-func (f failingTokens) Save(context.Context, string, domain.OAuthToken) error {
-	return errors.New("private database error")
+func (f failingTokens) Refresh(context.Context, string, domain.OAuthToken, domain.OAuthToken) (bool, error) {
+	return false, errors.New("private database error")
 }
 
 func TestRefreshFailureAndPersistenceRetry(t *testing.T) {

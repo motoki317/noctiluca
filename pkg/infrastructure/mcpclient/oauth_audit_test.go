@@ -85,6 +85,27 @@ func TestReloginReplacesOnlyAfterSuccess(t *testing.T) {
 	assert.Equal(t, "replacement-access", token.AccessToken)
 }
 
+func TestOldRefreshCannotOverwriteRelogin(t *testing.T) {
+	f := newOAuthFixture(t)
+	repo := loginRepo(t)
+	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
+	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	stored, err := repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	stored.Expiry = time.Now().Add(-time.Minute)
+	require.NoError(t, repo.Save(t.Context(), config.Name, stored))
+	old, err := restoreTokens(t.Context(), config, repo)
+	require.NoError(t, err)
+	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	replacement, err := repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	_, err = old.Token()
+	require.ErrorContains(t, err, "stored login changed")
+	actual, err := repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	assert.Equal(t, replacement, actual)
+}
+
 func TestLoginRejectsWrongOrMissingIssuer(t *testing.T) {
 	for _, advertised := range []bool{false, true} {
 		for _, wrong := range []bool{false, true} {

@@ -35,6 +35,9 @@ noctiluca --config config.yaml run
 
 SIGTERM stops the agent and kills Claude and `watch` process groups.
 
+MCP logins request refresh tokens when the server supports them. A login without a refresh token logs its expiry date at startup.
+Expired or revoked logins disable that server's tools and send one owner notice. Run `mcp-login <server>`, then restart noctiluca to load the replacement login.
+
 As a systemd user service, install the binary to `~/.local/bin`, the config to `~/.config/noctiluca/config.yaml`, and [contrib/noctiluca.service](../contrib/noctiluca.service) to `~/.config/systemd/user/`. The unit reads `{env: …}` tokens from `~/.config/noctiluca/environment` (`NAME=value` lines, mode 0600). Then:
 
 ```sh

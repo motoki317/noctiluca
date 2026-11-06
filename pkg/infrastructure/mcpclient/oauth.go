@@ -22,6 +22,7 @@ import (
 type registration struct {
 	Resource string        `json:"resource"`
 	Audience string        `json:"audience,omitempty"`
+	Issuer   string        `json:"issuer,omitempty"`
 	LoginID  string        `json:"login_id,omitempty"`
 	OAuth    oauth2.Config `json:"oauth"`
 }
@@ -34,6 +35,7 @@ type tokenSource struct {
 	registration registration
 	source       oauth2.TokenSource
 	saved        *oauth2.Token
+	stored       domain.OAuthToken
 	failed       chan struct{}
 	failure      error
 }
@@ -67,13 +69,21 @@ func (s *tokenSource) tokenLocked() (*oauth2.Token, error) {
 	if s.saved == nil || token.AccessToken != s.saved.AccessToken || token.RefreshToken != s.saved.RefreshToken || !token.Expiry.Equal(s.saved.Expiry) || token.TokenType != s.saved.TokenType || !slices.Equal(scopes, s.registration.OAuth.Scopes) {
 		reg := s.registration
 		reg.OAuth.Scopes = scopes
-		err := saveToken(s.ctx, s.repository, s.server, reg, token)
+		stored, err := encodeToken(reg, token)
+		if err != nil {
+			return nil, err
+		}
+		saved, err := s.repository.Refresh(s.ctx, s.server, s.stored, stored)
 		if err != nil {
 			return nil, errors.New("could not persist MCP tokens")
+		}
+		if !saved {
+			return nil, s.failLocked("stored login changed; restart noctiluca to load it")
 		}
 		copy := *token
 		s.saved = &copy
 		s.registration = reg
+		s.stored = stored
 	}
 	return token, nil
 }
@@ -100,7 +110,7 @@ func (s *tokenSource) refreshRejected(bearer string) error {
 
 func (s *tokenSource) failLocked(reason string) error {
 	if s.failure == nil {
-		s.failure = fmt.Errorf("MCP server %s: %s; run mcp-login %s", s.server, reason, s.server)
+		s.failure = fmt.Errorf("MCP server %s: %s; run mcp-login %s, then restart noctiluca", s.server, reason, s.server)
 		close(s.failed)
 	}
 	return s.failure
@@ -145,7 +155,7 @@ func restoreTokens(ctx context.Context, config ServerConfig, repository domain.O
 		reg.LoginID = fmt.Sprintf("%x", sha256.Sum256(stored.Registration))
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient(config.URL))
-	return &tokenSource{ctx: ctx, repository: repository, server: config.Name, registration: reg, source: refreshSource(ctx, &reg.OAuth, token, reg.Audience), saved: token, failed: make(chan struct{})}, nil
+	return &tokenSource{ctx: ctx, repository: repository, server: config.Name, registration: reg, source: refreshSource(ctx, &reg.OAuth, token, reg.Audience), saved: token, stored: stored, failed: make(chan struct{})}, nil
 }
 
 func grantedScopes(token *oauth2.Token, fallback []string) []string {
@@ -156,12 +166,20 @@ func grantedScopes(token *oauth2.Token, fallback []string) []string {
 }
 
 func saveToken(ctx context.Context, repository domain.OAuthTokenRepository, server string, reg registration, token *oauth2.Token) error {
-	reg.OAuth.Scopes = grantedScopes(token, reg.OAuth.Scopes)
-	raw, err := json.Marshal(reg)
+	stored, err := encodeToken(reg, token)
 	if err != nil {
 		return err
 	}
-	return repository.Save(ctx, server, domain.OAuthToken{Registration: raw, AccessToken: token.AccessToken, TokenType: token.TokenType, RefreshToken: token.RefreshToken, Expiry: token.Expiry})
+	return repository.Save(ctx, server, stored)
+}
+
+func encodeToken(reg registration, token *oauth2.Token) (domain.OAuthToken, error) {
+	reg.OAuth.Scopes = grantedScopes(token, reg.OAuth.Scopes)
+	raw, err := json.Marshal(reg)
+	if err != nil {
+		return domain.OAuthToken{}, err
+	}
+	return domain.OAuthToken{Registration: raw, AccessToken: token.AccessToken, TokenType: token.TokenType, RefreshToken: token.RefreshToken, Expiry: token.Expiry}, nil
 }
 
 func refreshSource(ctx context.Context, config *oauth2.Config, token *oauth2.Token, resource string) oauth2.TokenSource {
