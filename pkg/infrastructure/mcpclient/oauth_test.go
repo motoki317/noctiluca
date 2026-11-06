@@ -237,3 +237,30 @@ func TestLoginCancellationAndState(t *testing.T) {
 	_, err = http.Get(callbackURL)
 	require.Error(t, err)
 }
+
+// ClickUp issues long-lived access tokens without a refresh token.
+func TestLoginWithoutRefreshToken(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.refresh = ""
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
+	require.NoError(t, err)
+	defer db.Close()
+	repo := repository.NewOAuthTokenRepository(db)
+	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
+	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	stored, err := repo.Get(t.Context(), "tracker")
+	require.NoError(t, err)
+	assert.Equal(t, "initial-access", stored.AccessToken)
+	assert.Empty(t, stored.RefreshToken)
+	source, err := restoreTokens(t.Context(), config, repo)
+	require.NoError(t, err)
+	token, err := source.Token()
+	require.NoError(t, err)
+	assert.Equal(t, "initial-access", token.AccessToken)
+	stored.Expiry = time.Now().Add(-time.Minute)
+	require.NoError(t, repo.Save(t.Context(), "tracker", stored))
+	source, err = restoreTokens(t.Context(), config, repo)
+	require.NoError(t, err)
+	_, err = source.Token()
+	require.ErrorContains(t, err, "run mcp-login again")
+}

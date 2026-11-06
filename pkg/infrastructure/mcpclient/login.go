@@ -49,9 +49,8 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 			return callbacks.receive(ctx, args.URL, output)
 		},
 		NewTokenSource: func(_ context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
-			if token.RefreshToken == "" {
-				return nil, errors.New("authorization server did not issue a refresh token")
-			}
+			// Some servers (ClickUp) issue long-lived access tokens without a refresh token. Such a
+			// login lasts until the access token expires; the token source then asks for mcp-login.
 			reg, err := json.Marshal(registration{Resource: config.URL, OAuth: *cfg})
 			if err != nil {
 				return nil, err
@@ -71,7 +70,7 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// The cause names the failed OAuth step (registration, consent, token exchange, missing refresh token).
+		// The cause names the failed OAuth step (registration, consent, token exchange).
 		// OAuth error responses carry no credentials, so it is safe to show.
 		return fmt.Errorf("MCP login failed: %w", err)
 	}
