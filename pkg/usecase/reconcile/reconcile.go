@@ -19,6 +19,7 @@ type Config struct {
 	TaskTimeout time.Duration
 	RetryDelay  time.Duration
 	MaxAttempts int
+	Prompt      domain.PromptAssembler
 	Prepare     func(context.Context, domain.InboxItem) (domain.UserInput, error)
 	Procedure   func(context.Context, string) (string, error)
 	NotifyOwner func(context.Context, string) error
@@ -359,7 +360,15 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				input, err = r.config.Prepare(sendCtx, item)
 			}
 			if err == nil && model == nil {
-				model, err = r.model.Open(ctx, domain.ModelSessionConfig{Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: p.info.Workdir, SystemPrompt: "Use the reply tool to post messages. Final assistant text is private."})
+				prompt := "Use the reply tool to post messages. Final assistant text is private."
+				if r.config.Prompt != nil {
+					var extra string
+					extra, err = r.config.Prompt(sendCtx, domain.ToolSession{Key: p.key, Actor: p.info.Actor})
+					prompt += "\n\n" + extra
+				}
+				if err == nil {
+					model, err = r.model.Open(ctx, domain.ModelSessionConfig{Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: p.info.Workdir, SystemPrompt: prompt})
+				}
 				if err == nil {
 					events = model.Events()
 					emit(result{model: model})

@@ -34,7 +34,7 @@ type toolInput struct {
 func (a *adapter) ToolNotes() string {
 	return "One session covers the entire channel, including all threads. Each input starts with a Source header. " +
 		"Only respond when someone addresses you (Source.mentions_me=true, a direct request to you, or a DM); stay silent for chatter between other people even when it reaches you. " +
-		"Short chat uses Source.reply_target. Substantial work uses Source.work_target. This distinction applies to DMs too. Copy Source.work_target exactly to watch.target or wake_at.target. Their completion inputs carry the saved work_target: copy it exactly to reply.target. direct=true never overrides a thread destination. Never mix up concurrent threads. " +
+		"Follow the reply tool's target rules for short chat and work, including in DMs. A ref ending in a colon is a complete top-level destination: do not append a timestamp. Copy Source.work_target exactly to watch.target or wake_at.target. Their completion inputs carry the saved work_target: copy it exactly to reply.target. direct=true never overrides a thread destination. Never mix up concurrent threads. " +
 		"Run long work with Bash run_in_background or watch, end the turn immediately, and report completion to its original thread. Do not wait or poll. " +
 		"Use slack_read_thread, slack_read_history, and slack_search to retrieve conversation context. " +
 		"History reads try the bot token, then the optional user token for channels the bot cannot access. Search and downloads use the user token when available. Posts always use the bot token. " +

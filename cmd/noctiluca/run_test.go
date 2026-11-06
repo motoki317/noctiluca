@@ -40,8 +40,8 @@ import (
 )
 
 type runCapture struct {
-	PID, ChildPID, WatchPID      int
-	URL, MCPFile, Input, Workdir string
+	PID, ChildPID, WatchPID              int
+	URL, MCPFile, Input, Workdir, Prompt string
 }
 
 type bearerTransport string
@@ -76,6 +76,11 @@ func TestRunCLIHelper(t *testing.T) {
 	capture := runCapture{PID: os.Getpid()}
 	capture.Workdir, _ = os.Getwd()
 	for i, arg := range args {
+		if arg == "--append-system-prompt-file" {
+			data, err := os.ReadFile(args[i+1])
+			require.NoError(t, err)
+			capture.Prompt = string(data)
+		}
 		if arg == "--mcp-config" {
 			capture.MCPFile = args[i+1]
 		}
@@ -303,9 +308,12 @@ mcp_servers:
 		data, err := os.ReadFile(filepath.Join(dir, "capture.json"))
 		return err == nil && json.Unmarshal(data, &capture) == nil
 	}, time.Second, time.Millisecond)
-	require.Contains(t, capture.Input, "Owner instructions")
-	require.Contains(t, capture.Input, "Core instructions")
-	require.Contains(t, capture.Input, "slack_read")
+	require.NotContains(t, capture.Input, "Owner instructions")
+	require.Contains(t, capture.Prompt, "Owner instructions")
+	require.NotContains(t, capture.Input, "Core instructions")
+	require.Contains(t, capture.Prompt, "Core instructions")
+	require.NotContains(t, capture.Input, "slack_read")
+	require.Contains(t, capture.Prompt, "slack_read")
 	require.Equal(t, c.Model.Workdir, capture.Workdir)
 	require.Eventually(t, func() bool { return groupReads.Load() >= 2 }, time.Second, time.Millisecond)
 	cancel()

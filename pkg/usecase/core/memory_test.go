@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMemoryPromptRefreshAndTools(t *testing.T) {
+func TestMemoryPromptLoadsOncePerProcess(t *testing.T) {
 	s, err := memory.New(t.Context(), memory.Config{Path: filepath.Join(t.TempDir(), "memory")})
 	require.NoError(t, err)
 	owner := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "dm", Actor: domain.ActorOwner})
@@ -25,17 +25,27 @@ func TestMemoryPromptRefreshAndTools(t *testing.T) {
 	f.messaging.in <- message("dm", "owner", "first")
 	model := take(t, f.model.opened)
 	input := take(t, model.inputs)
-	require.Contains(t, input.Text, "Persona rules")
-	require.Contains(t, input.Text, "Initial index")
-	require.NotContains(t, input.Text, "On demand only")
-	require.NotContains(t, input.Text, "Heartbeat task")
+	require.NotContains(t, input.Text, "Persona rules")
+	require.Contains(t, model.config.SystemPrompt, "Persona rules")
+	require.Contains(t, model.config.SystemPrompt, f.hub.tools["reply"].Description)
+	require.NotContains(t, input.Text, f.hub.tools["reply"].Description)
+	require.Contains(t, model.config.SystemPrompt, "Initial index")
+	require.NotContains(t, model.config.SystemPrompt, "On demand only")
+	require.NotContains(t, model.config.SystemPrompt, "Heartbeat task")
 	write := f.hub.tools["memory_write"]
 	_, err = write.Handler(owner, json.RawMessage(`{"path":"core.md","content":"Updated index","message":"Update core"}`))
 	require.NoError(t, err)
 	model.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- message("dm", "owner", "second")
 	input = take(t, model.inputs)
-	require.Contains(t, input.Text, "Updated index")
+	require.NotContains(t, input.Text, "Updated index")
+	require.Contains(t, model.config.SystemPrompt, "Initial index")
+	require.NoError(t, model.Close())
+	f.messaging.in <- message("dm", "owner", "after restart")
+	resumed := take(t, f.model.opened)
+	require.Contains(t, resumed.config.SystemPrompt, "Updated index")
+	require.NotContains(t, resumed.config.SystemPrompt, "Initial index")
+	require.NotEmpty(t, resumed.config.ResumeToken)
 	require.NotContains(t, input.Text, "Initial index")
 	result, err := f.hub.tools["memory_read"].Handler(owner, json.RawMessage(`{"path":"procedures/heartbeat.md"}`))
 	require.NoError(t, err)
@@ -52,20 +62,12 @@ func TestMemoryPromptRefreshAndTools(t *testing.T) {
 	require.ErrorContains(t, err, "merge or delete")
 }
 
-func TestMemoryPromptPreservesInputAndNotes(t *testing.T) {
-	seen := false
-	prompt := memoryusecase.Prompt(nil, "Use adapter tools", func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
-		seen = true
-		input.Text = "hook: " + input.Text
-		return input, nil
-	})
-	input := domain.UserInput{Text: "message", Attachments: []domain.Attachment{{Ref: "file"}}}
-	out, err := prompt(t.Context(), domain.ToolSession{Actor: domain.ActorMember}, input)
+func TestMemoryPromptIncludesNotesAndHook(t *testing.T) {
+	prompt := memoryusecase.Prompt(nil, "Use adapter tools", func(_ context.Context, _ domain.ToolSession) (string, error) { return "hook instructions", nil })
+	out, err := prompt(t.Context(), domain.ToolSession{Actor: domain.ActorMember})
 	require.NoError(t, err)
-	require.True(t, seen)
-	require.Contains(t, out.Text, "Use adapter tools")
-	require.Contains(t, out.Text, "hook: message")
-	require.Equal(t, input.Attachments, out.Attachments)
+	require.Contains(t, out, "Use adapter tools")
+	require.Contains(t, out, "hook instructions")
 }
 
 func TestMemoryHistoryTools(t *testing.T) {

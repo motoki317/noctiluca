@@ -9,8 +9,8 @@ type AcceptRule struct {
 	RequireMention bool
 }
 
-// PromptAssembler refreshes context before each input, including inputs sent during a turn.
-type PromptAssembler func(context.Context, ToolSession, UserInput) (UserInput, error)
+// PromptAssembler loads instructions when a model process opens, including on resume.
+type PromptAssembler func(context.Context, ToolSession) (string, error)
 
 type Core interface {
 	Start(context.Context) error
