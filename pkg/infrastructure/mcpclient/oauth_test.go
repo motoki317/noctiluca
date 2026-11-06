@@ -37,6 +37,7 @@ type oauthFixture struct {
 	access          string
 	refresh         string
 	denyRefresh     bool
+	sendIss         bool // returns iss without advertising RFC 9207 support, as Slite does
 }
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
@@ -110,7 +111,11 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		f.authorization = q
 		redirect := f.redirect
 		f.mu.Unlock()
-		http.Redirect(w, r, redirect+"?"+url.Values{"code": {"auth-code"}, "state": {q.Get("state")}}.Encode(), http.StatusFound)
+		values := url.Values{"code": {"auth-code"}, "state": {q.Get("state")}}
+		if f.sendIss {
+			values.Set("iss", f.server.URL)
+		}
+		http.Redirect(w, r, redirect+"?"+values.Encode(), http.StatusFound)
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.ParseForm() != nil {
@@ -263,4 +268,14 @@ func TestLoginWithoutRefreshToken(t *testing.T) {
 	require.NoError(t, err)
 	_, err = source.Token()
 	require.ErrorContains(t, err, "run mcp-login again")
+}
+
+func TestLoginAcceptsUnadvertisedMatchingIss(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.sendIss = true
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
+	require.NoError(t, err)
+	defer db.Close()
+	repo := repository.NewOAuthTokenRepository(db)
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t)))
 }

@@ -35,7 +35,9 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	defer callbacks.close()
 	redirect := "http://" + listener.Addr().String() + "/callback"
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		RedirectURL:                     redirect,
+		RedirectURL: redirect,
+		// Slite returns a matching iss without advertising RFC 9207 support. The SDK still rejects a mismatch.
+		AcceptUnadvertisedIss:           true,
 		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{ClientName: "noctiluca", RedirectURIs: []string{redirect}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: "none", Scope: strings.Join(config.Scopes, " ")}},
 		ScopeFilter: func(discovered []string) []string {
 			if config.Scopes != nil {
