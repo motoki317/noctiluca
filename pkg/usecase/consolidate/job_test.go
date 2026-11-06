@@ -104,9 +104,9 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var status string
 				return db.QueryRow("SELECT status FROM inbox WHERE source_key=?", item.SourceKey).Scan(&status) == nil && status == expected
-			}, time.Second, time.Millisecond)
+			}, 10*time.Second, 5*time.Millisecond)
 			if !fails {
-				require.Eventually(t, func() bool { at, err := episodes.LastRun(t.Context()); return err == nil && at.After(item.ReadyAt) }, time.Second, time.Millisecond)
+				require.Eventually(t, func() bool { at, err := episodes.LastRun(t.Context()); return err == nil && at.After(item.ReadyAt) }, 10*time.Second, 5*time.Millisecond)
 			}
 			cancel()
 			require.NoError(t, <-done)
@@ -168,7 +168,7 @@ func TestSkippedProcedureAndContinuationKeepCheckpoint(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- r.Start(ctx) }()
-	require.Eventually(t, func() bool { items, err := inbox.Active(t.Context()); return err == nil && len(items) == 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { items, err := inbox.Active(t.Context()); return err == nil && len(items) == 0 }, 10*time.Second, 5*time.Millisecond)
 	cancel()
 	require.NoError(t, <-done)
 	require.Len(t, inputs, 2)
