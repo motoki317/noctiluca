@@ -57,6 +57,16 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			}
 		}
 		event = domain.InboundEvent{MessageRef: Conversation(channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">"), ReceivedAt: time.Now()}
+		posted := m.Timestamp
+		if kind == domain.InboundEventMessageEdited {
+			posted = e.EventTimeStamp
+			if m.Edited != nil && !deleted {
+				posted = m.Edited.Timestamp
+			}
+		}
+		if at := timestamp(posted); !at.IsZero() {
+			event.ReceivedAt = at
+		}
 		if deleted {
 			event.Text = "[message deleted]"
 			event.MentionsMe = false
@@ -87,6 +97,9 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		}
 		// The target timestamp keeps the reaction useful even when its message is unavailable.
 		event = domain.InboundEvent{MessageRef: Conversation(channel, e.Item.Timestamp), Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
+		if at := timestamp(e.EventTimestamp); !at.IsZero() {
+			event.ReceivedAt = at
+		}
 	default:
 		return event, false
 	}

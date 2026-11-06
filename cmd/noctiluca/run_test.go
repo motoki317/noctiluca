@@ -143,19 +143,9 @@ func TestRunCLIHelper(t *testing.T) {
 		for _, name := range []string{"reply", "watch", "wake_at", "schedule_add", "memory_read", "slack_read_history"} {
 			require.True(t, names[name], name)
 		}
-		var source struct {
-			Channel, Thread string
-			OwnerTarget     string `json:"owner_target"`
-		}
-		header, _, _ := strings.Cut(capture.Input, "\n")
-		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(header, "Source: ")), &source))
-		target := source.Channel
-		if source.Thread != "top level" && source.Thread != "background continuation" {
-			target = source.Thread
-		}
-		if source.OwnerTarget != "" {
-			target = source.OwnerTarget
-		}
+		_, targets, ok := strings.Cut(capture.Input, "reply → ")
+		require.True(t, ok)
+		target, _, _ := strings.Cut(targets, " | work → ")
 		if !recovery {
 			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "watch", Arguments: map[string]any{
 				"target": target, "command": `NOCTILUCA_RUN_CHILD=1 exec "$NOCTILUCA_RUN_TEST_BINARY" -test.run=TestRunCLIHelper`, "cwd": os.Getenv("NOCTILUCA_RUN_TEST_DIR"),
@@ -202,6 +192,12 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/users.info":
+			fmt.Fprint(w, `{"ok":true,"user":{"profile":{"display_name":"Owner"}}}`)
+		case "/conversations.info":
+			fmt.Fprint(w, `{"ok":true,"channel":{"name":"test"}}`)
+		case "/conversations.replies":
+			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
 		case "/auth.test":
 			_, _ = io.WriteString(w, `{"ok":true,"user_id":"U_BOT","bot_id":"B_BOT"}`)
 		case "/usergroups.users.list":

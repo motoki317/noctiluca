@@ -1,6 +1,21 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+type SourceInfo struct {
+	Conversation string
+	Sender       string
+	ThreadAt     time.Time
+	ThreadText   string
+}
+
+// SourceInfoProvider resolves opaque refs for readable input headers.
+type SourceInfoProvider interface {
+	SourceInfo(context.Context, ConversationRef, string, bool) SourceInfo
+}
 
 type OutboundMessage struct {
 	Text        string

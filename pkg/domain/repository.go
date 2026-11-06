@@ -21,6 +21,7 @@ type SentMessage struct {
 }
 
 type EventRepository interface {
+	InputContext(context.Context, SessionKey, ConversationRef, time.Time) (InputContext, error)
 	SaveInbound(ctx context.Context, event InboundEvent) error
 	SaveOutbound(ctx context.Context, message SentMessage) error
 	ListInbound(ctx context.Context, conversation ConversationRef, limit int) ([]InboundEvent, error)
@@ -28,6 +29,13 @@ type EventRepository interface {
 	Search(ctx context.Context, query string, limit int) ([]InboundEvent, error)
 	SaveModel(ctx context.Context, record ModelRecord) error
 	ListModel(ctx context.Context, key SessionKey, limit int) ([]ModelRecord, error)
+}
+
+type InputContext struct {
+	ThreadSeen bool
+	Root       *InboundEvent
+	LastReply  time.Time
+	Running    bool
 }
 
 type ModelRecord struct {

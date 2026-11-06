@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,13 @@ func newRunSlack(t *testing.T, beforePost func(context.Context, url.Values)) *ru
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/users.info":
+			fmt.Fprint(w, `{"ok":true,"user":{"profile":{"display_name":"Owner"}}}`)
+		case "/conversations.info":
+			require.NoError(t, r.ParseForm())
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": map[string]any{"name": "test-room", "is_im": strings.HasPrefix(r.Form.Get("channel"), "D"), "user": "U_OWNER"}})
+		case "/conversations.replies":
+			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
 		case "/auth.test":
 			_, _ = io.WriteString(w, `{"ok":true,"user_id":"U_BOT","bot_id":"B_BOT"}`)
 		case "/apps.connections.open":

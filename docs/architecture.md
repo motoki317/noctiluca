@@ -48,7 +48,7 @@ Only tools post. The model's final text is never sent, so a silent turn posts no
 ## Sessions
 
 - A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, consolidation) runs in its own session.
-- Every input begins with a header naming its channel, thread, sender, and message, plus `reply_target` (where a short answer goes) and `work_target` (the thread where real work goes). `reply` always takes an explicit target.
+- Chat and watch/wake inputs name the place, sender, and local time, with ordering context and copyable `reply` and `work` targets. `reply` always takes an explicit target.
 - A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: Claude's own `run_in_background` Bash or Agent, or the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
 
