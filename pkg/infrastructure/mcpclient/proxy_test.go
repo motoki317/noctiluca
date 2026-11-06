@@ -61,7 +61,7 @@ func TestProxySharedPermissionsAndReconnect(t *testing.T) {
 	hubDone := make(chan error, 1)
 	go func() { hubDone <- hub.Start(context.Background()) }()
 	defer func() { require.NoError(t, hub.Shutdown(t.Context())); require.NoError(t, <-hubDone) }()
-	m, err := New([]ServerConfig{config}, repo, hub, nil)
+	m, err := New([]ServerConfig{config}, repo, repository.NewInboxRepository(db), hub, nil)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -115,7 +115,7 @@ func TestMissingLoginSkipsAndDefaults(t *testing.T) {
 	require.NoError(t, err)
 	defer hub.Shutdown(t.Context())
 	var logs bytes.Buffer
-	m, err := New([]ServerConfig{{Name: "missing", URL: f.server.URL + "/mcp"}}, repository.NewOAuthTokenRepository(db), hub, slog.New(slog.NewTextHandler(&logs, nil)))
+	m, err := New([]ServerConfig{{Name: "missing", URL: f.server.URL + "/mcp"}}, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, slog.New(slog.NewTextHandler(&logs, nil)))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -149,8 +149,8 @@ func TestRefreshFailureAndPersistenceRetry(t *testing.T) {
 	require.NoError(t, err)
 	_, err = source.Token()
 	require.ErrorContains(t, err, "persist MCP tokens")
-	source.(*tokenSource).repository = repo
-	_, err = source.Token()
+	source.repository = repo
+	err = source.refreshRejected("Bearer initial-access")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, f.refreshes.Load())
 	stored, err = repo.Get(t.Context(), config.Name)
@@ -179,7 +179,7 @@ func TestShutdownConnectedBeforeStart(t *testing.T) {
 	hub, err := toolhub.New(toolhub.Config{})
 	require.NoError(t, err)
 	defer hub.Shutdown(t.Context())
-	m, err := New([]ServerConfig{config}, repo, hub, nil)
+	m, err := New([]ServerConfig{config}, repo, repository.NewInboxRepository(db), hub, nil)
 	require.NoError(t, err)
 	require.NoError(t, m.Connect(t.Context()))
 	session := m.(*manager).remotes[0].session
@@ -214,7 +214,7 @@ func TestShutdownDuringConnect(t *testing.T) {
 	require.NoError(t, err)
 	defer hub.Shutdown(t.Context())
 	entered := make(chan struct{})
-	m, err := New([]ServerConfig{{Name: "tracker", URL: "http://127.0.0.1:1/mcp"}}, blockedTokens{entered: entered}, hub, nil)
+	m, err := New([]ServerConfig{{Name: "tracker", URL: "http://127.0.0.1:1/mcp"}}, blockedTokens{entered: entered}, &unusedInbox{}, hub, nil)
 	require.NoError(t, err)
 	done := make(chan error, 1)
 	go func() { done <- m.Connect(t.Context()) }()
@@ -250,7 +250,7 @@ func TestProxyMemberOptInSkipsInvalidNames(t *testing.T) {
 	go func() { done <- hub.Start(t.Context()) }()
 	defer func() { require.NoError(t, hub.Shutdown(t.Context())); require.NoError(t, <-done) }()
 	var logs bytes.Buffer
-	manager, err := New([]ServerConfig{config}, repo, hub, slog.New(slog.NewTextHandler(&logs, nil)))
+	manager, err := New([]ServerConfig{config}, repo, repository.NewInboxRepository(db), hub, slog.New(slog.NewTextHandler(&logs, nil)))
 	require.NoError(t, err)
 	require.NoError(t, manager.Connect(t.Context()))
 	defer manager.Shutdown(t.Context())
@@ -264,3 +264,6 @@ func TestProxyMemberOptInSkipsInvalidNames(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 }
+
+// Connect is cancelled in the repository before it can enqueue a notice.
+type unusedInbox struct{ domain.InboxRepository }

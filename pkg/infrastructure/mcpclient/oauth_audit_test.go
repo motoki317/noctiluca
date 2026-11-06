@@ -28,7 +28,8 @@ func loginRepo(t *testing.T) domain.OAuthTokenRepository {
 
 func TestLoginRefreshScopeAndAudience(t *testing.T) {
 	f := newOAuthFixture(t)
-	f.rootResource = true
+	f.rootResource, f.tokenRedirect = true, true
+	f.noGETChallenge = true
 	f.noOffline = true
 	f.grantedScope = new("read")
 	repo := loginRepo(t)

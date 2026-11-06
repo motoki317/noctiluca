@@ -26,24 +26,33 @@ import (
 )
 
 type oauthFixture struct {
-	server          *httptest.Server
-	mcp             *mcp.Server
-	registrations   atomic.Int32
-	refreshes       atomic.Int32
-	initializations atomic.Int32
-	mu              sync.Mutex
-	authorization   url.Values
-	redirect        string
-	access          string
-	refresh         string
-	denyRefresh     bool
-	sendIss         bool // returns iss without advertising RFC 9207 support, as Slite does
-	noOffline       bool
-	rootResource    bool
-	grantedScope    *string
-	wrongIss        bool
-	advertiseIss    bool
-	denyCode        bool
+	server            *httptest.Server
+	mcp               *mcp.Server
+	registrations     atomic.Int32
+	refreshes         atomic.Int32
+	refreshStatus     atomic.Int32
+	initializations   atomic.Int32
+	mu                sync.Mutex
+	authorization     url.Values
+	redirect          string
+	access            string
+	refresh           string
+	denyRefresh       bool
+	sendIss           bool // returns iss without advertising RFC 9207 support, as Slite does
+	noOffline         bool
+	rootResource      bool
+	grantedScope      *string
+	wrongIss          bool
+	advertiseIss      bool
+	denyCode          bool
+	runtimeStatus     atomic.Int32
+	insufficientScope bool
+	defaultScopes     bool
+	codeOnly          bool
+	challengeScope    string
+	customMetadata    bool
+	noGETChallenge    bool
+	tokenRedirect     bool
 }
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
@@ -60,6 +69,13 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		if r.Header.Get("Authorization") != "Bearer "+access {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/.well-known/oauth-protected-resource/mcp"`)
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if status := f.runtimeStatus.Load(); status != 0 {
+			if f.insufficientScope {
+				w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="write"`)
+			}
+			w.WriteHeader(int(status))
 			return
 		}
 		if r.Method == http.MethodPost && r.Header.Get("Mcp-Session-Id") == "" {
@@ -89,11 +105,19 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		writeJSON(w, map[string]any{"resource": f.server.URL, "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
 	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		tokenURL := f.server.URL + "/token"
+		if f.tokenRedirect {
+			tokenURL += "-redirect"
+		}
 		scopes := []string{"read", "write"}
 		if !f.noOffline {
 			scopes = append(scopes, "offline_access")
 		}
-		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": f.advertiseIss})
+		var grants []string
+		if f.codeOnly {
+			grants = []string{"authorization_code"}
+		}
+		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": tokenURL, "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": f.advertiseIss, "grant_types_supported": grants})
 	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		var metadata struct {
@@ -141,6 +165,9 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		}
 		http.Redirect(w, r, redirect+"?"+values.Encode(), http.StatusFound)
 	})
+	mux.HandleFunc("/token-redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/token", http.StatusTemporaryRedirect)
+	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.ParseForm() != nil {
 			http.Error(w, "bad form", 400)
@@ -161,6 +188,11 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			assert.Equal(t, f.authorization.Get("code_challenge"), oauth2.S256ChallengeFromVerifier(r.Form.Get("code_verifier")))
 			assert.Equal(t, f.resource(), r.Form.Get("resource"))
 		case "refresh_token":
+			if status := f.refreshStatus.Load(); status != 0 {
+				w.WriteHeader(int(status))
+				fmt.Fprint(w, `{"error":"server_error","error_description":"secret-value"}`)
+				return
+			}
 			assert.Equal(t, f.resource(), r.Form.Get("resource"))
 			if f.denyRefresh {
 				w.WriteHeader(http.StatusBadRequest)
@@ -309,7 +341,7 @@ func TestLoginWithoutRefreshToken(t *testing.T) {
 	source, err = restoreTokens(t.Context(), config, repo)
 	require.NoError(t, err)
 	_, err = source.Token()
-	require.ErrorContains(t, err, "run mcp-login again")
+	require.ErrorContains(t, err, "run mcp-login tracker")
 }
 
 func TestLoginAcceptsUnadvertisedMatchingIss(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -33,15 +34,34 @@ type tokenSource struct {
 	registration registration
 	source       oauth2.TokenSource
 	saved        *oauth2.Token
+	failed       chan struct{}
+	failure      error
 }
 
 func (s *tokenSource) Token() (*oauth2.Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.tokenLocked()
+}
+
+func (s *tokenSource) tokenLocked() (*oauth2.Token, error) {
+	if s.failure != nil {
+		return nil, s.failure
+	}
+	if s.saved.RefreshToken == "" && !s.saved.Valid() {
+		return nil, s.failLocked("token expired without a refresh token")
+	}
 	token, err := s.source.Token()
 	if err != nil {
+		if s.ctx.Err() != nil {
+			return nil, s.ctx.Err()
+		}
 		// OAuth error bodies can contain credentials and must not reach logs or model inputs.
-		return nil, errors.New("MCP token refresh failed; run mcp-login again")
+		var rejected *oauth2.RetrieveError
+		if errors.As(err, &rejected) && rejected.Response != nil && rejected.Response.StatusCode < 500 && rejected.Response.StatusCode != http.StatusTooManyRequests && rejected.Response.StatusCode != http.StatusRequestTimeout && rejected.ErrorCode != "temporarily_unavailable" && rejected.ErrorCode != "server_error" {
+			return nil, s.failLocked("token refresh rejected")
+		}
+		return nil, errors.New("MCP token refresh failed; retry later")
 	}
 	scopes := grantedScopes(token, s.registration.OAuth.Scopes)
 	if s.saved == nil || token.AccessToken != s.saved.AccessToken || token.RefreshToken != s.saved.RefreshToken || !token.Expiry.Equal(s.saved.Expiry) || token.TokenType != s.saved.TokenType || !slices.Equal(scopes, s.registration.OAuth.Scopes) {
@@ -58,7 +78,56 @@ func (s *tokenSource) Token() (*oauth2.Token, error) {
 	return token, nil
 }
 
-func restoreTokens(ctx context.Context, config ServerConfig, repository domain.OAuthTokenRepository) (oauth2.TokenSource, error) {
+func (s *tokenSource) refreshRejected(bearer string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.tokenLocked(); err != nil {
+		return err
+	}
+	// Concurrent requests can reject a token that another request already refreshed.
+	if bearer != "Bearer "+s.saved.AccessToken {
+		return nil
+	}
+	if s.saved.RefreshToken == "" {
+		return s.failLocked("authorization rejected (401)")
+	}
+	expired := *s.saved
+	expired.Expiry = time.Now().Add(-time.Minute)
+	s.source = refreshSource(s.ctx, &s.registration.OAuth, &expired, s.registration.Audience)
+	_, err := s.tokenLocked()
+	return err
+}
+
+func (s *tokenSource) failLocked(reason string) error {
+	if s.failure == nil {
+		s.failure = fmt.Errorf("MCP server %s: %s; run mcp-login %s", s.server, reason, s.server)
+		close(s.failed)
+	}
+	return s.failure
+}
+
+func (s *tokenSource) fail(reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failLocked(reason)
+}
+
+func (s *tokenSource) err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failure
+}
+
+func (s *tokenSource) expiresWithoutRefresh() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saved.RefreshToken == "" {
+		return s.saved.Expiry
+	}
+	return time.Time{}
+}
+
+func restoreTokens(ctx context.Context, config ServerConfig, repository domain.OAuthTokenRepository) (*tokenSource, error) {
 	stored, err := repository.Get(ctx, config.Name)
 	if err != nil {
 		return nil, err
@@ -76,7 +145,7 @@ func restoreTokens(ctx context.Context, config ServerConfig, repository domain.O
 		reg.LoginID = fmt.Sprintf("%x", sha256.Sum256(stored.Registration))
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient(config.URL))
-	return &tokenSource{ctx: ctx, repository: repository, server: config.Name, registration: reg, source: refreshSource(ctx, &reg.OAuth, token, reg.Audience), saved: token}, nil
+	return &tokenSource{ctx: ctx, repository: repository, server: config.Name, registration: reg, source: refreshSource(ctx, &reg.OAuth, token, reg.Audience), saved: token, failed: make(chan struct{})}, nil
 }
 
 func grantedScopes(token *oauth2.Token, fallback []string) []string {
@@ -100,7 +169,7 @@ func refreshSource(ctx context.Context, config *oauth2.Config, token *oauth2.Tok
 	base := client.Transport
 	// oauth2 owns refresh and rotation, but its Config has no refresh-parameter hook.
 	client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Method == http.MethodPost && request.URL.String() == config.Endpoint.TokenURL {
+		if request.Method == http.MethodPost {
 			body, err := io.ReadAll(request.Body)
 			_ = request.Body.Close()
 			if err != nil {
