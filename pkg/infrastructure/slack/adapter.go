@@ -169,7 +169,7 @@ func (a *adapter) post(ctx context.Context, ref domain.ConversationRef, message 
 	for _, attachment := range message.Attachments {
 		file, _, _, err := a.reader.GetFileInfoContext(ctx, attachment.Ref, 0, 0)
 		if err != nil {
-			return "", errors.New("read Slack file failed")
+			return "", slackError("read Slack file failed", err)
 		}
 		if file.Permalink == "" {
 			return "", errors.New("file has no Slack permalink")
@@ -185,7 +185,7 @@ func (a *adapter) post(ctx context.Context, ref domain.ConversationRef, message 
 	}
 	_, id, err := a.bot.PostMessageContext(ctx, channel, options...)
 	if err != nil {
-		return "", errors.New("post Slack message failed")
+		return "", slackError("post Slack message failed", err)
 	}
 	return id, nil
 }
