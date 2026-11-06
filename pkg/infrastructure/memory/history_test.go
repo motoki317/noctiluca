@@ -197,19 +197,62 @@ func TestOversizedCoreRemainsReadable(t *testing.T) {
 }
 
 func TestOwnerMemoryPaths(t *testing.T) {
+	store, dir := setup(t)
+	history := store.(domain.MemoryHistory)
+	for _, name := range []string{"owner/soul.md", "owner/user.md", "owner/rules.md", "owner/nested/note.md"} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("original"), 0600))
+	}
+	git(t, dir, "add", "owner")
+	git(t, dir, "commit", "-m", "Handwritten instructions")
+	head, err := history.Revision(t.Context())
+	require.NoError(t, err)
+	for _, identity := range []domain.Actor{domain.ActorOwner, domain.ActorMember} {
+		ctx := actor(t, identity)
+		for _, name := range []string{"owner", "owner/soul.md", "owner/user.md", "owner/rules.md", "owner/nested/note.md", "owner/new.md"} {
+			require.ErrorContains(t, store.Write(ctx, name, "changed", "Change instruction"), "owner/ is read-only")
+			_, err := history.Delete(ctx, name, "Delete instruction")
+			require.ErrorContains(t, err, "owner/ is read-only")
+		}
+		_, err := history.Revert(ctx, head)
+		require.ErrorContains(t, err, "changes owner/")
+	}
+	after, err := history.Revision(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, head, after)
+	require.Empty(t, git(t, dir, "status", "--porcelain"))
+	require.Equal(t, 1, strings.Count(git(t, dir, "worktree", "list", "--porcelain"), "worktree "))
+}
+
+func TestModelMemoryPaths(t *testing.T) {
 	store, _ := setup(t)
 	history := store.(domain.MemoryHistory)
-	for _, name := range []string{"owner/persona.md", "core.md", "procedures/heartbeat.md"} {
-		require.NoError(t, store.Write(actor(t, domain.ActorOwner), name, "original", "Record owner instruction"))
-		require.ErrorContains(t, store.Write(actor(t, domain.ActorMember), name, "changed", "Change instruction"), "owner permission")
-		_, err := history.Delete(actor(t, domain.ActorMember), name, "Delete instruction")
-		require.Error(t, err)
-		text, err := store.Read(t.Context(), name)
+	ctx := actor(t, domain.ActorMember)
+	for _, name := range []string{"core.md", "procedures/heartbeat.md", "notes/research/item.md", "index.md", "owner-notes.md"} {
+		revision, err := history.WriteRevision(ctx, name, "original", "Record memory")
+		require.NoError(t, err)
+		text, err := store.Read(ctx, name)
 		require.NoError(t, err)
 		require.Equal(t, "original", text)
-		_, err = history.Delete(actor(t, domain.ActorOwner), name, "Retire instruction")
+		matches, err := store.Search(ctx, "original")
 		require.NoError(t, err)
+		require.Contains(t, matches, domain.MemoryMatch{Path: name, Line: 1, Text: "original"})
+		_, err = history.Delete(ctx, name, "Forget memory")
+		require.NoError(t, err)
+		_, err = history.Revert(ctx, "HEAD")
+		require.NoError(t, err)
+		_, err = history.Revert(ctx, revision)
+		require.NoError(t, err)
+		_, err = store.Read(ctx, name)
+		require.ErrorIs(t, err, os.ErrNotExist)
 	}
+	require.NoError(t, store.Write(ctx, "notes/research/item.md", "note", "Record note"))
+	names, err := store.List(ctx, "notes/research")
+	require.NoError(t, err)
+	require.Equal(t, []string{"notes/research/item.md"}, names)
+	sizes, err := history.Sizes(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []domain.MemoryFileSize{{Path: "notes/research/item.md", Bytes: 4}}, sizes.Files)
 }
 
 func TestStartupSweepsOnlyOwnedSnapshots(t *testing.T) {
@@ -232,4 +275,27 @@ func TestStartupSweepsOnlyOwnedSnapshots(t *testing.T) {
 	fresh, err := reopened.(domain.MemoryHistory).Snapshot(t.Context(), revision)
 	require.NoError(t, err)
 	require.NoError(t, fresh.Close())
+}
+
+func TestRevertRefusesLaterRenameIntoOwner(t *testing.T) {
+	store, dir := setup(t)
+	history := store.(domain.MemoryHistory)
+	ctx := actor(t, domain.ActorMember)
+	require.NoError(t, store.Write(ctx, "notes/item.md", "original\n", "Record note"))
+	delta, err := history.WriteRevision(ctx, "notes/item.md", "changed\n", "Update note")
+	require.NoError(t, err)
+	git(t, dir, "mv", "notes/item.md", "owner/rules.md")
+	git(t, dir, "commit", "-m", "Keep as handwritten rules")
+	head, err := history.Revision(ctx)
+	require.NoError(t, err)
+	_, err = history.Revert(ctx, delta)
+	require.ErrorContains(t, err, "changes owner/")
+	after, err := history.Revision(ctx)
+	require.NoError(t, err)
+	require.Equal(t, head, after)
+	text, err := store.Read(ctx, "owner/rules.md")
+	require.NoError(t, err)
+	require.Equal(t, "changed\n", text)
+	require.Empty(t, git(t, dir, "status", "--porcelain"))
+	require.Equal(t, 1, strings.Count(git(t, dir, "worktree", "list", "--porcelain"), "worktree "))
 }

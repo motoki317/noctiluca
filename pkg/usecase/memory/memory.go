@@ -60,7 +60,7 @@ func Tools(memory domain.MemoryStore) []domain.Tool {
 			}
 			return json.Marshal(map[string]string{"path": input.Path, "text": text})
 		}},
-		{Name: "memory_write", Description: "Write a memory file, or delete it with delete=true instead of content. Commit with your message. owner/, core.md, and procedures/ require owner permission. Size caps reject growth; merge or delete to fit.", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","minLength":1},"content":{"type":"string"},"delete":{"type":"boolean"},"message":{"type":"string","minLength":1}},"required":["path","message"],"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		{Name: "memory_write", Description: "Write a memory file, or delete it with delete=true instead of content. Commit with your message. owner/ is read-only and edited by hand. Write any other relative path. Size caps reject growth; merge or delete to fit.", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","minLength":1},"content":{"type":"string"},"delete":{"type":"boolean"},"message":{"type":"string","minLength":1}},"required":["path","message"],"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var input struct {
 				Path    string  `json:"path"`
 				Content *string `json:"content"`
@@ -124,7 +124,7 @@ func Tools(memory domain.MemoryStore) []domain.Tool {
 				return json.Marshal(sizes)
 			},
 		}, domain.Tool{
-			Name: "memory_revert", Description: "Revert one memory commit while preserving later unrelated edits. Conflicts leave memory unchanged.", OwnerOnly: true,
+			Name: "memory_revert", Description: "Revert one memory commit while preserving later unrelated edits. Commits that touch owner/ cannot be reverted. Conflicts leave memory unchanged.", OwnerOnly: true,
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"commit":{"type":"string","minLength":1}},"required":["commit"],"additionalProperties":false}`),
 			Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 				var input struct {
