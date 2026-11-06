@@ -152,7 +152,8 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		if f.Type == "control_request" {
 			response := map[string]any{"subtype": "error", "request_id": f.RequestID, "error": "Unsupported control request"}
 			if f.Request.Subtype == "can_use_tool" {
-				response = map[string]any{"subtype": "success", "request_id": f.RequestID, "response": map[string]string{"behavior": "deny", "message": "No interactive permission approval is available. Configure allowed tools in Claude settings."}}
+				// Accepted sessions share the Unix user and its native tool permissions.
+				response = map[string]any{"subtype": "success", "request_id": f.RequestID, "response": map[string]any{"behavior": "allow", "updatedInput": f.Request.Input}}
 			}
 			controlCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 			err := s.write(controlCtx, map[string]any{"type": "control_response", "response": response})

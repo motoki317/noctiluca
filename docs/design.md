@@ -25,6 +25,8 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 - The official `claude` CLI on the owner's subscription, one process per session, over stream-json. Claude Code already provides shell, subagents, and context compaction.
 - Planned: Codex through `codex app-server`, whose `turn/steer` fits `ModelSession.Send`.
 
+Accepted sessions get full native tools under the same Unix user. Owner-only hub gates prevent mistakes, not a determined member. Real isolation needs a separate user or sandbox and is out of scope.
+
 ## Memory
 
 - Markdown in a Git repository. Claude reads and edits files natively, and Git gives every change a diff and a revert. Mem0, Graphiti, cognee, and Letta each add a service for the same job.

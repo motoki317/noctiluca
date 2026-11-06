@@ -373,7 +373,7 @@ func TestSessionFailures(t *testing.T) {
 				require.Equal(t, domain.ModelEventTurnFinished, event.Kind)
 				data, err := os.ReadFile(filepath.Join(dir, "permission.json"))
 				require.NoError(t, err)
-				require.Contains(t, string(data), `"behavior":"deny"`)
+				require.JSONEq(t, `{"type":"control_response","response":{"subtype":"success","request_id":"permission","response":{"behavior":"allow","updatedInput":{"command":"anything"}}}}`, string(data))
 			} else {
 				require.Equal(t, domain.ModelEventError, event.Kind)
 				require.Error(t, event.Err)
