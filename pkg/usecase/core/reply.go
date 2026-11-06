@@ -20,8 +20,8 @@ func (c *core) reply(ctx context.Context, raw json.RawMessage) (json.RawMessage,
 	if !ok {
 		return nil, errors.New("tool session is required")
 	}
-	info, ok := c.reconciler.Context(identity.Key)
-	if !ok || info.Actor != identity.Actor {
+	_, ok = c.reconciler.Context(identity.Key)
+	if !ok {
 		return nil, errors.New("session is closed")
 	}
 
@@ -36,9 +36,6 @@ func (c *core) reply(ctx context.Context, raw json.RawMessage) (json.RawMessage,
 		return nil, errors.New("target is required; copy a target from the input")
 	}
 	if args.Target == "owner" {
-		if info.TaskName == "" || identity.Actor != domain.ActorOwner {
-			return nil, errors.New("owner target is only available to owner tasks")
-		}
 		provider, ok := c.messaging.(domain.DirectMessageProvider)
 		if !ok {
 			return nil, errors.New("owner destination unavailable")

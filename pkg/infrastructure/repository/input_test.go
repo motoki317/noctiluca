@@ -35,7 +35,7 @@ func TestInputContextUsesPostingOrderAndDeliveredHistory(t *testing.T) {
 		event := root
 		event.Conversation, event.Parent, event.MessageRef = "thread", "room", "reply"
 		event.Accepted = &accepted
-		item := domain.InboxItem{SourceKey: "rejected", SessionKey: "room", Actor: domain.ActorMember, Lane: "conv", Status: "done", Payload: domain.InboxPayload{Event: &event}}
+		item := domain.InboxItem{SourceKey: "rejected", SessionKey: "room", Lane: "conv", Status: "done", Payload: domain.InboxPayload{Event: &event}}
 		if accepted {
 			item.SourceKey = "delivered"
 		}
@@ -52,7 +52,7 @@ func TestInputContextCountsDeliveredContinuations(t *testing.T) {
 	db := openDB(t)
 	r := repository.NewEventRepository(db)
 	inbox := repository.NewInboxRepository(db)
-	_, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "watch:1", SessionKey: "room", Actor: domain.ActorMember, Lane: "conv", Status: "done", Payload: domain.InboxPayload{Target: "thread"}})
+	_, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "watch:1", SessionKey: "room", Lane: "conv", Status: "done", Payload: domain.InboxPayload{Target: "thread"}})
 	require.NoError(t, err)
 	info, err := r.InputContext(t.Context(), "room", "thread", time.Now())
 	require.NoError(t, err)

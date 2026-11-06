@@ -124,7 +124,7 @@ func Tools(memory domain.MemoryStore) []domain.Tool {
 				return json.Marshal(sizes)
 			},
 		}, domain.Tool{
-			Name: "memory_revert", Description: "Revert one memory commit while preserving later unrelated edits. Commits that touch owner/ cannot be reverted. Conflicts leave memory unchanged.", OwnerOnly: true,
+			Name: "memory_revert", Description: "Revert one memory commit while preserving later unrelated edits. Commits that touch owner/ cannot be reverted. Conflicts leave memory unchanged.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"commit":{"type":"string","minLength":1}},"required":["commit"],"additionalProperties":false}`),
 			Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 				var input struct {

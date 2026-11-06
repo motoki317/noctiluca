@@ -47,7 +47,7 @@ func (f *deliveryRig) start(t *testing.T) func() {
 }
 func (f *deliveryRig) enqueue(t *testing.T, key, text string) int64 {
 	t.Helper()
-	item := domain.InboxItem{SourceKey: text, SessionKey: domain.SessionKey(key), Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: domain.ConversationRef(key), Actor: domain.ActorOwner}}}
+	item := domain.InboxItem{SourceKey: text, SessionKey: domain.SessionKey(key), Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: domain.ConversationRef(key)}}}
 	id, err := f.inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
 	f.runner.Notify()
@@ -150,11 +150,8 @@ func TestClosingProcessReservesSessionKey(t *testing.T) {
 	f.status(t, next, "done")
 }
 func TestPermanentRejectionHasNoRetryOrNotice(t *testing.T) {
-	f := newDeliveryRig(t, Config{Actor: func(info domain.SessionContext) domain.Actor {
-		if info.Conversation == "removed" {
-			return ""
-		}
-		return domain.ActorOwner
+	f := newDeliveryRig(t, Config{Accept: func(info domain.SessionContext) bool {
+		return info.Conversation != "removed"
 	}, Prepare: func(context.Context, domain.InboxItem) (domain.UserInput, error) {
 		return domain.UserInput{}, domain.ErrRejected
 	}})
@@ -317,7 +314,7 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 			}
 			f := newDeliveryRig(t, cfg)
 			f.start(t)
-			item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}, Context: domain.SessionContext{Actor: domain.ActorOwner}}}
+			item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}, Context: domain.SessionContext{}}}
 			if notice {
 				item.Payload.Notice = "owner note"
 			}
@@ -347,7 +344,7 @@ func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 			f.model.send = func(context.Context, domain.UserInput) error { return send() }
 			f.config.NotifyOwner = func(context.Context, string) error { return send() }
 			stop := f.start(t)
-			item := domain.InboxItem{SourceKey: "sent", SessionKey: "session", Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "once"}, Context: domain.SessionContext{Actor: domain.ActorOwner}}}
+			item := domain.InboxItem{SourceKey: "sent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "once"}, Context: domain.SessionContext{}}}
 			if notice {
 				item.Payload.Notice = "once"
 			}

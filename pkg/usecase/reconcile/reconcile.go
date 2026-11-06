@@ -13,7 +13,7 @@ import (
 
 type Config struct {
 	Workdir     string
-	Actor       func(domain.SessionContext) domain.Actor
+	Accept      func(domain.SessionContext) bool
 	IdleTimeout time.Duration
 	TurnTimeout time.Duration
 	TaskTimeout time.Duration
@@ -155,8 +155,8 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if p.closing {
 			continue
 		}
-		if r.config.Actor != nil && p.info.TaskName == "" && (r.config.Actor(p.info) == "" || (p.info.Actor == domain.ActorOwner && r.config.Actor(p.info) != domain.ActorOwner)) {
-			r.retire(p, "session permissions changed")
+		if r.config.Accept != nil && !r.config.Accept(p.info) {
+			r.retire(p, "conversation no longer accepted")
 			continue
 		}
 		if p.turn != nil {
@@ -209,8 +209,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "consolidate") {
 				value.Payload.Procedure = schedule.Name
 			}
-			value.Actor = schedule.Actor
-			value.Payload.Context.Actor = schedule.Actor
 			value.SourceKey = fmt.Sprintf("schedule:%s:%s", schedule.Name, schedule.NextRun.Format(time.RFC3339Nano))
 			item = &value
 		}
@@ -247,21 +245,14 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			due(at)
 			continue
 		}
-		if r.config.Actor != nil {
-			item.Actor = r.config.Actor(item.Payload.Context)
-		}
-		if p != nil && p.info.Actor == domain.ActorMember {
-			item.Actor = domain.ActorMember
-		}
-		item.Payload.Context.Actor = item.Actor
-		if item.Actor == "" {
+		if r.config.Accept != nil && !r.config.Accept(item.Payload.Context) {
 			if err := r.inbox.Reject(ctx, item.ID, "session no longer has an accept rule"); err != nil {
 				return 0, err
 			}
 			r.Notify()
 			continue
 		}
-		if p != nil && (p.info.Actor != item.Actor || p.info.Workdir != item.Payload.Context.Workdir) {
+		if p != nil && p.info.Workdir != item.Payload.Context.Workdir {
 			r.retire(p, "session configuration changed")
 			continue
 		}
@@ -278,7 +269,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return 0, err
 			}
-			endpoint, err := r.hub.OpenSession(item.SessionKey, item.Actor)
+			endpoint, err := r.hub.OpenSession(item.SessionKey)
 			if err != nil {
 				if err := r.fail(ctx, item, err); err != nil {
 					return 0, err
@@ -287,7 +278,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			}
 			processCtx, cancel := context.WithCancel(ctx)
 			p = &process{key: item.SessionKey, token: saved.ResumeToken, lane: item.Lane, info: item.Payload.Context, cancel: cancel, inputs: make(chan domain.InboxItem, 1), last: now}
-			p.info.Actor = item.Actor
 			r.mu.Lock()
 			r.live[item.SessionKey] = p
 			r.mu.Unlock()
@@ -363,7 +353,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				prompt := "Use the reply tool to post messages. Final assistant text is private."
 				if r.config.Prompt != nil {
 					var extra string
-					extra, err = r.config.Prompt(sendCtx, domain.ToolSession{Key: p.key, Actor: p.info.Actor})
+					extra, err = r.config.Prompt(sendCtx, domain.ToolSession{Key: p.key})
 					prompt += "\n\n" + extra
 				}
 				if err == nil {

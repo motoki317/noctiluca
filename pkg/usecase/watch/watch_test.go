@@ -35,7 +35,7 @@ func setup(t *testing.T) (domain.WatchRepository, domain.InboxRepository, func()
 	watches, inbox := repository.NewWatchRepository(db), repository.NewInboxRepository(db)
 	return watches, inbox, func() domain.Background {
 		return New(watches, inbox, func(_ context.Context, key domain.SessionKey) (domain.InboxItem, error) {
-			return domain.InboxItem{SessionKey: key, Actor: domain.ActorMember, Lane: "conv", Payload: domain.InboxPayload{Context: domain.SessionContext{Conversation: "origin", Actor: domain.ActorMember}}}, nil
+			return domain.InboxItem{SessionKey: key, Lane: "conv", Payload: domain.InboxPayload{Context: domain.SessionContext{Conversation: "origin"}}}, nil
 		}, func() {})
 	}
 }
@@ -59,7 +59,7 @@ func start(t *testing.T, w domain.Background) (context.CancelFunc, chan error) {
 	return cancel, done
 }
 func toolContext(t *testing.T) context.Context {
-	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: "origin", Actor: domain.ActorMember})
+	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: "origin"})
 }
 
 func TestWakeupPersistsWithoutDelivery(t *testing.T) {

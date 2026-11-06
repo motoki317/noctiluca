@@ -40,6 +40,9 @@ func (f *fakeMessaging) Send(_ context.Context, to domain.ConversationRef, messa
 }
 func (*fakeMessaging) Tools() []domain.Tool { return nil }
 func (*fakeMessaging) ToolNotes() string    { return "" }
+func (*fakeMessaging) DirectMessage(_ context.Context, user string) (domain.ConversationRef, error) {
+	return domain.ConversationRef("dm:" + user), nil
+}
 
 type fakeModel struct {
 	opened chan *fakeSession
@@ -84,11 +87,11 @@ func (s *fakeSession) Close() error {
 }
 
 type fakeHub struct {
-	mu     sync.Mutex
-	tools  map[string]domain.Tool
-	actors map[domain.SessionKey]domain.Actor
-	closed chan domain.SessionKey
-	count  int
+	mu       sync.Mutex
+	tools    map[string]domain.Tool
+	sessions map[domain.SessionKey]bool
+	closed   chan domain.SessionKey
+	count    int
 }
 
 func (*fakeHub) Start(ctx context.Context) error { <-ctx.Done(); return nil }
@@ -102,23 +105,23 @@ func (f *fakeHub) AddSource(_ string, tools []domain.Tool) error {
 	}
 	return nil
 }
-func (f *fakeHub) OpenSession(key domain.SessionKey, actor domain.Actor) (domain.MCPEndpoint, error) {
+func (f *fakeHub) OpenSession(key domain.SessionKey) (domain.MCPEndpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.actors[key] = actor
+	f.sessions[key] = true
 	f.count++
 	return domain.MCPEndpoint{URL: "http://localhost/mcp", BearerToken: fmt.Sprint(f.count)}, nil
 }
 func (f *fakeHub) CloseSession(key domain.SessionKey) {
 	f.mu.Lock()
-	delete(f.actors, key)
+	delete(f.sessions, key)
 	f.mu.Unlock()
 	f.closed <- key
 }
-func (f *fakeHub) actor(key domain.SessionKey) domain.Actor {
+func (f *fakeHub) active(key domain.SessionKey) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.actors[key]
+	return f.sessions[key]
 }
 
 type fixture struct {
@@ -150,7 +153,7 @@ func setupMemory(t *testing.T, config Config, prompt domain.PromptAssembler, gro
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	f := &fixture{messaging: &fakeMessaging{in: make(chan domain.InboundEvent), out: make(chan domain.SentMessage, 10)}, model: &fakeModel{opened: make(chan *fakeSession, 10)},
-		hub: &fakeHub{tools: make(map[string]domain.Tool), actors: make(map[domain.SessionKey]domain.Actor), closed: make(chan domain.SessionKey, 10)}, events: repository.NewEventRepository(db), sessions: repository.NewSessionRepository(db), done: make(chan error, 1)}
+		hub: &fakeHub{tools: make(map[string]domain.Tool), sessions: make(map[domain.SessionKey]bool), closed: make(chan domain.SessionKey, 10)}, events: repository.NewEventRepository(db), sessions: repository.NewSessionRepository(db), done: make(chan error, 1)}
 	var messaging domain.MessagingAdapter = f.messaging
 	if groups != nil {
 		messaging = &groupMessaging{fakeMessaging: f.messaging, groups: groups}
@@ -196,7 +199,7 @@ func TestConversationFlow(t *testing.T) {
 	s := take(t, f.model.opened)
 	require.NotContains(t, take(t, s.inputs).Text, "fresh context")
 	require.Contains(t, s.config.SystemPrompt, "fresh context")
-	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
+	require.True(t, f.hub.active("room"))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- message("room", "member", "steer")
@@ -210,7 +213,7 @@ func TestConversationFlow(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventText, Text: "never post this"}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "background done"}
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room", Actor: domain.ActorMember})
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room"})
 	result, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"room","text":"visible"}`))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"id":"sent"}`, string(result))
@@ -222,7 +225,7 @@ func TestConversationFlow(t *testing.T) {
 	f.messaging.in <- message("dm", "owner", "private")
 	dm := take(t, f.model.opened)
 	take(t, dm.inputs)
-	require.Equal(t, domain.ActorOwner, f.hub.actor("dm"))
+	require.True(t, f.hub.active("dm"))
 	inbound, err := f.events.ListInbound(t.Context(), "room", 30)
 	require.NoError(t, err)
 	require.Len(t, inbound, 3)
@@ -271,7 +274,7 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 		t.Fatal("opened a session per thread")
 	default:
 	}
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room", Actor: domain.ActorMember})
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room"})
 	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"text":"missing target"}`))
 	require.ErrorContains(t, err, "target is required")
 	for _, target := range []string{"thread-a", "thread-b", "room", "room-message"} {
@@ -286,7 +289,7 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 		t.Fatal("closed a busy session")
 	case <-time.After(80 * time.Millisecond):
 	}
-	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
+	require.True(t, f.hub.active("room"))
 	s.idle.Store(true)
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "done"}
 	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
@@ -306,7 +309,7 @@ func TestOpenFailureRevokesGrant(t *testing.T) {
 
 	f.messaging.in <- message("room", "member", "hello")
 	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
-	require.Empty(t, f.hub.actor("room"))
+	require.False(t, f.hub.active("room"))
 	events, err := f.events.ListInbound(t.Context(), "room", 1)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
@@ -340,7 +343,7 @@ func TestAcceptRules(t *testing.T) {
 	config.Rules["dm"] = domain.AcceptRule{Users: []string{"member"}}
 	r, ok := impl.accepted(message("dm", "owner", ""))
 	require.True(t, ok)
-	require.Equal(t, domain.ActorOwner, r.actor)
+	require.Contains(t, r.users, "owner")
 	thread := message("thread", "member", "")
 	thread.Parent = "room"
 	thread.MentionsMe = true
@@ -372,3 +375,19 @@ func TestShutdownDuringInput(t *testing.T) {
 }
 
 type unusedInbox struct{ domain.InboxRepository }
+
+func TestConversationCanReplyToOwner(t *testing.T) {
+	f := setup(t, Config{Owner: "owner", Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, nil)
+	f.messaging.in <- message("room", "member", "report to owner")
+	s := take(t, f.model.opened)
+	take(t, s.inputs)
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room"})
+	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"owner","text":"requested report"}`))
+	require.NoError(t, err)
+	sent := take(t, f.messaging.out)
+	require.Equal(t, domain.ConversationRef("dm:owner"), sent.Conversation)
+	require.Equal(t, "requested report", sent.Message.Text)
+	history, err := f.events.ListOutbound(t.Context(), "dm:owner", 10)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+}

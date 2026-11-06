@@ -17,12 +17,12 @@ func TestRestartContinuesDeliveredTaskOnce(t *testing.T) {
 	inbox := repository.NewInboxRepository(db)
 	sessions := repository.NewSessionRepository(db)
 	for _, lane := range []string{"conv", "task"} {
-		info := domain.SessionContext{Actor: domain.ActorOwner, Conversation: domain.ConversationRef(lane)}
+		info := domain.SessionContext{Conversation: domain.ConversationRef(lane)}
 		if lane == "task" {
 			info.TaskName = "daily"
 			info.Conversation = ""
 		}
-		item := domain.InboxItem{SourceKey: lane, SessionKey: domain.SessionKey(lane), Actor: domain.ActorOwner, Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Input: domain.UserInput{Text: "never replay"}}}
+		item := domain.InboxItem{SourceKey: lane, SessionKey: domain.SessionKey(lane), Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Input: domain.UserInput{Text: "never replay"}}}
 		id, err := inbox.Enqueue(t.Context(), item)
 		require.NoError(t, err)
 		_, err = inbox.Claim(t.Context(), id, time.Now())
@@ -67,7 +67,7 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 				defer db.Close()
 				inbox := repository.NewInboxRepository(db)
 				sessions := repository.NewSessionRepository(db)
-				item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
+				item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
 				switch kind {
 				case "task":
 					item.Lane = "task"

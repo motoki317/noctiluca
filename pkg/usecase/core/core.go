@@ -36,7 +36,6 @@ type Config struct {
 type rule struct {
 	users                     map[string]struct{}
 	allowBots, requireMention bool
-	actor                     domain.Actor
 }
 type core struct {
 	config           Config
@@ -108,7 +107,7 @@ func New(config Config, messaging domain.MessagingAdapter, model domain.ModelAda
 			return ok && len(rule.users) > 0
 		})
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: memoryusecase.Prompt(memory, messaging.ToolNotes()+"\n\n"+c.replyTool().Description, prompt), Actor: c.actor, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, schedules, sessions, events, model, hub)
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: memoryusecase.Prompt(memory, messaging.ToolNotes()+"\n\n"+c.replyTool().Description, prompt), Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
 	tools := append([]domain.Tool{c.replyTool()}, c.reconciler.Tools()...)
 	tools = append(tools, c.watcher.Tools()...)
@@ -219,14 +218,10 @@ func (c *core) receive(ctx context.Context, event domain.InboundEvent) error {
 		event.SourceKey = uuid.NewString()
 	}
 	c.mu.Lock()
-	r, accepted := c.accepted(event)
+	_, accepted := c.accepted(event)
 	c.mu.Unlock()
 	event.Accepted = &accepted
-	actor := r.actor
-	if actor == "" {
-		actor = domain.ActorMember
-	}
-	item := domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.SessionKey(channel(event)), Actor: actor, Lane: "conv", ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: channel(event), Direct: event.Direct, Actor: actor, Workdir: c.config.Workdir}}}
+	item := domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.SessionKey(channel(event)), Lane: "conv", ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: channel(event), Direct: event.Direct, Workdir: c.config.Workdir}}}
 	if !accepted {
 		item.Status = "done"
 	}
@@ -259,7 +254,7 @@ func (c *core) workItem(ctx context.Context, key domain.SessionKey) (domain.Inbo
 	if info.TaskName != "" {
 		lane = "task"
 	}
-	return domain.InboxItem{SessionKey: key, Actor: info.Actor, Lane: lane, Payload: domain.InboxPayload{Context: info}}, nil
+	return domain.InboxItem{SessionKey: key, Lane: lane, Payload: domain.InboxPayload{Context: info}}, nil
 }
 
 func (c *core) notifyOwner(ctx context.Context, text string) error {
@@ -283,17 +278,14 @@ func (c *core) notifyOwner(ctx context.Context, text string) error {
 	return nil
 }
 
-func (c *core) actor(info domain.SessionContext) domain.Actor {
+func (c *core) acceptSession(info domain.SessionContext) bool {
 	if info.TaskName != "" {
-		return domain.ActorOwner
+		return true
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r, ok := c.findRule(c.rules, info.Conversation, info.Direct)
-	if !ok || len(r.users) == 0 {
-		return ""
-	}
-	return r.actor
+	return ok && len(r.users) > 0
 }
 func (c *core) runMessaging(ctx context.Context) error {
 	for ctx.Err() == nil {

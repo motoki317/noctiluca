@@ -67,7 +67,6 @@ mcp_servers: []
 #   - name: tracker
 #     url: https://tracker.example/mcp
 #     scopes: [read, offline_access]
-#     members: true  # Optional. External tools otherwise require the owner.
 #     tools: [search]
 
 log:

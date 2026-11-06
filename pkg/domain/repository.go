@@ -61,7 +61,6 @@ type Session struct {
 type SessionContext struct {
 	Conversation ConversationRef
 	Direct       bool
-	Actor        Actor
 	Workdir      string
 	TaskName     string
 }
@@ -74,7 +73,6 @@ type SessionRepository interface {
 }
 
 type Schedule struct {
-	Actor   Actor
 	NextRun time.Time
 	Name    string
 	Cron    string

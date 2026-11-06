@@ -22,9 +22,9 @@ import (
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
 )
 
-func hubClient(t *testing.T, hub domain.ToolHub, key string, actor domain.Actor) *mcp.ClientSession {
+func hubClient(t *testing.T, hub domain.ToolHub, key string) *mcp.ClientSession {
 	t.Helper()
-	endpoint, err := hub.OpenSession(domain.SessionKey(key), actor)
+	endpoint, err := hub.OpenSession(domain.SessionKey(key))
 	require.NoError(t, err)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
 	httpClient := oauth2.NewClient(t.Context(), oauth2.StaticTokenSource(&oauth2.Token{AccessToken: endpoint.BearerToken, TokenType: "Bearer"}))
@@ -34,7 +34,7 @@ func hubClient(t *testing.T, hub domain.ToolHub, key string, actor domain.Actor)
 	return session
 }
 
-func TestProxySharedPermissionsAndReconnect(t *testing.T) {
+func TestProxySharedToolsAndReconnect(t *testing.T) {
 	f := newOAuthFixture(t)
 	var calls atomic.Int32
 	add := func(name string) {
@@ -70,9 +70,9 @@ func TestProxySharedPermissionsAndReconnect(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- m.Start(ctx) }()
 	defer func() { cancel(); require.NoError(t, <-done) }()
-	owner := hubClient(t, hub, "owner", domain.ActorOwner)
-	member := hubClient(t, hub, "member", domain.ActorMember)
-	second := hubClient(t, hub, "second", domain.ActorOwner)
+	owner := hubClient(t, hub, "owner")
+	member := hubClient(t, hub, "member")
+	second := hubClient(t, hub, "second")
 	listed, err := owner.ListTools(t.Context(), nil)
 	require.NoError(t, err)
 	require.Len(t, listed.Tools, 1)
@@ -82,8 +82,8 @@ func TestProxySharedPermissionsAndReconnect(t *testing.T) {
 		require.NoError(t, err)
 		return result
 	}
-	assert.True(t, call(member, "denied").IsError)
-	assert.Zero(t, calls.Load())
+	assert.False(t, call(member, "available").IsError)
+	assert.EqualValues(t, 1, calls.Load())
 	result := call(owner, "hello")
 	require.False(t, result.IsError)
 	assert.Equal(t, "hello\ntail", result.Content[0].(*mcp.TextContent).Text)
@@ -92,7 +92,7 @@ func TestProxySharedPermissionsAndReconnect(t *testing.T) {
 	hub.CloseSession("owner")
 	assert.False(t, call(second, "still connected").IsError)
 	assert.EqualValues(t, 2, f.initializations.Load())
-	assert.EqualValues(t, 3, calls.Load())
+	assert.EqualValues(t, 4, calls.Load())
 	f.mcp.RemoveTools("echo")
 	add("new")
 	require.NoError(t, initial.Close())
@@ -241,7 +241,7 @@ func TestProxyMemberOptInSkipsInvalidNames(t *testing.T) {
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
 	require.NoError(t, err)
 	defer db.Close()
-	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}, Members: true}
+	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
 	repo := repository.NewOAuthTokenRepository(db)
 	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	hub, err := toolhub.New(toolhub.Config{})
@@ -255,7 +255,7 @@ func TestProxyMemberOptInSkipsInvalidNames(t *testing.T) {
 	require.NoError(t, manager.Connect(t.Context()))
 	defer manager.Shutdown(t.Context())
 	require.Contains(t, logs.String(), "tracker_"+long)
-	member := hubClient(t, hub, "member", domain.ActorMember)
+	member := hubClient(t, hub, "member")
 	listed, err := member.ListTools(t.Context(), nil)
 	require.NoError(t, err)
 	require.Len(t, listed.Tools, 1)

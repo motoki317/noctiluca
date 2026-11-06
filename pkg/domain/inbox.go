@@ -19,7 +19,6 @@ type InboxItem struct {
 	ID         int64
 	SourceKey  string
 	SessionKey SessionKey
-	Actor      Actor
 	Payload    InboxPayload
 	ReadyAt    time.Time
 	Lane       string

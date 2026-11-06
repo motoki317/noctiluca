@@ -43,7 +43,7 @@ func Next(s domain.Schedule, now time.Time) (time.Time, error) {
 	return next, nil
 }
 func TaskItem(name, prompt, workdir string) domain.InboxItem {
-	return domain.InboxItem{SourceKey: "task:" + uuid.NewString(), SessionKey: domain.SessionKey("task:" + name), Actor: domain.ActorOwner, Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: prompt}, Context: domain.SessionContext{Actor: domain.ActorOwner, TaskName: name, Workdir: workdir}}}
+	return domain.InboxItem{SourceKey: "task:" + uuid.NewString(), SessionKey: domain.SessionKey("task:" + name), Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: prompt}, Context: domain.SessionContext{TaskName: name, Workdir: workdir}}}
 }
 func (r *Reconciler) Install(ctx context.Context, schedules []domain.Schedule) error {
 	for _, s := range schedules {
@@ -55,7 +55,6 @@ func (r *Reconciler) Install(ctx context.Context, schedules []domain.Schedule) e
 			return fmt.Errorf("schedule %s: %w", s.Name, err)
 		}
 		s.NextRun = next
-		s.Actor = domain.ActorOwner
 		if err := r.schedules.Save(ctx, s); err != nil {
 			return err
 		}
@@ -64,7 +63,7 @@ func (r *Reconciler) Install(ctx context.Context, schedules []domain.Schedule) e
 }
 func (r *Reconciler) Tools() []domain.Tool {
 	return []domain.Tool{
-		{Name: "schedule_add", OwnerOnly: true, Description: "Add or update a cron task. Use five cron fields and an IANA timezone.", InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"cron":{"type":"string"},"tz":{"type":"string"},"prompt":{"type":"string"},"workdir":{"type":"string"}},"required":["name","cron","tz","prompt"],"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		{Name: "schedule_add", Description: "Add or update a cron task. Use five cron fields and an IANA timezone.", InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"cron":{"type":"string"},"tz":{"type":"string"},"prompt":{"type":"string"},"workdir":{"type":"string"}},"required":["name","cron","tz","prompt"],"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var s domain.Schedule
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return nil, err
@@ -81,7 +80,7 @@ func (r *Reconciler) Tools() []domain.Tool {
 			r.Notify()
 			return json.Marshal(map[string]string{"name": s.Name})
 		}},
-		{Name: "schedule_remove", OwnerOnly: true, Description: "Remove a cron task. Config tasks return on restart.", InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		{Name: "schedule_remove", Description: "Remove a cron task. Config tasks return on restart.", InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var in struct{ Name string }
 			if err := json.Unmarshal(raw, &in); err != nil {
 				return nil, err

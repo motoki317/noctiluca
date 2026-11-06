@@ -70,7 +70,7 @@ func call(t *testing.T, c *mcp.ClientSession, name string, args any) *mcp.CallTo
 	return result
 }
 
-func TestSourcesContextAndPermissions(t *testing.T) {
+func TestSourcesAndSessionContext(t *testing.T) {
 	h := startHub(t)
 	identity := echo("identity")
 	identity.Handler = func(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
@@ -81,12 +81,11 @@ func TestSourcesContextAndPermissions(t *testing.T) {
 		return json.Marshal(session)
 	}
 	owner := echo("owner_echo")
-	owner.OwnerOnly = true
 	require.NoError(t, h.AddSource("core", []domain.Tool{identity}))
 	require.NoError(t, h.AddSource("adapter", []domain.Tool{owner}))
-	memberEndpoint, err := h.OpenSession("member-session", domain.ActorMember)
+	memberEndpoint, err := h.OpenSession("member-session")
 	require.NoError(t, err)
-	ownerEndpoint, err := h.OpenSession("owner-session", domain.ActorOwner)
+	ownerEndpoint, err := h.OpenSession("owner-session")
 	require.NoError(t, err)
 	require.NotEqual(t, ownerEndpoint.BearerToken, memberEndpoint.BearerToken)
 	memberClient := client(t, memberEndpoint)
@@ -99,17 +98,16 @@ func TestSourcesContextAndPermissions(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	require.ElementsMatch(t, []string{"identity", "owner_echo", "external_echo"}, names)
-	require.True(t, call(t, memberClient, "owner_echo", map[string]any{}).IsError)
+	require.False(t, call(t, memberClient, "owner_echo", map[string]any{}).IsError)
 	require.False(t, call(t, ownerClient, "owner_echo", map[string]any{}).IsError)
 	for _, tc := range []struct {
-		c     *mcp.ClientSession
-		key   string
-		actor domain.Actor
-	}{{memberClient, "member-session", domain.ActorMember}, {ownerClient, "owner-session", domain.ActorOwner}} {
+		c   *mcp.ClientSession
+		key string
+	}{{memberClient, "member-session"}, {ownerClient, "owner-session"}} {
 		result := call(t, tc.c, "identity", map[string]any{"actor": "owner", "key": "forged"})
 		require.False(t, result.IsError)
 		require.Len(t, result.Content, 1)
-		require.JSONEq(t, fmt.Sprintf(`{"Key":%q,"Actor":%q}`, tc.key, tc.actor), result.Content[0].(*mcp.TextContent).Text)
+		require.JSONEq(t, fmt.Sprintf(`{"Key":%q}`, tc.key), result.Content[0].(*mcp.TextContent).Text)
 		require.Nil(t, result.StructuredContent)
 	}
 	raw := echo("raw")
@@ -123,7 +121,7 @@ func TestSourcesContextAndPermissions(t *testing.T) {
 func TestSessionLifetime(t *testing.T) {
 	h := startHub(t)
 	require.NoError(t, h.AddSource("core", []domain.Tool{echo("echo")}))
-	endpoint, err := h.OpenSession("session", domain.ActorMember)
+	endpoint, err := h.OpenSession("session")
 	require.NoError(t, err)
 	first := client(t, endpoint)
 	require.False(t, call(t, first, "echo", map[string]any{"turn": 1}).IsError)
@@ -131,14 +129,14 @@ func TestSessionLifetime(t *testing.T) {
 	// A subagent can open a new transport after the parent turn and its transport end.
 	background := client(t, endpoint)
 	require.False(t, call(t, background, "echo", map[string]any{"background": true}).IsError)
-	_, err = h.OpenSession("session", domain.ActorOwner)
+	_, err = h.OpenSession("session")
 	require.Error(t, err)
 	h.CloseSession("session")
 	h.CloseSession("session")
 	_, err = background.CallTool(t.Context(), &mcp.CallToolParams{Name: "echo"})
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, requestStatus(t, endpoint, "Bearer "+endpoint.BearerToken))
-	replacement, err := h.OpenSession("session", domain.ActorOwner)
+	replacement, err := h.OpenSession("session")
 	require.NoError(t, err)
 	require.NotEqual(t, endpoint.BearerToken, replacement.BearerToken)
 	require.False(t, call(t, client(t, replacement), "echo", nil).IsError)
@@ -163,7 +161,7 @@ func requestStatus(t *testing.T, endpoint domain.MCPEndpoint, authorization stri
 
 func TestInvalidTokensAndRegistry(t *testing.T) {
 	h := startHub(t)
-	endpoint, err := h.OpenSession("session", domain.ActorMember)
+	endpoint, err := h.OpenSession("session")
 	require.NoError(t, err)
 	for _, auth := range []string{"", "Bearer wrong", "Basic " + endpoint.BearerToken, "Bearer " + endpoint.BearerToken + " extra"} {
 		require.Equal(t, http.StatusUnauthorized, requestStatus(t, endpoint, auth))
@@ -202,9 +200,7 @@ func TestInvalidTokensAndRegistry(t *testing.T) {
 	require.NoError(t, h.AddSource("errors", []domain.Tool{failed, badJSON}))
 	require.Equal(t, "test failure", call(t, c, "failed", nil).Content[0].(*mcp.TextContent).Text)
 	require.True(t, call(t, c, "bad_json", nil).IsError)
-	_, err = h.OpenSession("", domain.ActorOwner)
-	require.Error(t, err)
-	_, err = h.OpenSession("invalid", domain.Actor("invalid"))
+	_, err = h.OpenSession("")
 	require.Error(t, err)
 }
 
@@ -220,7 +216,7 @@ func TestCloseCancelsActiveCall(t *testing.T) {
 		return nil, ctx.Err()
 	}
 	require.NoError(t, h.AddSource("core", []domain.Tool{waiting}))
-	endpoint, err := h.OpenSession("session", domain.ActorMember)
+	endpoint, err := h.OpenSession("session")
 	require.NoError(t, err)
 	c := client(t, endpoint)
 	done := make(chan struct{})
@@ -241,7 +237,7 @@ func TestCloseCancelsActiveCall(t *testing.T) {
 
 func TestPortsAndShutdown(t *testing.T) {
 	h := startHub(t)
-	ep, err := h.OpenSession("session", domain.ActorMember)
+	ep, err := h.OpenSession("session")
 	require.NoError(t, err)
 	parsed, err := url.Parse(ep.URL)
 	require.NoError(t, err)
@@ -253,7 +249,7 @@ func TestPortsAndShutdown(t *testing.T) {
 	require.Error(t, err)
 	require.NoError(t, h.Shutdown(t.Context()))
 	require.NoError(t, h.Shutdown(t.Context()))
-	_, err = h.OpenSession("closed", domain.ActorMember)
+	_, err = h.OpenSession("closed")
 	require.Error(t, err)
 	require.Error(t, h.AddSource("closed", nil))
 	replacement, err := toolhub.New(toolhub.Config{Port: port})
@@ -275,7 +271,7 @@ func TestConcurrentSessions(t *testing.T) {
 	for i := range 12 {
 		key := domain.SessionKey(fmt.Sprintf("session-%d", i))
 		wg.Go(func() {
-			ep, err := h.OpenSession(key, domain.ActorMember)
+			ep, err := h.OpenSession(key)
 			if err != nil {
 				t.Error(err)
 				return
@@ -309,7 +305,7 @@ func TestStartCancellationDrainsHandlers(t *testing.T) {
 		return json.RawMessage(`{}`), nil
 	}
 	require.NoError(t, h.AddSource("core", []domain.Tool{tool}))
-	ep, err := h.OpenSession("session", domain.ActorMember)
+	ep, err := h.OpenSession("session")
 	require.NoError(t, err)
 	c := client(t, ep)
 	callDone := make(chan struct{})
