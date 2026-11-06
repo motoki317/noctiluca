@@ -3,6 +3,7 @@ module github.com/motoki317/noctiluca
 go 1.26.10
 
 require (
+	github.com/cli/browser v1.3.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

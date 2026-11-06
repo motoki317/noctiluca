@@ -40,7 +40,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			defer db.Close()
 			repo, inbox := repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db)
 			config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-			require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+			require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 			stored, err := repo.Get(t.Context(), config.Name)
 			require.NoError(t, err)
 			if scenario == "expired-startup" {
@@ -140,7 +140,7 @@ func TestForbiddenWithoutScopeChallengeDoesNotInvalidate(t *testing.T) {
 	f := newOAuthFixture(t)
 	repo := loginRepo(t)
 	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	source, err := restoreTokens(t.Context(), config, repo)
 	require.NoError(t, err)
 	tokens := source
@@ -206,7 +206,7 @@ func TestRuntime401RefreshAndRetry(t *testing.T) {
 	f := newOAuthFixture(t)
 	repo := loginRepo(t)
 	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	tokens, err := restoreTokens(t.Context(), config, repo)
 	require.NoError(t, err)
 	hub, err := toolhub.New(toolhub.Config{})

@@ -29,7 +29,7 @@ Start from [config.example.yaml](../config.example.yaml). Each token is `{env: N
 ## Run
 
 ```sh
-noctiluca --config config.yaml mcp-login <server>   # once per MCP server: open the printed URL, the command waits for the login
+noctiluca --config config.yaml mcp-login <server>   # once per MCP server: opens the browser (or open the printed URL) and waits for the login
 noctiluca --config config.yaml run
 ```
 

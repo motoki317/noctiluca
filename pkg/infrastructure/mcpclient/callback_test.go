@@ -31,7 +31,7 @@ func TestCallbackServerServesRepeatedAuthorization(t *testing.T) {
 			}()
 			return len(p), nil
 		})
-		result, err := callbacks.receive(context.Background(), "https://auth.example/authorize?state="+state, output)
+		result, err := callbacks.receive(context.Background(), "https://auth.example/authorize?state="+state, output, nil)
 		require.NoError(t, err)
 		require.Equal(t, "c-"+state, result.Code)
 	}

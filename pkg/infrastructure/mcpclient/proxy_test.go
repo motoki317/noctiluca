@@ -55,7 +55,7 @@ func TestProxySharedPermissionsAndReconnect(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}, Tools: []string{"echo", "new"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	hub, err := toolhub.New(toolhub.Config{})
 	require.NoError(t, err)
 	hubDone := make(chan error, 1)
@@ -140,7 +140,7 @@ func TestRefreshFailureAndPersistenceRetry(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	stored, err := repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	stored.Expiry = time.Now().Add(-time.Minute)
@@ -175,7 +175,7 @@ func TestShutdownConnectedBeforeStart(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	hub, err := toolhub.New(toolhub.Config{})
 	require.NoError(t, err)
 	defer hub.Shutdown(t.Context())
@@ -243,7 +243,7 @@ func TestProxyMemberOptInSkipsInvalidNames(t *testing.T) {
 	defer db.Close()
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}, Members: true}
 	repo := repository.NewOAuthTokenRepository(db)
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	hub, err := toolhub.New(toolhub.Config{})
 	require.NoError(t, err)
 	done := make(chan error, 1)

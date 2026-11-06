@@ -20,7 +20,9 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
-func Login(ctx context.Context, config ServerConfig, repository domain.OAuthTokenRepository, output io.Writer) error {
+// Login prints each authorization URL to output and, when open is non-nil, also opens it in a
+// browser. A failed open is ignored: the printed URL still works.
+func Login(ctx context.Context, config ServerConfig, repository domain.OAuthTokenRepository, output io.Writer, open func(string) error) error {
 	if err := Validate([]ServerConfig{config}); err != nil {
 		return err
 	}
@@ -58,7 +60,7 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 				return nil, errors.New("invalid OAuth authorization URL")
 			}
 			audience = u.Query().Get("resource")
-			return callbacks.receive(ctx, args.URL, output)
+			return callbacks.receive(ctx, args.URL, output, open)
 		},
 		NewTokenSource: func(refreshCtx context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
 			reg = &registration{Resource: config.URL, Audience: audience, LoginID: uuid.NewString(), OAuth: *cfg}
@@ -135,7 +137,7 @@ func serveCallbacks(listener net.Listener) *callbackServer {
 }
 
 // receive prints the authorization URL and waits for the browser's redirect for that request.
-func (c *callbackServer) receive(ctx context.Context, authorizationURL string, output io.Writer) (*auth.AuthorizationResult, error) {
+func (c *callbackServer) receive(ctx context.Context, authorizationURL string, output io.Writer, open func(string) error) (*auth.AuthorizationResult, error) {
 	u, err := url.Parse(authorizationURL)
 	if err != nil {
 		return nil, err
@@ -145,6 +147,9 @@ func (c *callbackServer) receive(ctx context.Context, authorizationURL string, o
 	c.mu.Unlock()
 	if _, err := fmt.Fprintln(output, authorizationURL); err != nil {
 		return nil, err
+	}
+	if open != nil {
+		_ = open(authorizationURL)
 	}
 	select {
 	case r := <-c.results:

@@ -34,7 +34,7 @@ func TestLoginRefreshScopeAndAudience(t *testing.T) {
 	f.grantedScope = new("read")
 	repo := loginRepo(t)
 	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	for _, scope := range []*string{new("read write"), nil} {
 		f.mu.Lock()
 		f.grantedScope = scope
@@ -60,26 +60,26 @@ func TestLoginRefreshScopeAndAudience(t *testing.T) {
 func TestLoginUsesDiscoveredScopes(t *testing.T) {
 	f := newOAuthFixture(t)
 	f.defaultScopes = true
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t)))
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t), nil))
 }
 
 func TestLoginWithAuthorizationCodeOnly(t *testing.T) {
 	f := newOAuthFixture(t)
 	f.codeOnly, f.noOffline = true, true
 	f.refresh = ""
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t)))
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t), nil))
 }
 
 func TestLoginUsesPOSTMetadataChallenge(t *testing.T) {
 	f := newOAuthFixture(t)
 	f.customMetadata, f.noGETChallenge = true, true
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t)))
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t), nil))
 }
 
 func TestLoginUsesChallengeScopes(t *testing.T) {
 	f := newOAuthFixture(t)
 	f.challengeScope = "write"
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t)))
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t), nil))
 }
 
 func TestLoginKeepsSDKAuthorizationState(t *testing.T) {
@@ -89,7 +89,7 @@ func TestLoginKeepsSDKAuthorizationState(t *testing.T) {
 			f.loginStepUp, f.loginForbidden = stepUp, !stepUp
 			f.challengeScope = "read"
 			repo := loginRepo(t)
-			err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, repo, browser(t))
+			err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, repo, browser(t), nil)
 			if !stepUp {
 				require.ErrorContains(t, err, "Forbidden")
 				assert.EqualValues(t, 1, f.authorizations.Load())
@@ -111,11 +111,11 @@ func TestReloginReplacesOnlyAfterSuccess(t *testing.T) {
 	f := newOAuthFixture(t)
 	repo := loginRepo(t)
 	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	before, err := repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	f.denyCode = true
-	require.Error(t, Login(t.Context(), config, repo, browser(t)))
+	require.Error(t, Login(t.Context(), config, repo, browser(t), nil))
 	after, err := repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
@@ -123,7 +123,7 @@ func TestReloginReplacesOnlyAfterSuccess(t *testing.T) {
 	f.mu.Lock()
 	f.access, f.refresh = "replacement-access", "replacement-refresh"
 	f.mu.Unlock()
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	after, err = repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	assert.Equal(t, "replacement-refresh", after.RefreshToken)
@@ -139,14 +139,14 @@ func TestOldRefreshCannotOverwriteRelogin(t *testing.T) {
 	f := newOAuthFixture(t)
 	repo := loginRepo(t)
 	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	stored, err := repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	stored.Expiry = time.Now().Add(-time.Minute)
 	require.NoError(t, repo.Save(t.Context(), config.Name, stored))
 	old, err := restoreTokens(t.Context(), config, repo)
 	require.NoError(t, err)
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	replacement, err := repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	_, err = old.Token()
@@ -166,7 +166,7 @@ func TestLoginRejectsWrongOrMissingIssuer(t *testing.T) {
 				f := newOAuthFixture(t)
 				f.advertiseIss, f.wrongIss = advertised, wrong
 				repo := loginRepo(t)
-				err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t))
+				err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t), nil)
 				require.ErrorContains(t, err, "iss")
 				_, err = repo.Get(t.Context(), "wiki")
 				require.ErrorIs(t, err, domain.ErrNotFound)

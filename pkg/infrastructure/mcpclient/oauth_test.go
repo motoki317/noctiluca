@@ -290,7 +290,7 @@ func TestLoginPersistRefreshRestart(t *testing.T) {
 	require.NoError(t, err)
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	stored, err := repo.Get(t.Context(), "tracker")
 	require.NoError(t, err)
 	assert.Equal(t, "initial-refresh", stored.RefreshToken)
@@ -348,7 +348,7 @@ func TestLoginCancellationAndState(t *testing.T) {
 		return len(p), nil
 	})
 	repo := repository.NewOAuthTokenRepository(db)
-	err = Login(ctx, ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, output)
+	err = Login(ctx, ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, output, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = repo.Get(t.Context(), "tracker")
 	require.ErrorIs(t, err, domain.ErrNotFound)
@@ -365,7 +365,7 @@ func TestLoginWithoutRefreshToken(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	stored, err := repo.Get(t.Context(), "tracker")
 	require.NoError(t, err)
 	assert.Equal(t, "initial-access", stored.AccessToken)
@@ -390,5 +390,5 @@ func TestLoginAcceptsUnadvertisedMatchingIss(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t)))
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t), nil))
 }
