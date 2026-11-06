@@ -25,7 +25,7 @@ func TestStatePersistence(t *testing.T) {
 	require.NoError(t, sessions.Save(t.Context(), domain.Session{Key: "session", ResumeToken: "new"}))
 
 	schedules := repository.NewScheduleRepository(db)
-	schedule := domain.Schedule{Actor: domain.ActorOwner, Name: "daily", Cron: "0 9 * * *", TZ: "Asia/Tokyo", Prompt: "preview", Workdir: "/workspace"}
+	schedule := domain.Schedule{Name: "daily", Cron: "0 9 * * *", TZ: "Asia/Tokyo", Prompt: "preview", Workdir: "/workspace"}
 	require.NoError(t, schedules.Save(t.Context(), schedule))
 	schedule.Prompt = "post"
 	require.NoError(t, schedules.Save(t.Context(), schedule))

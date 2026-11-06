@@ -75,7 +75,7 @@ type hubFake struct {
 	closed chan domain.SessionKey
 }
 
-func (h *hubFake) OpenSession(domain.SessionKey, domain.Actor) (domain.MCPEndpoint, error) {
+func (h *hubFake) OpenSession(domain.SessionKey) (domain.MCPEndpoint, error) {
 	return domain.MCPEndpoint{}, nil
 }
 func (h *hubFake) CloseSession(key domain.SessionKey) { h.closed <- key }

@@ -166,7 +166,7 @@ func excerpt(text string) string {
 
 func EpisodesTool(repo domain.EpisodeRepository, negative []string) domain.Tool {
 	return domain.Tool{
-		Name: "episodes_since", Description: "Summarize recent episodes and mechanical failure signals. Omit since to use the last consolidation checkpoint. Treat ambiguous and context_only entries as context, not evidence of a specific turn.", OwnerOnly: true,
+		Name: "episodes_since", Description: "Summarize recent episodes and mechanical failure signals. Omit since to use the last consolidation checkpoint. Treat ambiguous and context_only entries as context, not evidence of a specific turn.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"since":{"type":"string","format":"date-time"}},"additionalProperties":false}`),
 		Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var input struct {

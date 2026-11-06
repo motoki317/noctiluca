@@ -22,7 +22,8 @@ func insertInbox(ctx context.Context, db executor, item domain.InboxItem) (sql.R
 	if item.Status == "" {
 		item.Status = "pending"
 	}
-	return db.ExecContext(ctx, `INSERT INTO inbox(source_key,session_key,actor,payload,ready_at,lane,status,retry_at,deadline) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key) DO NOTHING`, item.SourceKey, item.SessionKey, item.Actor, string(raw), item.ReadyAt.UTC(), item.Lane, item.Status, item.RetryAt.UTC(), item.Deadline.UTC())
+	// Existing databases require an actor value even though sessions have no roles.
+	return db.ExecContext(ctx, `INSERT INTO inbox(source_key,session_key,actor,payload,ready_at,lane,status,retry_at,deadline) VALUES(?,?,'owner',?,?,?,?,?,?) ON CONFLICT(source_key) DO NOTHING`, item.SourceKey, item.SessionKey, string(raw), item.ReadyAt.UTC(), item.Lane, item.Status, item.RetryAt.UTC(), item.Deadline.UTC())
 }
 func (r *inboxRepository) Enqueue(ctx context.Context, item domain.InboxItem) (int64, error) {
 	result, err := insertInbox(ctx, r.db, item)
@@ -56,7 +57,7 @@ func (r *inboxRepository) Receive(ctx context.Context, event domain.InboundEvent
 	return tx.Commit()
 }
 func (r *inboxRepository) Active(ctx context.Context) ([]domain.InboxItem, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,source_key,session_key,actor,payload,ready_at,lane,status,attempts,retry_at,deadline,last_error FROM inbox WHERE status IN ('pending','dispatched') ORDER BY ready_at,id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,source_key,session_key,payload,ready_at,lane,status,attempts,retry_at,deadline,last_error FROM inbox WHERE status IN ('pending','dispatched') ORDER BY ready_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func (r *inboxRepository) Active(ctx context.Context) ([]domain.InboxItem, error
 	for rows.Next() {
 		var item domain.InboxItem
 		var raw string
-		if err := rows.Scan(&item.ID, &item.SourceKey, &item.SessionKey, &item.Actor, &raw, &item.ReadyAt, &item.Lane, &item.Status, &item.Attempts, &item.RetryAt, &item.Deadline, &item.LastError); err != nil {
+		if err := rows.Scan(&item.ID, &item.SourceKey, &item.SessionKey, &raw, &item.ReadyAt, &item.Lane, &item.Status, &item.Attempts, &item.RetryAt, &item.Deadline, &item.LastError); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(raw), &item.Payload); err != nil {
@@ -117,7 +118,7 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 }
 
 func insertOwnerNotice(ctx context.Context, db executor, source, text string) error {
-	notice := domain.InboxItem{SourceKey: source, SessionKey: domain.SessionKey("notice:" + source), Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Notice: text, Context: domain.SessionContext{Actor: domain.ActorOwner, TaskName: "failure-notice"}}}
+	notice := domain.InboxItem{SourceKey: source, SessionKey: domain.SessionKey("notice:" + source), Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Notice: text, Context: domain.SessionContext{TaskName: "failure-notice"}}}
 	_, err := insertInbox(ctx, db, notice)
 	return err
 }

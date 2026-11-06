@@ -60,7 +60,7 @@ func compileRules(config Config) (compiledRules, error) {
 }
 
 func compileRule(config Config, value domain.AcceptRule) (rule, error) {
-	r := rule{users: make(map[string]struct{}), allowBots: value.AllowBots, requireMention: value.RequireMention, actor: domain.ActorMember}
+	r := rule{users: make(map[string]struct{}), allowBots: value.AllowBots, requireMention: value.RequireMention}
 	users := slices.Clone(value.Users)
 	for _, group := range value.Groups {
 		members, ok := config.UserGroups[group]
@@ -74,9 +74,6 @@ func compileRule(config Config, value domain.AcceptRule) (rule, error) {
 			return r, errors.New("accepted user ID must not be empty")
 		}
 		r.users[user] = struct{}{}
-	}
-	if _, owner := r.users[config.Owner]; owner && len(r.users) == 1 {
-		r.actor = domain.ActorOwner
 	}
 	return r, nil
 }

@@ -495,7 +495,7 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 	inbox := repository.NewInboxRepository(app.db)
 	makeItem := func(name, text string) domain.InboxItem {
 		ref := slack.Conversation("D_"+name, "")
-		return domain.InboxItem{SourceKey: name, SessionKey: domain.SessionKey(ref), Actor: domain.ActorOwner, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: ref, Direct: true, Actor: domain.ActorOwner, Workdir: dir}}}
+		return domain.InboxItem{SourceKey: name, SessionKey: domain.SessionKey(ref), Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: ref, Direct: true, Workdir: dir}}}
 	}
 	pending := makeItem("PENDING", "pending-success")
 	recovered := makeItem("RECOVERED", "recover-success")

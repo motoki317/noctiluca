@@ -7,11 +7,10 @@ import (
 )
 
 type ServerConfig struct {
-	Name    string   `mapstructure:"name"`
-	URL     string   `mapstructure:"url"`
-	Scopes  []string `mapstructure:"scopes"`
-	Members bool     `mapstructure:"members"`
-	Tools   []string `mapstructure:"tools"`
+	Name   string   `mapstructure:"name"`
+	URL    string   `mapstructure:"url"`
+	Scopes []string `mapstructure:"scopes"`
+	Tools  []string `mapstructure:"tools"`
 }
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)

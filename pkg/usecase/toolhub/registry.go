@@ -90,9 +90,6 @@ func (p preparedTool) call(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 	if !ok || g.ctx.Err() != nil {
 		return toolError("Session is closed"), nil
 	}
-	if p.tool.OwnerOnly && g.session.Actor != domain.ActorOwner {
-		return toolError("Owner permission required"), nil
-	}
 	input := req.Params.Arguments
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)

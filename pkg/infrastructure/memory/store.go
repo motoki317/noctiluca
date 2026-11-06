@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
@@ -138,11 +139,11 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 }
 
 func ownerPath(name string) bool {
-	return name == "core.md" || strings.HasPrefix(name, "owner/") || strings.HasPrefix(name, "procedures/")
+	return name == "owner" || strings.HasPrefix(name, "owner/")
 }
 
 func validPath(name string) bool {
-	if !fs.ValidPath(name) || strings.ContainsAny(name, "\\\x00\r\n") {
+	if name == "." || !fs.ValidPath(name) || strings.ContainsRune(name, '\\') || strings.ContainsFunc(name, unicode.IsControl) {
 		return false
 	}
 	for _, part := range strings.Split(name, "/") {
@@ -150,7 +151,7 @@ func validPath(name string) bool {
 			return false
 		}
 	}
-	return name == "core.md" || strings.HasPrefix(name, "owner/") || strings.HasPrefix(name, "topics/") || strings.HasPrefix(name, "procedures/")
+	return true
 }
 
 func safePath(root *os.Root, name string) error {
@@ -198,7 +199,7 @@ func (s *store) Read(ctx context.Context, name string) (string, error) {
 }
 
 func (s *store) List(ctx context.Context, prefix string) ([]string, error) {
-	if prefix != "" && prefix != "owner" && prefix != "topics" && prefix != "procedures" {
+	if prefix != "" && !validPath(prefix) {
 		return nil, errors.New("invalid memory prefix")
 	}
 	s.mu.Lock()
@@ -224,7 +225,7 @@ func (s *store) list(ctx context.Context, prefix string) ([]string, error) {
 			return nil
 		}
 		if entry.IsDir() {
-			if name == "owner" || name == "topics" || name == "procedures" || validPath(name) {
+			if validPath(name) {
 				return nil
 			}
 			return fs.SkipDir
@@ -259,12 +260,8 @@ func (s *store) write(ctx context.Context, name, content, message string) error 
 	if !validPath(name) {
 		return errors.New("invalid memory path")
 	}
-	actor, ok := domain.ToolSessionFromContext(ctx)
-	if !ok || (actor.Actor != domain.ActorOwner && actor.Actor != domain.ActorMember) {
-		return errors.New("memory write requires a session actor")
-	}
-	if ownerPath(name) && actor.Actor != domain.ActorOwner {
-		return errors.New("owner permission required for this memory path")
+	if ownerPath(name) {
+		return errors.New("owner/ is read-only; the owner edits these files by hand")
 	}
 	if name == "core.md" && int64(len(content)) > s.limits.CoreBytes {
 		return fmt.Errorf("core.md exceeds %d bytes; merge or delete content before writing", s.limits.CoreBytes)

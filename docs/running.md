@@ -21,9 +21,9 @@ Start from [config.example.yaml](../config.example.yaml). Each token is `{env: N
 
 - `conversations.rules`: one rule per Slack channel ID — allowed users and user groups, `allow_bots`, `require_mention`. DMs accept only the owner unless `direct_messages` says otherwise. Unlisted channels start no turns.
 - `model.workdir`: where Claude runs. Keep config, database, tokens, and memory outside it. Config validation rejects overlaps.
-- `memory.dir`: the memory repository, created as a Git repository if missing. Put persona and preferences in `owner/` and rules for every turn in `core.md`. The heartbeat follows `procedures/heartbeat.md`, which you write. Without it the heartbeat does nothing. `procedures/consolidate.md` and `procedures/hillclimb.md` ship as defaults that a file of the same name overrides.
+- `memory.dir`: the memory repository, created as a Git repository if missing. Write your own files in `owner/`, for example `soul.md` for the persona and `user.md` about you; the names are free. Every file in `owner/` and the root `core.md` go into the system prompt of each Claude process. The memory tools refuse to change `owner/`. Everything else belongs to the agent, which edits it with the memory tools. You may seed files there, such as `procedures/heartbeat.md`, which the heartbeat follows; without it the heartbeat does nothing. Commit what you write by hand: the memory tools refuse to write a file with uncommitted edits. `procedures/consolidate.md` and `procedures/hillclimb.md` ship as defaults that a file of the same name overrides.
 - `heartbeat`, `cron`, `consolidate`: background tasks. Consolidation is off until `consolidate.enabled: true`.
-- `mcp_servers`: external MCP servers. Their tools are owner-only unless `members: true`.
+- `mcp_servers`: external MCP servers. Every session can use the tools they expose; `tools` limits which ones load.
 
 
 ## Run

@@ -139,14 +139,8 @@ func (s *store) Revert(ctx context.Context, revision string) (result string, res
 	if _, err := s.git(ctx, "merge-base", "--is-ancestor", commit, "HEAD"); err != nil {
 		return "", errors.New("revert requires a commit in the current memory history")
 	}
-	names, err := s.git(ctx, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", commit)
-	if err != nil {
+	if err := s.checkRevertPaths(ctx, commit); err != nil {
 		return "", err
-	}
-	for _, name := range strings.Split(strings.TrimSuffix(string(names), "\x00"), "\x00") {
-		if !validPath(name) {
-			return "", errors.New("commit changes paths outside managed memory")
-		}
 	}
 	snapshot, err := s.snapshot(ctx, "HEAD")
 	if err != nil {
@@ -162,16 +156,35 @@ func (s *store) Revert(ctx context.Context, revision string) (result string, res
 	if err != nil {
 		return "", err
 	}
+	// Git can follow a later rename into owner/ when it reverts an earlier edit.
+	if err := candidate.checkRevertPaths(ctx, next); err != nil {
+		return "", err
+	}
 	if _, err := s.git(ctx, "merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", next); err != nil {
 		return "", fmt.Errorf("apply memory revert: %w", err)
 	}
 	return next, nil
 }
 
+func (s *store) checkRevertPaths(ctx context.Context, commit string) error {
+	names, err := s.git(ctx, "diff-tree", "--root", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit)
+	if err != nil {
+		return err
+	}
+	for _, name := range strings.Split(strings.TrimSuffix(string(names), "\x00"), "\x00") {
+		if ownerPath(name) {
+			return errors.New("cannot revert a commit that changes owner/; the owner edits these files by hand")
+		}
+		if !validPath(name) {
+			return errors.New("commit changes paths outside managed memory")
+		}
+	}
+	return nil
+}
+
 func (s *store) Delete(ctx context.Context, name, message string) (revision string, resultErr error) {
-	actor, ok := domain.ToolSessionFromContext(ctx)
-	if !ok || (actor.Actor != domain.ActorOwner && actor.Actor != domain.ActorMember) || (ownerPath(name) && actor.Actor != domain.ActorOwner) {
-		return "", errors.New("memory delete requires permission for the path")
+	if ownerPath(name) {
+		return "", errors.New("owner/ is read-only; the owner edits these files by hand")
 	}
 	if !validPath(name) || strings.TrimSpace(message) == "" || strings.ContainsRune(message, 0) {
 		return "", errors.New("valid memory path and commit message required")

@@ -43,7 +43,7 @@ func (*scriptSession) Close() error                       { return nil }
 
 type testHub struct{ domain.ToolHub }
 
-func (testHub) OpenSession(domain.SessionKey, domain.Actor) (domain.MCPEndpoint, error) {
+func (testHub) OpenSession(domain.SessionKey) (domain.MCPEndpoint, error) {
 	return domain.MCPEndpoint{}, nil
 }
 func (testHub) CloseSession(domain.SessionKey) {}
@@ -82,7 +82,7 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 				if len(batch.Items) != 1 || batch.Items[0].Input != "The release is Friday" {
 					return errors.New("missing episode")
 				}
-				ctx = domain.WithToolSession(ctx, domain.ToolSession{Key: config.Key, Actor: domain.ActorOwner})
+				ctx = domain.WithToolSession(ctx, domain.ToolSession{Key: config.Key})
 				return store.Write(ctx, "topics/release.md", "The release is Friday", "Record the taught release date")
 			}}
 			r := reconcile.New(reconcile.Config{MaxAttempts: 1, Completed: Checkpoint(episodes), Procedure: func(ctx context.Context, name string) (string, error) {
@@ -128,7 +128,7 @@ func TestDefaultProceduresPreserveOwnerEdits(t *testing.T) {
 	store, err := memory.New(t.Context(), memory.Config{Path: t.TempDir()})
 	require.NoError(t, err)
 	store = WithProcedures(store.(domain.MemoryHistory))
-	owner := domain.WithToolSession(t.Context(), domain.ToolSession{Actor: domain.ActorOwner})
+	owner := domain.WithToolSession(t.Context(), domain.ToolSession{})
 	require.NoError(t, store.Write(owner, "procedures/consolidate.md", "owner override", "Customize consolidation"))
 	before, err := store.(domain.MemoryHistory).Revision(t.Context())
 	require.NoError(t, err)

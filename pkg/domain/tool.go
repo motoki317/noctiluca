@@ -6,26 +6,17 @@ import (
 	"regexp"
 )
 
-type Actor string
-
-const (
-	ActorOwner  Actor = "owner"
-	ActorMember Actor = "member"
-)
-
 type Tool struct {
 	ReadOnly    bool
 	Name        string
 	Description string
 	InputSchema json.RawMessage
-	OwnerOnly   bool
 	TextResult  bool
 	Handler     func(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
 }
 
 type ToolSession struct {
-	Key   SessionKey
-	Actor Actor
+	Key SessionKey
 }
 
 type toolSessionKey struct{}
@@ -44,7 +35,7 @@ type ToolHub interface {
 	Shutdown(ctx context.Context) error
 	AddSource(name string, tools []Tool) error
 	ReplaceSource(name string, tools []Tool) error
-	OpenSession(key SessionKey, actor Actor) (MCPEndpoint, error)
+	OpenSession(key SessionKey) (MCPEndpoint, error)
 	CloseSession(key SessionKey)
 }
 

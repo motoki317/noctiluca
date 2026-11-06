@@ -22,9 +22,6 @@ func git(t *testing.T, dir string, args ...string) string {
 	require.NoError(t, err, string(out))
 	return string(out)
 }
-func actor(t *testing.T, actor domain.Actor) context.Context {
-	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test", Actor: actor})
-}
 func setup(t *testing.T) (domain.MemoryStore, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "memory")
@@ -35,7 +32,7 @@ func setup(t *testing.T) (domain.MemoryStore, string) {
 
 func TestWritesCommitsAndIsolation(t *testing.T) {
 	s, dir := setup(t)
-	ctx := actor(t, domain.ActorMember)
+	ctx := t.Context()
 	require.NoError(t, s.Write(ctx, "topics/one.md", "first\n", "Record the first fact"))
 	require.NoError(t, s.Write(ctx, "topics/one.md", "first\n", "Confirm the first fact"))
 	require.Equal(t, "3\n", git(t, dir, "rev-list", "--count", "HEAD"))
@@ -61,29 +58,28 @@ func TestWritesCommitsAndIsolation(t *testing.T) {
 
 func TestPathsPermissionsAndCoreLimit(t *testing.T) {
 	s, dir := setup(t)
-	member := actor(t, domain.ActorMember)
-	owner := actor(t, domain.ActorOwner)
-	require.ErrorContains(t, s.Write(member, "owner/persona.md", "persona", "Try owner write"), "owner permission")
-	require.Error(t, s.Write(t.Context(), "topics/unknown.md", "unknown", "Missing actor"))
-	require.NoError(t, s.Write(owner, "owner/persona.md", "persona", "Set persona"))
-	text, err := s.Read(member, "owner/persona.md")
+	ctx := t.Context()
+	require.NoError(t, s.Write(t.Context(), "notes/unknown.md", "unknown", "Record a note"))
+	require.ErrorContains(t, s.Write(ctx, "owner/persona.md", "persona", "Set persona"), "owner/ is read-only")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "owner/persona.md"), []byte("persona"), 0600))
+	text, err := s.Read(ctx, "owner/persona.md")
 	require.NoError(t, err)
 	require.Equal(t, "persona", text)
-	for _, name := range []string{"../outside", "/outside", "owner/../core.md", ".git/config", "topics/.git/config", "misc.md", "topics/a\nb"} {
-		require.Error(t, s.Write(owner, name, "bad", "Invalid path"), name)
-		_, err := s.Read(owner, name)
+	for _, name := range []string{"../outside", "/outside", "owner/../core.md", ".git/config", "topics/.git/config", ".", "topics/a\nb", "topics/a\tb", "topics/a\x7fb", "topics/a\u0085b", "topics/a\\b"} {
+		require.Error(t, s.Write(ctx, name, "bad", "Invalid path"), name)
+		_, err := s.Read(ctx, name)
 		require.Error(t, err, name)
 	}
 	require.NoError(t, os.Symlink("../owner/persona.md", filepath.Join(dir, "topics/link.md")))
-	require.Error(t, s.Write(member, "topics/link.md", "changed", "Symlink bypass"))
-	_, err = s.Read(member, "topics/link.md")
+	require.Error(t, s.Write(ctx, "topics/link.md", "changed", "Symlink bypass"))
+	_, err = s.Read(ctx, "topics/link.md")
 	require.Error(t, err)
-	require.NoError(t, s.Write(owner, "core.md", strings.Repeat("x", 8192), "Fill core"))
+	require.NoError(t, s.Write(ctx, "core.md", strings.Repeat("x", 8192), "Fill core"))
 	head := git(t, dir, "rev-parse", "HEAD")
-	require.ErrorContains(t, s.Write(owner, "core.md", strings.Repeat("x", 8193), "Overflow core"), "merge or delete")
-	require.Error(t, s.Write(owner, "core.md", strings.Repeat("語", 2731), "Multibyte overflow"))
+	require.ErrorContains(t, s.Write(ctx, "core.md", strings.Repeat("x", 8193), "Overflow core"), "merge or delete")
+	require.Error(t, s.Write(ctx, "core.md", strings.Repeat("語", 2731), "Multibyte overflow"))
 	require.Equal(t, head, git(t, dir, "rev-parse", "HEAD"))
-	text, err = s.Read(member, "core.md")
+	text, err = s.Read(ctx, "core.md")
 	require.NoError(t, err)
 	require.Len(t, text, 8192)
 }
@@ -94,11 +90,11 @@ func TestInitExistingFilesSearchAndReopen(t *testing.T) {
 	root := filepath.Join(dir, "memory")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "owner"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "owner/persona.md"), []byte("persona\n日本語 [x]\n"), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "outside.txt"), []byte("excluded"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "outside.txt"), []byte("included"), 0600))
 	s, err := memory.New(t.Context(), memory.Config{Path: root})
 	require.NoError(t, err)
 	require.Equal(t, root+"\n", git(t, root, "rev-parse", "--show-toplevel"))
-	require.Equal(t, "owner/persona.md\n", git(t, root, "ls-tree", "-r", "--name-only", "HEAD"))
+	require.Equal(t, "outside.txt\nowner/persona.md\n", git(t, root, "ls-tree", "-r", "--name-only", "HEAD"))
 	matches, err := s.Search(t.Context(), "[x]")
 	require.NoError(t, err)
 	require.Equal(t, []domain.MemoryMatch{{Path: "owner/persona.md", Line: 2, Text: "日本語 [x]"}}, matches)
@@ -116,12 +112,12 @@ func TestInitExistingFilesSearchAndReopen(t *testing.T) {
 	names, err := s.List(t.Context(), "owner")
 	require.NoError(t, err)
 	require.Equal(t, []string{"owner/persona.md"}, names)
-	require.NoError(t, s.Write(actor(t, domain.ActorOwner), "owner/persona.md", "updated", "Update preferences"))
+	require.ErrorContains(t, s.Write(t.Context(), "owner/persona.md", "updated", "Update preferences"), "owner/ is read-only")
 }
 
 func TestConcurrentWritesAndCancellation(t *testing.T) {
 	s, dir := setup(t)
-	ctx := actor(t, domain.ActorMember)
+	ctx := t.Context()
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Go(func() {

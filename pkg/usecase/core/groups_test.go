@@ -20,7 +20,7 @@ func (m *groupMessaging) UserGroups(ctx context.Context, ids []string) (map[stri
 	return m.groups(ctx, ids)
 }
 
-func TestGroupRefreshRetiresOwnerAndResumesMember(t *testing.T) {
+func TestGroupRefreshKeepsSessionAndAcceptsNewUsers(t *testing.T) {
 	type response struct {
 		members []string
 		err     error
@@ -44,26 +44,28 @@ func TestGroupRefreshRetiresOwnerAndResumesMember(t *testing.T) {
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
-	require.Equal(t, domain.ActorOwner, f.hub.actor("room"))
+	require.True(t, f.hub.active("room"))
 	take(t, calls)
 	responses <- response{err: errors.New("temporary outage")}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- e
 	take(t, s.inputs)
-	require.Equal(t, domain.ActorOwner, f.hub.actor("room"))
+	require.True(t, f.hub.active("room"))
 	take(t, calls)
 	responses <- response{members: []string{"owner", "member"}}
-	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
+	take(t, calls)
 	e.Sender.ID = "member"
 	f.messaging.in <- e
-	resumed := take(t, f.model.opened)
-	take(t, resumed.inputs)
-	require.Equal(t, "resume-room", resumed.config.ResumeToken)
-	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
-	require.NotEqual(t, s.config.ToolHub.BearerToken, resumed.config.ToolHub.BearerToken)
+	take(t, s.inputs)
+	require.True(t, f.hub.active("room"))
+	select {
+	case <-f.hub.closed:
+		t.Fatal("closed a session after membership expanded")
+	default:
+	}
 }
 
-func TestGroupUpdatesKeepMemberActorAndRejectRemovedUsers(t *testing.T) {
+func TestGroupUpdatesKeepSessionAndRejectRemovedUsers(t *testing.T) {
 	f := setup(t, Config{Owner: "owner", UserGroups: map[string][]string{"group": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Groups: []string{"group"}}}}, nil)
 	f.messaging.in <- message("room", "member", "first")
 	s := take(t, f.model.opened)
@@ -74,10 +76,10 @@ func TestGroupUpdatesKeepMemberActorAndRejectRemovedUsers(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- message("room", "owner", "still accepted")
 	require.Contains(t, take(t, s.inputs).Text, "still accepted")
-	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
+	require.True(t, f.hub.active("room"))
 	select {
 	case <-f.model.opened:
-		t.Fatal("promoted a live member session")
+		t.Fatal("replaced the live session")
 	default:
 	}
 	events, err := f.events.ListInbound(t.Context(), "room", 10)
@@ -112,13 +114,18 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	require.Contains(t, take(t, s.inputs).Text, "first")
-	require.Equal(t, domain.ActorOwner, f.hub.actor("direct"))
+	require.True(t, f.hub.active("direct"))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	require.Eventually(t, func() bool {
 		items, err := f.core.(*core).inbox.Active(t.Context())
 		return err == nil && len(items) == 0
 	}, time.Second, time.Millisecond)
 	require.NoError(t, f.core.UpdateUserGroups(t.Context(), map[string][]string{"team": {"owner", "member"}}))
+	e.Sender.ID = "member"
+	e.Text = "accepted without restart"
+	f.messaging.in <- e
+	require.Contains(t, take(t, s.inputs).Text, "accepted without restart")
+	require.NoError(t, s.Close())
 	require.Equal(t, domain.SessionKey("direct"), take(t, f.hub.closed))
 	item, err := f.core.(*core).workItem(t.Context(), "direct")
 	require.NoError(t, err)
@@ -131,7 +138,7 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	resumed := take(t, f.model.opened)
 	require.Equal(t, "resume-direct", resumed.config.ResumeToken)
 	require.Contains(t, take(t, resumed.inputs).Text, "wake after close")
-	require.Equal(t, domain.ActorMember, f.hub.actor("direct"))
+	require.True(t, f.hub.active("direct"))
 	resumed.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	e.Sender.ID = "member"
 	e.Text = "accepted member"
@@ -140,6 +147,32 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	select {
 	case <-f.model.opened:
 		t.Fatal("unexpected session")
+	default:
+	}
+}
+
+func TestEmptyGroupRetiresConversationAndRejectsWake(t *testing.T) {
+	f := setup(t, Config{Owner: "owner", UserGroups: map[string][]string{"group": {"member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Groups: []string{"group"}}}}, nil)
+	f.messaging.in <- message("room", "member", "first")
+	s := take(t, f.model.opened)
+	take(t, s.inputs)
+	item, err := f.core.(*core).workItem(t.Context(), "room")
+	require.NoError(t, err)
+	require.NoError(t, f.core.UpdateUserGroups(t.Context(), map[string][]string{"group": {}}))
+	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
+	item.SourceKey = "wake:removed"
+	item.ReadyAt = time.Now()
+	item.Payload.Input.Text = "unaccepted wake"
+	_, err = f.core.(*core).inbox.Enqueue(t.Context(), item)
+	require.NoError(t, err)
+	f.core.(*core).reconciler.Notify()
+	require.Eventually(t, func() bool {
+		items, err := f.core.(*core).inbox.Active(t.Context())
+		return err == nil && len(items) == 0
+	}, time.Second, time.Millisecond)
+	select {
+	case <-f.model.opened:
+		t.Fatal("opened a model without an accept rule")
 	default:
 	}
 }

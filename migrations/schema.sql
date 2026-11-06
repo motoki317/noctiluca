@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     turn_json TEXT NOT NULL DEFAULT 'null' CHECK (json_valid(turn_json))
 );
 
+-- Keep legacy actor columns so existing databases pass the schema check without a rebuild.
 CREATE TABLE IF NOT EXISTS schedules (
     name TEXT PRIMARY KEY NOT NULL,
     cron TEXT NOT NULL,

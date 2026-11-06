@@ -11,7 +11,7 @@ import (
 )
 
 func inboxItem(source string) domain.InboxItem {
-	return domain.InboxItem{SourceKey: source, SessionKey: "room", Actor: domain.ActorMember, Lane: "conv", ReadyAt: time.Now().UTC(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "hello"}}}
+	return domain.InboxItem{SourceKey: source, SessionKey: "room", Lane: "conv", ReadyAt: time.Now().UTC(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "hello"}}}
 }
 func TestInboxAtomicReceiveAndRetry(t *testing.T) {
 	db := openDB(t)

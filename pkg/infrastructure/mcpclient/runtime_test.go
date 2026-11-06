@@ -75,7 +75,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			f.mu.Lock()
 			f.denyRefresh = scenario == "refresh"
 			f.mu.Unlock()
-			owner := hubClient(t, hub, "old", domain.ActorOwner)
+			owner := hubClient(t, hub, "old")
 			done := make(chan error, 1)
 			go func() { done <- m.Start(t.Context()) }()
 			if scenario == "401" || scenario == "401-no-refresh" {
@@ -105,7 +105,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 				assert.Contains(t, items[0].Payload.Notice, `check mcp_servers.scopes for "write"`)
 			}
 			assert.NotContains(t, items[0].Payload.Notice, "secret-value")
-			newSession := hubClient(t, hub, "new", domain.ActorOwner)
+			newSession := hubClient(t, hub, "new")
 			listed, err := newSession.ListTools(t.Context(), nil)
 			require.NoError(t, err)
 			assert.Empty(t, listed.Tools)

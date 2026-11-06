@@ -107,12 +107,9 @@ func (h *hub) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (h *hub) OpenSession(key domain.SessionKey, actor domain.Actor) (domain.MCPEndpoint, error) {
+func (h *hub) OpenSession(key domain.SessionKey) (domain.MCPEndpoint, error) {
 	if key == "" {
 		return domain.MCPEndpoint{}, errors.New("tool session key is required")
-	}
-	if actor != domain.ActorOwner && actor != domain.ActorMember {
-		return domain.MCPEndpoint{}, errors.New("invalid tool session actor")
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -128,7 +125,7 @@ func (h *hub) OpenSession(key domain.SessionKey, actor domain.Actor) (domain.MCP
 	}
 	token := base64.RawURLEncoding.EncodeToString(secret[:])
 	ctx, cancel := context.WithCancel(context.Background())
-	g := &grant{session: domain.ToolSession{Key: key, Actor: actor}, token: token, ctx: ctx, cancel: cancel}
+	g := &grant{session: domain.ToolSession{Key: key}, token: token, ctx: ctx, cancel: cancel}
 	h.sessions[key], h.tokens[token] = g, g
 	return domain.MCPEndpoint{URL: "http://" + h.listener.Addr().String() + "/mcp", BearerToken: token}, nil
 }

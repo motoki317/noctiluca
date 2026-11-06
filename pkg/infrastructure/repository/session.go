@@ -111,7 +111,7 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 				return err
 			}
 		} else if turn.Continuations < 1 {
-			item := domain.InboxItem{SourceKey: source, SessionKey: key, Actor: info.Actor, Lane: "task", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Context: *info, Input: domain.UserInput{Text: note}}}
+			item := domain.InboxItem{SourceKey: source, SessionKey: key, Lane: "task", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Context: *info, Input: domain.UserInput{Text: note}}}
 			if _, err := insertInbox(ctx, tx, item); err != nil {
 				return err
 			}

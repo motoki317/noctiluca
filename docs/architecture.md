@@ -101,8 +101,14 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 | Where | What |
 |---|---|
 | SQLite | events and sends (with full-text search), inbox, sessions and resume tokens, schedules, watches, OAuth tokens |
-| memory Git repo | `owner/` and `core.md`, both loaded into the system prompt when a model process opens. `topics/` and `procedures/`, read on demand. Every write is one commit. |
+| memory Git repo | `owner/` (the owner's handwritten files) and `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. The heartbeat and consolidation send `procedures/heartbeat.md` and `procedures/consolidate.md` as their input. Every memory-tool write is one commit. |
 
 ## Trust model
 
-The owner is the config's `owner` user. Every other sender that a `conversations.rules` entry accepts is a member. Members get Claude's native tools, shell included, as the same Unix user that runs noctiluca, because reviews and builds need a shell. Owner-only gates in the tool hub (`owner/`, `procedures/`, `core.md`, owner-only tools) prevent mistakes, not a determined member. Real isolation needs a separate Unix user and is out of scope.
+`conversations.rules` decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and Claude's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
+
+The memory tools refuse writes, deletes, and reverts under `owner/`. This guards against mistakes, not against a session that edits those files through the shell.
+
+Owner notices and the `owner` reply target go to the config's `owner` user. Input headers append ` (owner)` to that user's name so the model knows who the owner is; the marker grants no permission.
+
+Real isolation needs a separate Unix user for the model, without access to noctiluca's config, tokens, and database. It is out of scope.
