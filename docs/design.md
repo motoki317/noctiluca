@@ -24,8 +24,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 
 - The official `claude` CLI on the owner's subscription, one process per session, over stream-json. Claude Code already provides shell, subagents, and context compaction.
 - Planned: Codex through `codex app-server`, whose `turn/steer` fits `ModelSession.Send`.
-
-Accepted sessions get full native tools under the same Unix user. Owner-only hub gates prevent mistakes, not a determined member. Real isolation needs a separate user or sandbox and is out of scope.
+- No per-session roles. The model judges what to change; the harness keeps only the owner's handwritten `owner/` files away from the memory tools. Details: architecture.md, "Trust model".
 
 ## Memory
 
