@@ -38,6 +38,12 @@ type oauthFixture struct {
 	refresh         string
 	denyRefresh     bool
 	sendIss         bool // returns iss without advertising RFC 9207 support, as Slite does
+	noOffline       bool
+	rootResource    bool
+	grantedScope    *string
+	wrongIss        bool
+	advertiseIss    bool
+	denyCode        bool
 }
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
@@ -73,10 +79,21 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		mcpHandler.ServeHTTP(w, r)
 	})
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if f.rootResource {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeJSON(w, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
 	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"resource": f.server.URL, "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
+	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": []string{"read", "write", "offline_access"}, "token_endpoint_auth_methods_supported": []string{"none"}})
+		scopes := []string{"read", "write"}
+		if !f.noOffline {
+			scopes = append(scopes, "offline_access")
+		}
+		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": f.advertiseIss})
 	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		var metadata struct {
@@ -105,8 +122,12 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		assert.NotEmpty(t, q.Get("code_challenge"))
 		assert.NotEmpty(t, q.Get("state"))
 		assert.Equal(t, "registered-client", q.Get("client_id"))
-		assert.Equal(t, "read", q.Get("scope"))
-		assert.Equal(t, f.server.URL+"/mcp", q.Get("resource"))
+		scopes := []string{"read"}
+		if !f.noOffline {
+			scopes = append(scopes, "offline_access")
+		}
+		assert.ElementsMatch(t, scopes, strings.Fields(q.Get("scope")))
+		assert.Equal(t, f.resource(), q.Get("resource"))
 		f.mu.Lock()
 		f.authorization = q
 		redirect := f.redirect
@@ -114,6 +135,9 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		values := url.Values{"code": {"auth-code"}, "state": {q.Get("state")}}
 		if f.sendIss {
 			values.Set("iss", f.server.URL)
+		}
+		if f.wrongIss {
+			values.Set("iss", "https://wrong.example")
 		}
 		http.Redirect(w, r, redirect+"?"+values.Encode(), http.StatusFound)
 	})
@@ -127,11 +151,17 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		assert.Equal(t, "registered-client", r.Form.Get("client_id"))
 		switch r.Form.Get("grant_type") {
 		case "authorization_code":
+			if f.denyCode {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, `{"error":"invalid_grant"}`)
+				return
+			}
 			assert.Equal(t, "auth-code", r.Form.Get("code"))
 			assert.Equal(t, f.redirect, r.Form.Get("redirect_uri"))
 			assert.Equal(t, f.authorization.Get("code_challenge"), oauth2.S256ChallengeFromVerifier(r.Form.Get("code_verifier")))
-			assert.Equal(t, f.server.URL+"/mcp", r.Form.Get("resource"))
+			assert.Equal(t, f.resource(), r.Form.Get("resource"))
 		case "refresh_token":
+			assert.Equal(t, f.resource(), r.Form.Get("resource"))
 			if f.denyRefresh {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, `{"error":"invalid_grant","error_description":"secret-value"}`)
@@ -145,9 +175,20 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			http.Error(w, "bad grant", 400)
 			return
 		}
-		writeJSON(w, map[string]any{"access_token": f.access, "refresh_token": f.refresh, "token_type": "Bearer", "expires_in": 3600})
+		token := map[string]any{"access_token": f.access, "refresh_token": f.refresh, "token_type": "Bearer", "expires_in": 3600}
+		if f.grantedScope != nil {
+			token["scope"] = *f.grantedScope
+		}
+		writeJSON(w, token)
 	})
 	return f
+}
+
+func (f *oauthFixture) resource() string {
+	if f.rootResource {
+		return f.server.URL
+	}
+	return f.server.URL + "/mcp"
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
@@ -186,6 +227,7 @@ func TestLoginPersistRefreshRestart(t *testing.T) {
 	require.NoError(t, json.Unmarshal(stored.Registration, &reg))
 	assert.Equal(t, "registered-client", reg.OAuth.ClientID)
 	assert.Equal(t, f.server.URL+"/token", reg.OAuth.Endpoint.TokenURL)
+	assert.ElementsMatch(t, []string{"read", "offline_access"}, reg.OAuth.Scopes)
 	stored.Expiry = time.Now().Add(-time.Minute)
 	require.NoError(t, repo.Save(t.Context(), "tracker", stored))
 	require.NoError(t, db.Close())

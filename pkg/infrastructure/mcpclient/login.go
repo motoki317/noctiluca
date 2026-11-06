@@ -2,7 +2,6 @@ package mcpclient
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -34,8 +34,11 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	callbacks := serveCallbacks(listener)
 	defer callbacks.close()
 	redirect := "http://" + listener.Addr().String() + "/callback"
+	var reg *registration
+	var audience string
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		RedirectURL: redirect,
+		RedirectURL:         redirect,
+		RequestRefreshToken: true,
 		// Slite returns a matching iss without advertising RFC 9207 support. The SDK still rejects a mismatch.
 		AcceptUnadvertisedIss:           true,
 		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{ClientName: "noctiluca", RedirectURIs: []string{redirect}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: "none", Scope: strings.Join(config.Scopes, " ")}},
@@ -45,29 +48,26 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 			}
 			return discovered
 		},
-		// Explicit scopes must match registration. Include offline_access in config if the server requires it.
-		Client: oauthHTTPClient(),
+		Client: oauthHTTPClient(config.URL),
 		AuthorizationCodeFetcher: func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+			u, err := url.Parse(args.URL)
+			if err != nil || !validURL(args.URL) {
+				return nil, errors.New("invalid OAuth authorization URL")
+			}
+			audience = u.Query().Get("resource")
 			return callbacks.receive(ctx, args.URL, output)
 		},
-		NewTokenSource: func(_ context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
-			// Some servers (ClickUp) issue long-lived access tokens without a refresh token. Such a
-			// login lasts until the access token expires; the token source then asks for mcp-login.
-			reg, err := json.Marshal(registration{Resource: config.URL, OAuth: *cfg})
-			if err != nil {
-				return nil, err
-			}
-			refreshCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
-			source := &tokenSource{ctx: refreshCtx, repository: repository, server: config.Name, registration: reg, source: cfg.TokenSource(refreshCtx, token)}
-			_, err = source.Token()
-			return source, err
+		NewTokenSource: func(refreshCtx context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
+			reg = &registration{Resource: config.URL, Audience: audience, LoginID: uuid.NewString(), OAuth: *cfg}
+			reg.OAuth.Scopes = grantedScopes(token, cfg.Scopes)
+			return refreshSource(refreshCtx, cfg, token, audience), nil
 		},
 	})
 	if err != nil {
 		return err
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: config.URL, OAuthHandler: handler, HTTPClient: oauthHTTPClient()}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: config.URL, OAuthHandler: handler, HTTPClient: oauthHTTPClient(config.URL)}, nil)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -78,10 +78,15 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	}
 	defer session.Close()
 	source, _ := handler.TokenSource(ctx)
-	if source == nil {
+	if source == nil || reg == nil {
 		return errors.New("MCP server did not request OAuth authorization")
 	}
-	return nil
+	token, err := source.Token()
+	if err != nil {
+		return errors.New("MCP login token is unavailable")
+	}
+	// Keep the old login until the replacement completes the MCP handshake.
+	return saveToken(ctx, repository, config.Name, *reg, token)
 }
 
 type callbackResult struct {
@@ -114,7 +119,8 @@ func serveCallbacks(listener net.Listener) *callbackServer {
 		}
 		var result callbackResult
 		if q.Get("error") != "" || q.Get("code") == "" {
-			result.err = fmt.Errorf("authorization denied: %s", q.Get("error"))
+			// The SDK only validates iss on successful callbacks. Never display an unvalidated error response.
+			result.err = errors.New("authorization denied or code missing")
 		} else {
 			result.result = &auth.AuthorizationResult{Code: q.Get("code"), State: q.Get("state"), Iss: q.Get("iss")}
 		}
