@@ -55,7 +55,18 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	var enteredOnce, releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock()
+	followEntered, followRelease := make(chan struct{}), make(chan struct{})
+	var followEnteredOnce, followReleaseOnce sync.Once
+	releaseFollow := func() { followReleaseOnce.Do(func() { close(followRelease) }) }
+	defer releaseFollow()
 	slack := newRunSlack(t, func(ctx context.Context, post url.Values) {
+		if post.Get("thread_ts") == "500.000001" && strings.Contains(post.Get("text"), "CEDAR_47") {
+			followEnteredOnce.Do(func() { close(followEntered) })
+			select {
+			case <-followRelease:
+			case <-ctx.Done():
+			}
+		}
 		if strings.TrimSpace(post.Get("text")) == "QUEUE_FIRST" {
 			enteredOnce.Do(func() { close(entered) })
 			select {
@@ -89,11 +100,13 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		socket = liveTake(t, slack.connections)
 	}
 	sequence := 0
+	var lastMessageTS string
 	send := func(t *testing.T, channel, thread, text string) string {
 		t.Helper()
 		sequence++
 		id := fmt.Sprintf("live-%d", sequence)
-		event := map[string]any{"type": "message", "channel": channel, "user": "U_OWNER", "text": text, "ts": fmt.Sprintf("%d.000001", sequence+100)}
+		lastMessageTS = fmt.Sprintf("%d.%06d", time.Now().Unix(), time.Now().Nanosecond()/1000)
+		event := map[string]any{"type": "message", "channel": channel, "user": "U_OWNER", "text": text, "ts": lastMessageTS}
 		if thread != "" {
 			event["thread_ts"] = thread
 		}
@@ -187,6 +200,36 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM sessions WHERE key LIKE 'slack:C_ROOM:%'").Scan(&sessions))
 		require.Equal(t, 1, sessions)
 	})
+	run("follow_up_does_not_repeat", func(t *testing.T) {
+		started := time.Now()
+		send(t, "C_ROOM", "500.000001", "<@U_BOT> The experiment code is CEDAR_47. What is the experiment code? Reply with just the code.")
+		// The blocked Slack response keeps the first turn running while the follow-up arrives.
+		time.Sleep(time.Until(started.Add(3 * time.Second)))
+		id := send(t, "C_ROOM", "500.000001", "<@U_BOT> add 了解 at the end")
+		require.Eventually(t, func() bool {
+			var status string
+			return app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status) == nil && status == "done"
+		}, 10*time.Second, 10*time.Millisecond)
+		liveTake(t, followEntered)
+		releaseFollow()
+		first := liveTake(t, slack.posts)
+		require.Equal(t, "500.000001", first.Get("thread_ts"))
+		require.Contains(t, first.Get("text"), "CEDAR_47")
+		texts := []string{first.Get("text")}
+		if !strings.Contains(first.Get("text"), "了解") {
+			post := liveTake(t, slack.posts)
+			require.Equal(t, "C_ROOM", post.Get("channel"))
+			require.Equal(t, "500.000001", post.Get("thread_ts"))
+			texts = append(texts, post.Get("text"))
+		}
+		idle(t, "slack:C_ROOM:")
+		for len(slack.posts) > 0 {
+			texts = append(texts, liveTake(t, slack.posts).Get("text"))
+		}
+		require.Equal(t, 1, strings.Count(strings.Join(texts, "\n"), "CEDAR_47"), "repeated the first answer: %v", texts)
+		require.Contains(t, strings.Join(texts, "\n"), "了解")
+		t.Logf("follow-up after 3s: replies=%q", texts)
+	})
 	run("b_top_level_chat_and_work", func(t *testing.T) {
 		send(t, "C_ROOM", "", "<@U_BOT> Hi! How are you?")
 		post := liveTake(t, slack.posts)
@@ -194,7 +237,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Empty(t, post.Get("thread_ts"))
 		idle(t, "slack:C_ROOM:")
 		send(t, "C_ROOM", "", "<@U_BOT> Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
-		thread := fmt.Sprintf("%d.000001", sequence+100)
+		thread := lastMessageTS
 		post = liveTake(t, slack.posts)
 		require.Equal(t, "C_ROOM", post.Get("channel"))
 		require.Equal(t, thread, post.Get("thread_ts"))

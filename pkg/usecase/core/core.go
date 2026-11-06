@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -244,58 +243,6 @@ func channel(event domain.InboundEvent) domain.ConversationRef {
 	return event.Conversation
 }
 
-func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserInput, error) {
-	input := item.Payload.Input
-	source := struct {
-		Channel     domain.ConversationRef  `json:"channel"`
-		Thread      string                  `json:"thread"`
-		Sender      string                  `json:"sender"`
-		Message     string                  `json:"message"`
-		Direct      bool                    `json:"direct"`
-		OwnerTarget string                  `json:"owner_target,omitempty"`
-		ReplyTarget domain.ConversationRef  `json:"reply_target"`
-		WorkTarget  domain.ConversationRef  `json:"work_target,omitempty"`
-		Kind        domain.InboundEventKind `json:"kind,omitempty"`
-		MentionsMe  bool                    `json:"mentions_me"`
-	}{Channel: item.Payload.Context.Conversation, ReplyTarget: item.Payload.Target, WorkTarget: item.Payload.Target, Thread: "background continuation", Sender: "system", Message: item.SourceKey, Direct: item.Payload.Context.Direct}
-	if target := item.Payload.Target; target != "" && target != "owner" {
-		source.Thread = string(target)
-		if target == source.Channel {
-			source.Thread = "top level"
-		}
-	}
-	if item.Lane == "task" {
-		source.Thread = "task"
-		source.OwnerTarget = "owner"
-		source.ReplyTarget, source.WorkTarget = "owner", "owner"
-	}
-	if event := item.Payload.Event; event != nil {
-		c.mu.Lock()
-		_, accepted := c.accepted(*event)
-		c.mu.Unlock()
-		if !accepted {
-			return input, fmt.Errorf("%w: conversation no longer accepts this sender", domain.ErrRejected)
-		}
-		source.Channel, source.Sender, source.Message, source.Direct = channel(*event), event.Sender.ID, string(event.MessageRef), event.Direct
-		source.Kind, source.MentionsMe = event.Kind, event.MentionsMe
-		source.ReplyTarget = event.Conversation
-		source.WorkTarget = event.MessageRef
-		source.Thread = "top level"
-		if event.Parent != "" {
-			source.Thread = string(event.Conversation)
-			source.WorkTarget = event.Conversation
-		} else if event.Direct {
-			source.WorkTarget = event.Conversation
-		}
-		input = domain.UserInput{Text: event.Text, Attachments: event.Attachments}
-	}
-	header, err := json.Marshal(source)
-	if err != nil {
-		return input, err
-	}
-	input.Text = "Source: " + string(header) + "\n" + input.Text
-	return input, nil
-}
 func (c *core) workItem(ctx context.Context, key domain.SessionKey) (domain.InboxItem, error) {
 	info, ok := c.reconciler.Context(key)
 	if !ok {

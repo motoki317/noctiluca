@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -250,8 +249,8 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	input := take(t, s.inputs)
-	require.True(t, strings.HasPrefix(input.Text, "Source: "))
-	require.Contains(t, input.Text, `"channel":"room","thread":"thread-a","sender":"member","message":"thread-a-message"`)
+	require.Contains(t, input.Text, "room · thread | member |")
+	require.Contains(t, input.Text, "reply → thread-a | work → thread-a")
 	require.NotContains(t, input.Text, "old parent history")
 	require.NotContains(t, input.Text, "memory context")
 	require.Contains(t, s.config.SystemPrompt, "memory context")
@@ -262,9 +261,9 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 		}
 		f.messaging.in <- e
 		input = take(t, s.inputs)
-		require.Contains(t, input.Text, `"channel":"room"`)
+		require.Contains(t, input.Text, "room · ")
 		if ref == "room" {
-			require.Contains(t, input.Text, `"thread":"top level"`)
+			require.Contains(t, input.Text, "top level")
 		}
 	}
 	select {
@@ -373,85 +372,3 @@ func TestShutdownDuringInput(t *testing.T) {
 }
 
 type unusedInbox struct{ domain.InboxRepository }
-
-func TestSourceHeaderPreservesEventAndContinuationTargets(t *testing.T) {
-	rules, err := compileRules(Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}})
-	require.NoError(t, err)
-	c := &core{rules: rules}
-	item := domain.InboxItem{SessionKey: "room", Actor: domain.ActorMember, SourceKey: "watch:1", Payload: domain.InboxPayload{Context: domain.SessionContext{Conversation: "room", Actor: domain.ActorMember}, Target: "thread-a"}}
-	for _, target := range []domain.ConversationRef{"thread-a", "thread-b", "room"} {
-		item.Payload.Target = target
-		input, err := c.prepare(t.Context(), item)
-		require.NoError(t, err)
-		thread := string(target)
-		if target == "room" {
-			thread = "top level"
-		}
-		require.Contains(t, input.Text, fmt.Sprintf(`"thread":%q`, thread))
-		require.Contains(t, input.Text, `"sender":"system","message":"watch:1"`)
-	}
-	event := message("thread-a", "member", "edited text")
-	event.Parent = "room"
-	event.Kind = domain.InboundEventMessageEdited
-	for _, mentioned := range []bool{false, true} {
-		event.MentionsMe = mentioned
-		item.Payload.Event = &event
-		input, err := c.prepare(t.Context(), item)
-		require.NoError(t, err)
-		require.Contains(t, input.Text, `"kind":"message_edited"`)
-		require.Contains(t, input.Text, fmt.Sprintf(`"mentions_me":%t`, mentioned))
-	}
-}
-
-func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
-	rules, err := compileRules(Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}})
-	require.NoError(t, err)
-	c := &core{rules: rules}
-	header := func(item domain.InboxItem) map[string]any {
-		t.Helper()
-		input, err := c.prepare(t.Context(), item)
-		require.NoError(t, err)
-		line, _, _ := strings.Cut(input.Text, "\n")
-		var source map[string]any
-		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "Source: ")), &source))
-		return source
-	}
-	for _, direct := range []bool{false, true} {
-		for _, threaded := range []bool{false, true} {
-			t.Run(fmt.Sprintf("direct=%t/threaded=%t", direct, threaded), func(t *testing.T) {
-				event := message("room", "member", "start work")
-				event.Direct = direct
-				event.MessageRef = "message-thread"
-				target := "message-thread"
-				if direct {
-					target = "room"
-				}
-				if threaded {
-					event.Parent, event.Conversation = "room", "existing-thread"
-					target = "existing-thread"
-				}
-				item := domain.InboxItem{SessionKey: "room", Actor: domain.ActorMember, Lane: "conv", Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: "room", Direct: direct}}}
-				source := header(item)
-				require.Equal(t, target, source["work_target"])
-				require.Equal(t, string(event.Conversation), source["reply_target"])
-				for _, key := range []string{"watch:1", "wake:1"} {
-					item.SourceKey = key
-					item.Payload.Event = nil
-					item.Payload.Target = domain.ConversationRef(target)
-					continuation := header(item)
-					require.Equal(t, source["channel"], continuation["channel"])
-					thread := target
-					if target == "room" {
-						thread = "top level"
-					}
-					require.Equal(t, thread, continuation["thread"])
-					require.Equal(t, target, continuation["work_target"])
-					require.Equal(t, target, continuation["reply_target"])
-					require.Equal(t, direct, continuation["direct"])
-				}
-			})
-		}
-	}
-	source := header(domain.InboxItem{Lane: "task", Actor: domain.ActorOwner})
-	require.Equal(t, "owner", source["work_target"])
-}
