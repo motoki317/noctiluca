@@ -29,6 +29,10 @@ type oauthFixture struct {
 	server            *httptest.Server
 	mcp               *mcp.Server
 	registrations     atomic.Int32
+	authorizations    atomic.Int32
+	metadataGets      atomic.Int32
+	loginStepUp       bool
+	loginForbidden    bool
 	refreshes         atomic.Int32
 	refreshStatus     atomic.Int32
 	initializations   atomic.Int32
@@ -63,12 +67,30 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Cleanup(f.server.Close)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return f.mcp }, &mcp.StreamableHTTPOptions{JSONResponse: true})
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if f.noGETChallenge && r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		f.mu.Lock()
 		access := f.access
 		f.mu.Unlock()
 		if r.Header.Get("Authorization") != "Bearer "+access {
-			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/.well-known/oauth-protected-resource/mcp"`)
+			metadataPath := "/.well-known/oauth-protected-resource/mcp"
+			if f.customMetadata {
+				metadataPath = "/oauth/resource-info"
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+metadataPath+`"`)
+			if f.challengeScope != "" {
+				w.Header().Set("WWW-Authenticate", w.Header().Get("WWW-Authenticate")+`, scope="`+f.challengeScope+`"`)
+			}
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if f.authorizations.Load() == 1 && (f.loginStepUp || f.loginForbidden) {
+			if f.loginStepUp {
+				w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="write", resource_metadata="`+f.server.URL+`/.well-known/oauth-protected-resource/mcp"`)
+			}
+			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		if status := f.runtimeStatus.Load(); status != 0 {
@@ -94,17 +116,24 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		}
 		mcpHandler.ServeHTTP(w, r)
 	})
-	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
-		if f.rootResource {
+	prmHandler := func(w http.ResponseWriter, r *http.Request) {
+		if f.rootResource || f.customMetadata && r.URL.Path != "/oauth/resource-info" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		writeJSON(w, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
-	})
+	}
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", prmHandler)
+	mux.HandleFunc("/oauth/resource-info", prmHandler)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		if f.customMetadata {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeJSON(w, map[string]any{"resource": f.server.URL, "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
 	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		f.metadataGets.Add(1)
 		tokenURL := f.server.URL + "/token"
 		if f.tokenRedirect {
 			tokenURL += "-redirect"
@@ -129,8 +158,8 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			http.Error(w, "invalid registration", 400)
 			return
 		}
-		assert.Equal(t, "read", metadata.Scope)
-		assert.Contains(t, metadata.GrantTypes, "refresh_token")
+		assert.Empty(t, metadata.Scope, "let the server choose registration defaults")
+		assert.Equal(t, []string{"authorization_code", "refresh_token"}, metadata.GrantTypes)
 		redirect, err := url.Parse(metadata.RedirectURIs[0])
 		assert.NoError(t, err)
 		assert.Equal(t, "127.0.0.1", redirect.Hostname())
@@ -141,14 +170,24 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		writeJSON(w, map[string]any{"client_id": "registered-client", "token_endpoint_auth_method": "none", "redirect_uris": metadata.RedirectURIs})
 	})
 	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
+		round := f.authorizations.Add(1)
 		q := r.URL.Query()
 		assert.Equal(t, "S256", q.Get("code_challenge_method"))
 		assert.NotEmpty(t, q.Get("code_challenge"))
 		assert.NotEmpty(t, q.Get("state"))
 		assert.Equal(t, "registered-client", q.Get("client_id"))
 		scopes := []string{"read"}
+		if f.defaultScopes {
+			scopes = append(scopes, "write")
+		}
+		if f.challengeScope != "" {
+			scopes = strings.Fields(f.challengeScope)
+		}
 		if !f.noOffline {
 			scopes = append(scopes, "offline_access")
+		}
+		if f.loginStepUp && round > 1 {
+			scopes = append(scopes, "write")
 		}
 		assert.ElementsMatch(t, scopes, strings.Fields(q.Get("scope")))
 		assert.Equal(t, f.resource(), q.Get("resource"))

@@ -22,7 +22,6 @@ import (
 type registration struct {
 	Resource string        `json:"resource"`
 	Audience string        `json:"audience,omitempty"`
-	Issuer   string        `json:"issuer,omitempty"`
 	LoginID  string        `json:"login_id,omitempty"`
 	OAuth    oauth2.Config `json:"oauth"`
 }

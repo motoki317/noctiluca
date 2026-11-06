@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +24,7 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	if err := Validate([]ServerConfig{config}); err != nil {
 		return err
 	}
+	httpClient := oauthHTTPClient(config.URL)
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("listen for OAuth redirect: %w", err)
@@ -40,15 +40,18 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 		RedirectURL:         redirect,
 		RequestRefreshToken: true,
 		// Slite returns a matching iss without advertising RFC 9207 support. The SDK still rejects a mismatch.
-		AcceptUnadvertisedIss:           true,
-		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{ClientName: "noctiluca", RedirectURIs: []string{redirect}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: "none", Scope: strings.Join(config.Scopes, " ")}},
+		AcceptUnadvertisedIss: true,
+		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{
+			ClientName: "noctiluca", RedirectURIs: []string{redirect},
+			GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: "none",
+		}},
 		ScopeFilter: func(discovered []string) []string {
 			if config.Scopes != nil {
-				return append([]string(nil), config.Scopes...)
+				return config.Scopes
 			}
 			return discovered
 		},
-		Client: oauthHTTPClient(config.URL),
+		Client: httpClient,
 		AuthorizationCodeFetcher: func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 			u, err := url.Parse(args.URL)
 			if err != nil || !validURL(args.URL) {
@@ -73,7 +76,6 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 			return ctx.Err()
 		}
 		// The cause names the failed OAuth step (registration, consent, token exchange).
-		// OAuth error responses carry no credentials, so it is safe to show.
 		return fmt.Errorf("MCP login failed: %w", err)
 	}
 	defer session.Close()

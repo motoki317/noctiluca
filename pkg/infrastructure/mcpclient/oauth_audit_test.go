@@ -57,6 +57,56 @@ func TestLoginRefreshScopeAndAudience(t *testing.T) {
 	}
 }
 
+func TestLoginUsesDiscoveredScopes(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.defaultScopes = true
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t)))
+}
+
+func TestLoginWithAuthorizationCodeOnly(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.codeOnly, f.noOffline = true, true
+	f.refresh = ""
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t)))
+}
+
+func TestLoginUsesPOSTMetadataChallenge(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.customMetadata, f.noGETChallenge = true, true
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t)))
+}
+
+func TestLoginUsesChallengeScopes(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.challengeScope = "write"
+	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t)))
+}
+
+func TestLoginKeepsSDKAuthorizationState(t *testing.T) {
+	for _, stepUp := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain403", true: "step-up"}[stepUp], func(t *testing.T) {
+			f := newOAuthFixture(t)
+			f.loginStepUp, f.loginForbidden = stepUp, !stepUp
+			f.challengeScope = "read"
+			repo := loginRepo(t)
+			err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, repo, browser(t))
+			if !stepUp {
+				require.ErrorContains(t, err, "Forbidden")
+				assert.EqualValues(t, 1, f.authorizations.Load())
+			} else {
+				require.NoError(t, err)
+				assert.EqualValues(t, 2, f.authorizations.Load())
+				stored, err := repo.Get(t.Context(), "wiki")
+				require.NoError(t, err)
+				var reg registration
+				require.NoError(t, json.Unmarshal(stored.Registration, &reg))
+				assert.ElementsMatch(t, []string{"read", "write", "offline_access"}, reg.OAuth.Scopes)
+			}
+			assert.Equal(t, f.authorizations.Load(), f.metadataGets.Load(), "discover once per authorization")
+		})
+	}
+}
+
 func TestReloginReplacesOnlyAfterSuccess(t *testing.T) {
 	f := newOAuthFixture(t)
 	repo := loginRepo(t)
