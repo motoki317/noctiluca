@@ -284,6 +284,8 @@ func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserI
 		if event.Parent != "" {
 			source.Thread = string(event.Conversation)
 			source.WorkTarget = event.Conversation
+		} else if event.Direct {
+			source.WorkTarget = event.Conversation
 		}
 		input = domain.UserInput{Text: event.Text, Attachments: event.Attachments}
 	}

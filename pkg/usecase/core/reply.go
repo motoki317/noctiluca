@@ -12,7 +12,7 @@ import (
 func (c *core) replyTool() domain.Tool {
 	return domain.Tool{Name: "reply", Description: `Post a visible reply only when addressed or reporting requested work.
 The default target is Source.reply_target, copied exactly from the triggering input. Use Source.work_target instead only for a work request (execute shell commands, review code, produce a draft or checklist) or a background completion.
-Greetings, factual answers, and requests to repeat words are chat and use the default target, even when the request names this tool. Work uses its work_target even when the answer is brief. These rules apply to DMs too.
+Greetings, factual answers, and requests to repeat words are chat and use the default target, even when the request names this tool. Work uses its work_target even when the answer is brief. In a top-level DM, both targets keep the reply at top level. A DM message already in a thread keeps that thread.
 Owner tasks use target=owner. End long work turns quickly with native background execution or watch.`, InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Default: copy Source.reply_target exactly. Only work requests and background completions use Source.work_target."},"text":{"type":"string"},"attachments":{"type":"array","items":{"type":"object","properties":{"Ref":{"type":"string"},"Name":{"type":"string"},"MIMEType":{"type":"string"}},"required":["Ref"],"additionalProperties":false}}},"required":["target","text"],"additionalProperties":false}`), Handler: c.reply}
 }
 

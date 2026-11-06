@@ -201,6 +201,14 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.NotEmpty(t, post.Get("text"))
 		idle(t, "slack:C_ROOM:")
 	})
+	run("b_DM_work", func(t *testing.T) {
+		send(t, "D_OWNER", "", "Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
+		post := liveTake(t, slack.posts)
+		require.Equal(t, "D_OWNER", post.Get("channel"))
+		require.Empty(t, post.Get("thread_ts"))
+		require.NotEmpty(t, post.Get("text"))
+		idle(t, "slack:D_OWNER:")
+	})
 	run("c_unaddressed_chatter", func(t *testing.T) {
 		var before int
 		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&before))
@@ -260,7 +268,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	})
 	run("4_watch_completion", func(t *testing.T) {
 		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use the reply tool to report its output.", config.Model.Workdir))
-		reply(t, "D_WATCH", fmt.Sprintf("%d.000001", sequence+100), "DONE")
+		reply(t, "D_WATCH", "", "DONE")
 		idle(t, "slack:D_WATCH:")
 		var finishedBeforeExit, finished int
 		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:D_WATCH:' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))

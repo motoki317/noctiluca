@@ -423,6 +423,9 @@ func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
 				event.Direct = direct
 				event.MessageRef = "message-thread"
 				target := "message-thread"
+				if direct {
+					target = "room"
+				}
 				if threaded {
 					event.Parent, event.Conversation = "room", "existing-thread"
 					target = "existing-thread"
@@ -437,7 +440,11 @@ func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
 					item.Payload.Target = domain.ConversationRef(target)
 					continuation := header(item)
 					require.Equal(t, source["channel"], continuation["channel"])
-					require.Equal(t, target, continuation["thread"])
+					thread := target
+					if target == "room" {
+						thread = "top level"
+					}
+					require.Equal(t, thread, continuation["thread"])
 					require.Equal(t, target, continuation["work_target"])
 					require.Equal(t, target, continuation["reply_target"])
 					require.Equal(t, direct, continuation["direct"])
