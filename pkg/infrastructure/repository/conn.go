@@ -57,6 +57,11 @@ func New(ctx context.Context, config Config) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("begin schema migration: %w", err)
 	}
+	if err := validateSchema(ctx, tx); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, migrations.Schema); err != nil {
 		tx.Rollback()
 		db.Close()
@@ -67,4 +72,35 @@ func New(ctx context.Context, config Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("commit schema: %w", err)
 	}
 	return db, nil
+}
+
+func validateSchema(ctx context.Context, tx *sql.Tx) error {
+	// Let SQLite interpret the shipped schema rather than maintaining a second column list.
+	expected, err := driver.Open(":memory:", fts5.Register)
+	if err != nil {
+		return fmt.Errorf("open reference schema: %w", err)
+	}
+	defer expected.Close()
+	if _, err := expected.ExecContext(ctx, migrations.Schema); err != nil {
+		return fmt.Errorf("load reference schema: %w", err)
+	}
+	rows, err := expected.QueryContext(ctx, `SELECT name, (SELECT group_concat(name, ',') FROM pragma_table_xinfo(s.name)) FROM sqlite_schema s WHERE type='table'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var table, columns string
+		if err := rows.Scan(&table, &columns); err != nil {
+			return err
+		}
+		var actual sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT group_concat(name, ',') FROM pragma_table_xinfo(?)`, table).Scan(&actual); err != nil {
+			return err
+		}
+		if actual.Valid && actual.String != columns {
+			return fmt.Errorf("database schema mismatch in %s: recreate the database, preserving oauth_tokens if needed (no migrations are supported)", table)
+		}
+	}
+	return rows.Err()
 }
