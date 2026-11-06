@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo.svg" width="160" alt="noctiluca"></p>
+<p align="center"><img src="assets/social-16x9.png" alt="noctiluca: a minimal agent harness that sleeps, dreams, and learns"></p>
 
 # noctiluca
 
