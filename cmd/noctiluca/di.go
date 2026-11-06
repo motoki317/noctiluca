@@ -75,7 +75,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	if err != nil {
 		return nil, err
 	}
-	external, err := mcpclient.New(config.MCPServers, repository.NewOAuthTokenRepository(db), hub, logger)
+	external, err := mcpclient.New(config.MCPServers, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, logger)
 	if err != nil {
 		return nil, err
 	}

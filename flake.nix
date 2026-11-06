@@ -15,7 +15,7 @@
           pname = "noctiluca";
           version = revision;
           src = self;
-          vendorHash = "sha256-Djj8+uS/i3rvAGGYLFbouuMstHaPi0VKbA5WkpAVOCk=";
+          vendorHash = "sha256-ck8R4tkz9d8O0DjjFx4+m4lADhcDdOWbWPfG42d3zKM=";
           env.CGO_ENABLED = "0";
           subPackages = [ "cmd/noctiluca" ];
           ldflags = [ "-s" "-w" "-X main.version=${revision}" "-X main.revision=${revision}" ];

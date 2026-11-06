@@ -3,11 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/cli/browser"
 	"github.com/spf13/cobra"
 
 	"github.com/motoki317/noctiluca/pkg/infrastructure/mcpclient"
@@ -81,7 +83,7 @@ func newRootCommand() *cobra.Command {
 				defer db.Close()
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 				defer stop()
-				if err := mcpclient.Login(ctx, server, repository.NewOAuthTokenRepository(db), cmd.OutOrStdout()); err != nil {
+				if err := mcpclient.Login(ctx, server, repository.NewOAuthTokenRepository(db), cmd.OutOrStdout(), openBrowser); err != nil {
 					return err
 				}
 				_, err = fmt.Fprintln(cmd.ErrOrStderr(), "MCP login saved")
@@ -99,4 +101,10 @@ func main() {
 		slog.Error("Command failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+// openBrowser opens a login URL with the platform's browser launcher (xdg-open, wslview, open, ...).
+func openBrowser(url string) error {
+	browser.Stdout, browser.Stderr = io.Discard, io.Discard
+	return browser.OpenURL(url)
 }

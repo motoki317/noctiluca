@@ -35,3 +35,14 @@ func (r *oauthTokenRepository) Save(ctx context.Context, server string, token do
 		refresh_token=excluded.refresh_token, expiry=excluded.expiry, registration_json=excluded.registration_json`, server, token.AccessToken, token.TokenType, token.RefreshToken, token.Expiry.UTC(), string(registration))
 	return err
 }
+
+// Refresh cannot overwrite a newer login or another process's token rotation.
+func (r *oauthTokenRepository) Refresh(ctx context.Context, server string, previous, token domain.OAuthToken) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `UPDATE oauth_tokens SET access_token=?, token_type=?, refresh_token=?, expiry=?, registration_json=?
+		WHERE server=? AND access_token=? AND refresh_token=? AND registration_json=?`, token.AccessToken, token.TokenType, token.RefreshToken, token.Expiry.UTC(), string(token.Registration), server, previous.AccessToken, previous.RefreshToken, string(previous.Registration))
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}

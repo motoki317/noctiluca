@@ -92,4 +92,5 @@ type OAuthToken struct {
 type OAuthTokenRepository interface {
 	Get(ctx context.Context, server string) (OAuthToken, error)
 	Save(ctx context.Context, server string, token OAuthToken) error
+	Refresh(ctx context.Context, server string, previous, token OAuthToken) (bool, error)
 }
