@@ -34,7 +34,8 @@ type frame struct {
 	IsError   bool   `json:"is_error"`
 	RequestID string `json:"request_id"`
 	Request   struct {
-		Subtype string `json:"subtype"`
+		Subtype string          `json:"subtype"`
+		Input   json.RawMessage `json:"input"`
 	} `json:"request"`
 	Response struct {
 		Subtype   string `json:"subtype"`

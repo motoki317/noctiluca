@@ -33,7 +33,11 @@ func invoke(t *testing.T, a *adapter, name string, args any) json.RawMessage {
 func TestReadTools(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
-		require.Equal(t, "xoxp-test", r.Form.Get("token"))
+		if r.URL.Path == "/search.messages" {
+			require.Equal(t, "xoxp-test", r.Form.Get("token"))
+		} else {
+			require.Equal(t, "xoxb-test", r.Form.Get("token"))
+		}
 		switch r.URL.Path {
 		case "/conversations.replies":
 			require.Equal(t, "CTEST", r.Form.Get("channel"))
@@ -167,4 +171,39 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.NoError(t, a.record(ctx, "already-posted", Conversation("CTEST", ""), domain.OutboundMessage{Text: "posted"}))
+}
+
+func TestHistoryTokenFallbackAndErrors(t *testing.T) {
+	for _, method := range []string{"slack_read_history", "slack_read_thread"} {
+		for _, code := range []string{"", "not_in_channel", "channel_not_found", "missing_scope", "invalid_auth"} {
+			t.Run(method+"/"+code, func(t *testing.T) {
+				var tokens []string
+				a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+					require.NoError(t, r.ParseForm())
+					token := r.Form.Get("token")
+					tokens = append(tokens, token)
+					if token == "xoxb-test" && code != "" {
+						_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": code})
+						return
+					}
+					_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
+				}, true)
+				for _, tool := range a.Tools() {
+					if tool.Name == method {
+						_, err := tool.Handler(t.Context(), json.RawMessage(`{"channel":"DTEST","thread_ts":"123.000001"}`))
+						if code == "missing_scope" || code == "invalid_auth" {
+							require.ErrorContains(t, err, code)
+						} else {
+							require.NoError(t, err)
+						}
+					}
+				}
+				expected := []string{"xoxb-test"}
+				if code == "not_in_channel" || code == "channel_not_found" {
+					expected = append(expected, "xoxp-test")
+				}
+				require.Equal(t, expected, tokens)
+			})
+		}
+	}
 }

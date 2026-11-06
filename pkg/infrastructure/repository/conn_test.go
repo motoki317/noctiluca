@@ -5,11 +5,15 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/ncruces/go-sqlite3/driver"
+	"github.com/ncruces/go-sqlite3/ext/fts5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/motoki317/noctiluca/migrations"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 )
 
@@ -101,5 +105,38 @@ func TestFTSIndex(t *testing.T) {
 		var count int
 		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM events_fts WHERE events_fts MATCH '"needle"'`).Scan(&count))
 		assert.Equal(t, tt.count, count)
+	}
+}
+
+func TestRejectSchemaDriftBeforeApplyingSchema(t *testing.T) {
+	for _, column := range []string{"message_ref", "turn_json", "registration_json"} {
+		t.Run(column, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "old.db")
+			db, err := driver.Open(path, fts5.Register)
+			require.NoError(t, err)
+			lines := strings.Split(migrations.Schema, "\n")
+			for i, line := range lines {
+				if strings.HasPrefix(strings.TrimSpace(line), column+" ") {
+					lines[i] = ""
+				}
+			}
+			schema := strings.ReplaceAll(strings.Join(lines, "\n"), ",\n\n);", "\n);")
+			_, err = db.Exec(schema)
+			require.NoError(t, err)
+			_, err = db.Exec(`INSERT INTO oauth_tokens(server,access_token,token_type,refresh_token,expiry) VALUES('saved','private-token','Bearer','','2036-01-01')`)
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+			opened, err := repository.New(t.Context(), repository.Config{Path: path})
+			require.Nil(t, opened)
+			require.ErrorContains(t, err, "database schema mismatch")
+			require.ErrorContains(t, err, "recreate the database")
+			require.ErrorContains(t, err, "oauth_tokens")
+			db, err = driver.Open(path, fts5.Register)
+			require.NoError(t, err)
+			defer db.Close()
+			var token string
+			require.NoError(t, db.QueryRow(`SELECT access_token FROM oauth_tokens WHERE server='saved'`).Scan(&token))
+			require.Equal(t, "private-token", token)
+		})
 	}
 }

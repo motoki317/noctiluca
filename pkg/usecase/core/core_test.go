@@ -189,20 +189,20 @@ func message(to domain.ConversationRef, user, text string) domain.InboundEvent {
 func TestConversationFlow(t *testing.T) {
 	var prompts atomic.Int32
 	f := setup(t, Config{Owner: "owner", Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"owner", "member"}}, "dm": {Users: []string{"owner"}}}},
-		func(_ context.Context, identity domain.ToolSession, in domain.UserInput) (domain.UserInput, error) {
+		func(_ context.Context, identity domain.ToolSession) (string, error) {
 			prompts.Add(1)
-			in.Text = "fresh context\n" + in.Text
-			return in, nil
+			return "fresh context", nil
 		})
 	f.messaging.in <- message("room", "owner", "first")
 	s := take(t, f.model.opened)
-	require.Contains(t, take(t, s.inputs).Text, "fresh context")
+	require.NotContains(t, take(t, s.inputs).Text, "fresh context")
+	require.Contains(t, s.config.SystemPrompt, "fresh context")
 	require.Equal(t, domain.ActorMember, f.hub.actor("room"))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- message("room", "member", "steer")
 	require.Contains(t, take(t, s.inputs).Text, "steer")
-	require.EqualValues(t, 2, prompts.Load())
+	require.EqualValues(t, 1, prompts.Load())
 	select {
 	case <-f.model.opened:
 		t.Fatal("opened another model")
@@ -241,9 +241,8 @@ func TestConversationFlow(t *testing.T) {
 }
 
 func TestChannelThreadsIdleAndResume(t *testing.T) {
-	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
-		input.Text = "memory context\n" + input.Text
-		return input, nil
+	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, func(_ context.Context, _ domain.ToolSession) (string, error) {
+		return "memory context", nil
 	})
 	require.NoError(t, f.events.SaveInbound(t.Context(), message("room", "denied", "old parent history")))
 	e := message("thread-a", "member", "first")
@@ -254,7 +253,8 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	require.True(t, strings.HasPrefix(input.Text, "Source: "))
 	require.Contains(t, input.Text, `"channel":"room","thread":"thread-a","sender":"member","message":"thread-a-message"`)
 	require.NotContains(t, input.Text, "old parent history")
-	require.Contains(t, input.Text, "memory context")
+	require.NotContains(t, input.Text, "memory context")
+	require.Contains(t, s.config.SystemPrompt, "memory context")
 	for _, ref := range []domain.ConversationRef{"thread-b", "room"} {
 		e = message(ref, "member", "queued")
 		if ref != "room" {
@@ -377,9 +377,7 @@ type unusedInbox struct{ domain.InboxRepository }
 func TestSourceHeaderPreservesEventAndContinuationTargets(t *testing.T) {
 	rules, err := compileRules(Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}})
 	require.NoError(t, err)
-	c := &core{rules: rules, prompt: func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
-		return input, nil
-	}}
+	c := &core{rules: rules}
 	item := domain.InboxItem{SessionKey: "room", Actor: domain.ActorMember, SourceKey: "watch:1", Payload: domain.InboxPayload{Context: domain.SessionContext{Conversation: "room", Actor: domain.ActorMember}, Target: "thread-a"}}
 	for _, target := range []domain.ConversationRef{"thread-a", "thread-b", "room"} {
 		item.Payload.Target = target
@@ -408,9 +406,7 @@ func TestSourceHeaderPreservesEventAndContinuationTargets(t *testing.T) {
 func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
 	rules, err := compileRules(Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}})
 	require.NoError(t, err)
-	c := &core{rules: rules, prompt: func(_ context.Context, _ domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
-		return input, nil
-	}}
+	c := &core{rules: rules}
 	header := func(item domain.InboxItem) map[string]any {
 		t.Helper()
 		input, err := c.prepare(t.Context(), item)
@@ -427,6 +423,9 @@ func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
 				event.Direct = direct
 				event.MessageRef = "message-thread"
 				target := "message-thread"
+				if direct {
+					target = "room"
+				}
 				if threaded {
 					event.Parent, event.Conversation = "room", "existing-thread"
 					target = "existing-thread"
@@ -441,7 +440,11 @@ func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
 					item.Payload.Target = domain.ConversationRef(target)
 					continuation := header(item)
 					require.Equal(t, source["channel"], continuation["channel"])
-					require.Equal(t, target, continuation["thread"])
+					thread := target
+					if target == "room" {
+						thread = "top level"
+					}
+					require.Equal(t, thread, continuation["thread"])
 					require.Equal(t, target, continuation["work_target"])
 					require.Equal(t, target, continuation["reply_target"])
 					require.Equal(t, direct, continuation["direct"])

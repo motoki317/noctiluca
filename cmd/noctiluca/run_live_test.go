@@ -46,7 +46,7 @@ fi
 exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 `), 0700))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "memory", "owner"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory", "owner", "smoke.md"), []byte("This is a smoke test. Follow each user request literally. Post only through the reply tool. Do not read or change files, use external services, or persist test words in memory. When asked to watch a command, call watch, end the turn immediately, and reply only after its exit notification.\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory", "owner", "smoke.md"), []byte("This is a smoke test. Follow each user request literally. Post only through the reply tool. Do not read files unless explicitly requested for the smoke test. Do not change files, use external services, or persist test words in memory. When asked to watch a command, call watch, end the turn immediately, and reply only after its exit notification.\n"), 0600))
 	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("owner: U_OWNER\nslack:\n  app_token: {env: TEST_APP_TOKEN}\n  bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude, name: haiku, turn_timeout: 2m}\nheartbeat: {enabled: false}\nconversations:\n  rules:\n    - {id: C_ROOM, users: [U_OWNER], require_mention: false}\n"), 0600))
 	config, err := loadConfig(path)
@@ -201,6 +201,14 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.NotEmpty(t, post.Get("text"))
 		idle(t, "slack:C_ROOM:")
 	})
+	run("b_DM_work", func(t *testing.T) {
+		send(t, "D_OWNER", "", "Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
+		post := liveTake(t, slack.posts)
+		require.Equal(t, "D_OWNER", post.Get("channel"))
+		require.Empty(t, post.Get("thread_ts"))
+		require.NotEmpty(t, post.Get("text"))
+		idle(t, "slack:D_OWNER:")
+	})
 	run("c_unaddressed_chatter", func(t *testing.T) {
 		var before int
 		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&before))
@@ -260,7 +268,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	})
 	run("4_watch_completion", func(t *testing.T) {
 		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use the reply tool to report its output.", config.Model.Workdir))
-		reply(t, "D_WATCH", fmt.Sprintf("%d.000001", sequence+100), "DONE")
+		reply(t, "D_WATCH", "", "DONE")
 		idle(t, "slack:D_WATCH:")
 		var finishedBeforeExit, finished int
 		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:D_WATCH:' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))
@@ -271,6 +279,27 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.NoError(t, app.db.QueryRow("SELECT command,outcome FROM watches").Scan(&command, &outcome))
 		require.Equal(t, "sleep 5; echo DONE", command)
 		require.Contains(t, outcome, "DONE")
+	})
+	run("7_native_tools_outside_workdir", func(t *testing.T) {
+		path := filepath.Join(dir, "native-check.txt")
+		require.NoError(t, os.WriteFile(path, []byte("NATIVE_READ_OK"), 0600))
+		send(t, "D_NATIVE", "400.000001", fmt.Sprintf("Read %q using the native Read tool. Run pwd using the native Bash tool from directory %q. Reply here with the file contents and the directory output. These are explicitly authorized smoke-test operations outside the workdir.", path, dir))
+		post := liveTake(t, slack.posts)
+		require.Equal(t, "D_NATIVE", post.Get("channel"))
+		require.Equal(t, "400.000001", post.Get("thread_ts"))
+		require.Contains(t, post.Get("text"), "NATIVE_READ_OK")
+		require.Contains(t, post.Get("text"), dir)
+		idle(t, "slack:D_NATIVE:")
+		events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), "slack:D_NATIVE:", 100)
+		require.NoError(t, err)
+		used := map[string]bool{}
+		for _, event := range events {
+			if call := event.Event.ToolCall; call != nil {
+				used[call.Name] = true
+			}
+		}
+		require.True(t, used["Read"])
+		require.True(t, used["Bash"])
 	})
 	run("6_shutdown", func(t *testing.T) { stop(); liveNoProcesses(t, dir) })
 }

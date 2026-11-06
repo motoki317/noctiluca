@@ -11,19 +11,12 @@ import (
 )
 
 func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler) domain.PromptAssembler {
-	return func(ctx context.Context, session domain.ToolSession, input domain.UserInput) (domain.UserInput, error) {
-		if next != nil {
-			var err error
-			input, err = next(ctx, session, input)
-			if err != nil {
-				return input, err
-			}
-		}
+	return func(ctx context.Context, session domain.ToolSession) (string, error) {
 		var context strings.Builder
 		if memory != nil {
 			names, err := memory.List(ctx, "owner")
 			if err != nil {
-				return input, err
+				return "", err
 			}
 			for _, name := range append(names, "core.md") {
 				text, err := memory.Read(ctx, name)
@@ -31,7 +24,7 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 					continue
 				}
 				if err != nil {
-					return input, err
+					return "", err
 				}
 				if text != "" {
 					context.WriteString("Memory: " + name + "\n" + text + "\n\n")
@@ -41,10 +34,14 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 		if notes != "" {
 			context.WriteString("Messaging tool notes:\n" + notes + "\n\n")
 		}
-		if context.Len() > 0 {
-			input.Text = context.String() + "Input:\n" + input.Text
+		if next != nil {
+			text, err := next(ctx, session)
+			if err != nil {
+				return "", err
+			}
+			context.WriteString(text)
 		}
-		return input, nil
+		return context.String(), nil
 	}
 }
 

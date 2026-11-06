@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -273,3 +275,35 @@ func TestRuntimeRedirectDoesNotForwardToken(t *testing.T) {
 	require.ErrorContains(t, err, "cross-origin")
 	assert.False(t, called)
 }
+
+func TestExpiryWarningOnlyWithinThirtyDays(t *testing.T) {
+	for _, days := range []int{-1, 0, 29, 30, 31, 3650} {
+		t.Run(fmt.Sprint(days), func(t *testing.T) {
+			f := newOAuthFixture(t)
+			f.refresh = ""
+			repo := loginRepo(t)
+			config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
+			require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
+			stored, err := repo.Get(t.Context(), config.Name)
+			require.NoError(t, err)
+			stored.Expiry = time.Now().Add(time.Duration(days) * 24 * time.Hour)
+			if days == 0 {
+				stored.Expiry = time.Time{}
+			}
+			require.NoError(t, repo.Save(t.Context(), config.Name, stored))
+			hub, err := toolhub.New(toolhub.Config{})
+			require.NoError(t, err)
+			defer hub.Shutdown(t.Context())
+			var logs bytes.Buffer
+			m, err := New([]ServerConfig{config}, repo, &discardNoticeInbox{}, hub, slog.New(slog.NewTextHandler(&logs, nil)))
+			require.NoError(t, err)
+			require.NoError(t, m.Connect(t.Context()))
+			defer m.Shutdown(t.Context())
+			assert.Equal(t, days != 0 && days <= 30, strings.Contains(logs.String(), "MCP login expires without a refresh token"))
+		})
+	}
+}
+
+type discardNoticeInbox struct{ domain.InboxRepository }
+
+func (*discardNoticeInbox) Enqueue(context.Context, domain.InboxItem) (int64, error) { return 1, nil }

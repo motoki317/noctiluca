@@ -136,7 +136,7 @@ func (m *manager) Connect(ctx context.Context) error {
 			return errors.New("could not load MCP login")
 		}
 		r := &remote{config: config, hub: m.hub, inbox: m.inbox, logger: m.logger, tokens: tokens, loginID: tokens.registration.LoginID, changed: make(chan struct{}, 1)}
-		if expiry := r.tokens.expiresWithoutRefresh(); !expiry.IsZero() {
+		if expiry := r.tokens.expiresWithoutRefresh(); !expiry.IsZero() && !expiry.After(time.Now().Add(30*24*time.Hour)) {
 			m.logger.WarnContext(ctx, "MCP login expires without a refresh token", "server", config.Name, "expiry", expiry.UTC().Format(time.RFC3339), "command", "noctiluca mcp-login "+config.Name)
 		}
 		r.client = mcp.NewClient(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, &mcp.ClientOptions{KeepAlive: time.Minute, ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {

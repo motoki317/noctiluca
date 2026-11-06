@@ -101,7 +101,7 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 | Where | What |
 |---|---|
 | SQLite | events and sends (with full-text search), inbox, sessions and resume tokens, schedules, watches, OAuth tokens |
-| memory Git repo | `owner/` and `core.md`, both loaded into every turn's prompt. `topics/` and `procedures/`, read on demand. Every write is one commit. |
+| memory Git repo | `owner/` and `core.md`, both loaded into the system prompt when a model process opens. `topics/` and `procedures/`, read on demand. Every write is one commit. |
 
 ## Trust model
 

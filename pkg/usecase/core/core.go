@@ -46,7 +46,6 @@ type core struct {
 	events           domain.EventRepository
 	sessions         domain.SessionRepository
 	inbox            domain.InboxRepository
-	prompt           domain.PromptAssembler
 	hub              domain.ToolHub
 	reconciler       *reconcile.Reconciler
 	watcher          domain.Background
@@ -101,7 +100,7 @@ func New(config Config, messaging domain.MessagingAdapter, model domain.ModelAda
 	if err != nil {
 		return nil, err
 	}
-	c := &core{config: config, rules: rules, messaging: messaging, events: events, sessions: sessions, inbox: inbox, hub: hub, external: external, done: make(chan struct{}), groupIDs: ids, prompt: memoryusecase.Prompt(memory, messaging.ToolNotes(), prompt)}
+	c := &core{config: config, rules: rules, messaging: messaging, events: events, sessions: sessions, inbox: inbox, hub: hub, external: external, done: make(chan struct{}), groupIDs: ids}
 	if filter, ok := messaging.(domain.ConversationFilter); ok {
 		filter.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
 			c.mu.Lock()
@@ -110,7 +109,7 @@ func New(config Config, messaging domain.MessagingAdapter, model domain.ModelAda
 			return ok && len(rule.users) > 0
 		})
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Actor: c.actor, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, schedules, sessions, events, model, hub)
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: memoryusecase.Prompt(memory, messaging.ToolNotes()+"\n\n"+c.replyTool().Description, prompt), Actor: c.actor, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
 	tools := append([]domain.Tool{c.replyTool()}, c.reconciler.Tools()...)
 	tools = append(tools, c.watcher.Tools()...)
@@ -285,12 +284,10 @@ func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserI
 		if event.Parent != "" {
 			source.Thread = string(event.Conversation)
 			source.WorkTarget = event.Conversation
+		} else if event.Direct {
+			source.WorkTarget = event.Conversation
 		}
 		input = domain.UserInput{Text: event.Text, Attachments: event.Attachments}
-	}
-	input, err := c.prompt(ctx, domain.ToolSession{Key: item.SessionKey, Actor: item.Actor}, input)
-	if err != nil {
-		return input, err
 	}
 	header, err := json.Marshal(source)
 	if err != nil {
