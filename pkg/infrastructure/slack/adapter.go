@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/slack-go/slack"
@@ -24,6 +25,7 @@ type Config struct {
 }
 
 type adapter struct {
+	names              sync.Map
 	acceptConversation func(domain.ConversationRef, bool) bool
 	life               lifecycle.Group
 	bot, reader        *sdk.Client
