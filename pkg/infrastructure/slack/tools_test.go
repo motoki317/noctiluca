@@ -63,6 +63,33 @@ func TestReadTools(t *testing.T) {
 	require.Contains(t, string(invoke(t, a, "slack_search", map[string]any{"query": "query", "page": 2})), `"text":"match"`)
 }
 
+func TestReadToolsReactions(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		path string
+	}{
+		{tool: "slack_read_thread", path: "/conversations.replies"},
+		{tool: "slack_read_history", path: "/conversations.history"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, tc.path, r.URL.Path)
+				_, _ = w.Write([]byte(`{"ok":true,"messages":[
+					{"text":"reacted","ts":"123.000001","reactions":[{"name":"white_check_mark","count":3,"users":["UMEMBER"]},{"name":"eyes","count":1,"users":["UMEMBER"]}]},
+					{"text":"unreacted","ts":"124.000001"},
+					{"text":"empty reactions","ts":"125.000001","reactions":[]}
+				]}`))
+			}, false)
+			result := invoke(t, a, tc.tool, map[string]string{"channel": "CTEST", "thread_ts": "123.000001"})
+			require.JSONEq(t, `{"has_more":false,"next_cursor":"","messages":[
+				{"text":"reacted","ts":"123.000001","reactions":[{"name":"white_check_mark","count":3},{"name":"eyes","count":1}]},
+				{"text":"unreacted","ts":"124.000001"},
+				{"text":"empty reactions","ts":"125.000001"}
+			]}`, string(result))
+		})
+	}
+}
+
 func TestDownloadRawBytes(t *testing.T) {
 	body := []byte{0, 255, 0x89, 'P', 'N', 'G', '\r', '\n'}
 	fail := false
