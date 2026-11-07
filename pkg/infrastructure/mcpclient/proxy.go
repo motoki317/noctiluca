@@ -331,7 +331,7 @@ func (r *remote) disable(ctx context.Context) error {
 	reason := r.tokens.err().Error()
 	r.logger.WarnContext(ctx, "Skipping MCP server until re-login", "server", r.config.Name, "error", reason)
 	key := "mcp-auth:" + r.config.Name + ":" + r.loginID
-	_, err := r.inbox.Enqueue(ctx, domain.InboxItem{SourceKey: key, SessionKey: domain.SessionKey("notice:" + key), Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Notice: reason}})
+	_, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice(key, reason))
 	return err
 }
 

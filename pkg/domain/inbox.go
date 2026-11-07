@@ -29,6 +29,20 @@ type InboxItem struct {
 	LastError  string
 }
 
+func NewOwnerNotice(source, text string) InboxItem {
+	return InboxItem{
+		SourceKey:  source,
+		SessionKey: SessionKey("notice:" + source),
+		Lane:       "conv",
+		ReadyAt:    time.Now(),
+		Payload: InboxPayload{
+			Notice: text,
+			// Owner notices must pass acceptance without a conversation rule.
+			Context: SessionContext{TaskName: "owner-notice"},
+		},
+	}
+}
+
 // InboxRepository commits source outcomes and their next input together.
 type InboxRepository interface {
 	Delivered(context.Context, int64, Session) error
