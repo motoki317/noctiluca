@@ -117,9 +117,34 @@ func TestCLIHelper(t *testing.T) {
 	}
 	capture, _ := json.Marshal(inv)
 	_ = os.WriteFile("invocation.json", capture, 0o600)
+	records, err := os.OpenFile("invocations.jsonl", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		os.Exit(12)
+	}
+	_, _ = records.Write(append(capture, '\n'))
+	_ = records.Close()
 	scan := bufio.NewScanner(os.Stdin)
 	scan.Buffer(make([]byte, 4096), maxFrameSize)
 	emit := func(line string) { fmt.Println(line) }
+	startupFailure := os.Getenv("NOCTILUCA_TEST_INIT_ERROR")
+	if mode == "missing-resume" {
+		if token := get("--resume"); token != "" {
+			startupFailure = fmt.Sprintf(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":[%q]}`, "No conversation found with session ID: "+token)
+		}
+	}
+	if mode == "init-blocked" {
+		for {
+			_ = syscall.Pause()
+		}
+	}
+	if startupFailure != "" || mode == "init-exit" {
+		if os.Getenv("NOCTILUCA_TEST_INIT_AFTER_READ") == "1" {
+			scan.Scan()
+		}
+		fmt.Fprintln(os.Stderr, "private stderr: No conversation found with session ID: saved-session")
+		emit(startupFailure)
+		os.Exit(1)
+	}
 	count := 0
 	var held, queued string
 	for scan.Scan() {
@@ -358,6 +383,148 @@ func TestSessionSteerResumeAndConfig(t *testing.T) {
 			require.True(t, os.IsNotExist(err))
 		}
 	}
+}
+
+func readInvocations(t *testing.T, dir string) []invocation {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "invocations.jsonl"))
+	require.NoError(t, err)
+	var invocations []invocation
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
+		var inv invocation
+		require.NoError(t, json.Unmarshal(line, &inv))
+		invocations = append(invocations, inv)
+	}
+	return invocations
+}
+
+func TestMissingResumeStartsFresh(t *testing.T) {
+	for _, afterRead := range []string{"0", "1"} {
+		t.Run("after-read-"+afterRead, func(t *testing.T) {
+			path, dir := fakeCLI(t, "missing-resume")
+			t.Setenv("NOCTILUCA_TEST_INIT_AFTER_READ", afterRead)
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session", SystemPrompt: "Owner instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "test-bearer"}}
+			s, err := New(path, "haiku").Open(t.Context(), config)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, s.Close()) })
+			require.NotEqual(t, config.ResumeToken, s.ResumeToken())
+			require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "fresh input"}))
+			for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
+			}
+			require.Equal(t, "test-session", s.ResumeToken())
+			invocations := readInvocations(t, dir)
+			require.Len(t, invocations, 2)
+			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume saved-session")
+			require.NotContains(t, invocations[1].Args, "--resume")
+			for _, inv := range invocations {
+				require.Contains(t, strings.Join(inv.Args, " "), "--model haiku")
+				require.Equal(t, config.SystemPrompt, inv.Prompt)
+				require.JSONEq(t, `{"mcpServers":{"noctiluca":{"type":"http","url":"http://127.0.0.1:1234/mcp","headers":{"Authorization":"Bearer test-bearer"}}}}`, string(inv.MCP))
+			}
+			require.NoError(t, s.Close())
+			for _, inv := range invocations {
+				for i, arg := range inv.Args {
+					if arg == "--mcp-config" {
+						require.NoDirExists(t, filepath.Dir(inv.Args[i+1]))
+					}
+				}
+			}
+			var record struct{ Level, Msg string }
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
+			require.Equal(t, "WARN", record.Level)
+			require.Contains(t, record.Msg, "fresh session")
+			require.NotContains(t, logs.String(), "private stderr")
+			require.NotContains(t, logs.String(), "test-bearer")
+		})
+	}
+}
+
+func TestInitializationExitKeepsResume(t *testing.T) {
+	for _, tc := range []struct{ name, frame, detail string }{
+		{"auth", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Authentication required","Run login"]}`, "Authentication required; Run login"},
+		{"crash", "", authRemedy},
+		{"other-session", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: other-session"]}`, "other-session"},
+		{"result-body", `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"No conversation found with session ID: saved-session"}`, authRemedy},
+		{"other-frame", `{"type":"system","subtype":"notice","errors":["No conversation found with session ID: saved-session"]}`, authRemedy},
+		{"successful-result", `{"type":"result","subtype":"success","errors":["No conversation found with session ID: saved-session"]}`, authRemedy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, afterRead := range []string{"0", "1"} {
+				t.Run("after-read-"+afterRead, func(t *testing.T) {
+					path, dir := fakeCLI(t, "init-exit")
+					t.Setenv("NOCTILUCA_TEST_INIT_ERROR", tc.frame)
+					t.Setenv("NOCTILUCA_TEST_INIT_AFTER_READ", afterRead)
+					var logs bytes.Buffer
+					previous := slog.Default()
+					slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+					t.Cleanup(func() { slog.SetDefault(previous) })
+					config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session"}
+					s, err := New(path, "").Open(t.Context(), config)
+					require.ErrorContains(t, err, "claude exited before initialization")
+					require.ErrorContains(t, err, tc.detail)
+					require.NotContains(t, err.Error(), "context canceled")
+					require.NotContains(t, err.Error(), "private stderr")
+					require.Nil(t, s)
+					invocations := readInvocations(t, dir)
+					require.Len(t, invocations, 1)
+					require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume saved-session")
+					require.Equal(t, "saved-session", config.ResumeToken)
+					require.Empty(t, logs.String())
+				})
+			}
+		})
+	}
+}
+
+func TestMissingResumeFallbackFailure(t *testing.T) {
+	for _, detail := range []string{"Authentication required", "No conversation found with session ID: saved-session"} {
+		t.Run(detail, func(t *testing.T) {
+			path, dir := fakeCLI(t, "missing-resume")
+			t.Setenv("NOCTILUCA_TEST_INIT_ERROR", fmt.Sprintf(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":[%q]}`, detail))
+			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session"})
+			require.Nil(t, s)
+			require.ErrorContains(t, err, "claude exited before initialization: "+detail)
+			invocations := readInvocations(t, dir)
+			require.Len(t, invocations, 2)
+			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume saved-session")
+			require.NotContains(t, invocations[1].Args, "--resume")
+		})
+	}
+}
+
+func TestInitializationCancellationKeepsCause(t *testing.T) {
+	path, dir := fakeCLI(t, "init-blocked")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(path, "").Open(ctx, domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session"})
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(filepath.Join(dir, "invocations.jsonl"))
+		return err == nil && json.Valid(bytes.TrimSpace(data))
+	}, 5*time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.Len(t, readInvocations(t, dir), 1)
+}
+
+func TestWriteFailureKeepsCause(t *testing.T) {
+	input, output, err := os.Pipe()
+	require.NoError(t, err)
+	require.NoError(t, input.Close())
+	t.Cleanup(func() { require.NoError(t, output.Close()) })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	s := &session{ctx: ctx, cancel: cancel, stdin: output, writeLock: make(chan struct{}, 1)}
+	err = s.write(ctx, map[string]string{"type": "control_request"})
+	require.EqualError(t, err, "write claude input failed")
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
 }
 
 func TestSessionFailures(t *testing.T) {

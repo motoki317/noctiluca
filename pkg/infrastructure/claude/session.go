@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -22,6 +23,16 @@ import (
 )
 
 const maxFrameSize = 16 << 20
+
+type initializationExit struct{ messages []string }
+
+func (e *initializationExit) Error() string {
+	detail := strings.Join(e.messages, "; ")
+	if detail == "" {
+		detail = authRemedy
+	}
+	return "claude exited before initialization: " + detail
+}
 
 type session struct {
 	ctx          context.Context
@@ -40,11 +51,12 @@ type session struct {
 	active       bool
 	background   int
 	closeErr     error
+	initErr      *initializationExit
 }
 
 func startSession(ctx context.Context, executable string, args []string, config domain.ModelSessionConfig, dir string) (*session, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	s := &session{ctx: ctx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64), done: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}), ready: make(chan error, 1), token: config.ResumeToken}
+	sessionCtx, cancel := context.WithCancel(ctx)
+	s := &session{ctx: sessionCtx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64), done: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}), ready: make(chan error, 1), token: config.ResumeToken}
 	cmd := exec.Command(executable, args...)
 	cmd.Dir, cmd.Env = config.Workdir, childEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -87,17 +99,25 @@ func startSession(ctx context.Context, executable string, args []string, config 
 	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer initCancel()
 	err = s.write(initCtx, map[string]any{"type": "control_request", "request_id": "initialize", "request": map[string]string{"subtype": "initialize"}})
+	if err != nil && initCtx.Err() == nil {
+		err = &initializationExit{}
+	}
 	if err == nil {
 		select {
 		case err = <-s.ready:
 		case <-s.done:
-			err = errors.New("claude exited before initialization: " + authRemedy)
+			err = &initializationExit{}
 		case <-initCtx.Done():
 			err = initCtx.Err()
 		}
 	}
 	if err != nil {
 		_ = s.Close()
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else if s.initErr != nil {
+			err = s.initErr
+		}
 		return nil, fmt.Errorf("initialize claude: %w", err)
 	}
 	return s, nil
@@ -125,6 +145,7 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 	scan.Buffer(make([]byte, 64<<10), maxFrameSize)
 	var p parser
 	var readErr error
+	initialized := false
 	for scan.Scan() {
 		if len(scan.Bytes()) == 0 {
 			continue
@@ -143,11 +164,16 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 			var err error
 			if f.Response.Subtype != "success" {
 				err = errors.New("claude rejected initialization")
+			} else {
+				initialized = true
 			}
 			select {
 			case s.ready <- err:
 			default:
 			}
+		}
+		if !initialized && f.failedResult() {
+			s.initErr = &initializationExit{messages: f.Errors}
 		}
 		if f.Type == "control_request" {
 			response := map[string]any{"subtype": "error", "request_id": f.RequestID, "error": "Unsupported control request"}
@@ -179,7 +205,8 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		for _, event := range events {
 			s.emit(event)
 		}
-		if s.ctx.Err() != nil {
+		// An initialization write can fail before the CLI's final diagnostic is read.
+		if initialized && s.ctx.Err() != nil {
 			break
 		}
 	}
@@ -232,9 +259,10 @@ func (s *session) write(ctx context.Context, value any) error {
 		<-stopped
 	}
 	if err != nil {
+		ctxErr := ctx.Err()
 		s.cancel() // A partial line cannot be retried on the same stream.
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if ctxErr != nil {
+			return ctxErr
 		}
 		return errors.New("write claude input failed")
 	}

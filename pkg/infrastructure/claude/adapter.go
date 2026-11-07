@@ -117,6 +117,12 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 	args = append(args, "--mcp-config", path)
 	s, err := startSession(ctx, a.executable, args, config, dir)
 	if err != nil {
+		var exited *initializationExit
+		if config.ResumeToken != "" && errors.As(err, &exited) && slices.Contains(exited.messages, "No conversation found with session ID: "+config.ResumeToken) {
+			slog.WarnContext(ctx, "Claude conversation is unavailable; starting a fresh session")
+			config.ResumeToken = ""
+			return a.Open(ctx, config)
+		}
 		return nil, err
 	}
 	opened = true
