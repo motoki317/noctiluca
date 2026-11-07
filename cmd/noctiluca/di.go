@@ -16,6 +16,7 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/claude"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/codex"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/discord"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/mcpclient"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/memory"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
@@ -36,12 +37,6 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	tokens, port, err := config.validateRun()
 	if err != nil {
 		return nil, err
-	}
-	for _, instance := range config.Messaging {
-		switch instance.Type {
-		case "discord":
-			return nil, fmt.Errorf("messaging.%s: %s adapter is not implemented yet", instance.Name, instance.Type)
-		}
 	}
 	if err := os.MkdirAll(config.Model.Workdir, 0700); err != nil {
 		return nil, err
@@ -80,10 +75,29 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	events := repository.NewEventRepository(db)
 	messaging := make([]core.Messaging, 0, len(config.Messaging))
 	for i, instance := range config.Messaging {
-		adapter, err := slack.New(instance.Name, tokens[i].Slack, events, slackOptions...)
-		if err != nil {
-			return nil, err
+		var adapter domain.MessagingAdapter
+		switch instance.Type {
+		case "slack":
+			adapter, err = slack.New(instance.Name, tokens[i].Slack, events, slackOptions...)
+		case "discord":
+			var channels []string
+			groups := instance.Conversations.DirectMessages != nil && len(instance.Conversations.DirectMessages.Groups) > 0
+			for _, rule := range instance.Conversations.Rules {
+				channels = append(channels, rule.ID)
+				groups = groups || len(rule.Groups) > 0
+			}
+			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, Channels: channels, NeedGroups: groups}, events)
 		}
+		if err != nil {
+			return nil, fmt.Errorf("messaging.%s: %w", instance.Name, err)
+		}
+		defer func() {
+			if result != nil {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				result = errors.Join(result, adapter.Shutdown(stopCtx))
+			}
+		}()
 		rules := make(map[domain.ConversationRef]domain.AcceptRule, len(instance.Conversations.Rules))
 		for _, r := range instance.Conversations.Rules {
 			rules[domain.NewConversationRef(instance.Name, r.ID, "")] = r.rule()

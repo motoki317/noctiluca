@@ -246,32 +246,21 @@ func TestNewMessagingTypesValidation(t *testing.T) {
 	}
 }
 
-func TestUnimplementedMessagingAdaptersBeforeResources(t *testing.T) {
-	t.Setenv("TEST_APP_TOKEN", "slack-app-secret")
-	t.Setenv("TEST_BOT_TOKEN", "slack-bot-secret")
-	t.Setenv("TEST_NEW_TOKEN", "new-secret")
-	for _, platform := range []struct{ name, settings string }{
-		{"discord", "token: {env: TEST_NEW_TOKEN}"},
-	} {
-		t.Run(platform.name, func(t *testing.T) {
-			c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
-  - name: office
-    type: slack
-    owner: U_OWNER
-    slack: {app_token: {env: TEST_APP_TOKEN}, bot_token: {env: TEST_BOT_TOKEN}}
+func TestDiscordApplicationConstruction(t *testing.T) {
+	t.Setenv("TEST_DISCORD_TOKEN", "fake-token")
+	c, err := loadConfig(writeConfig(t, `messaging:
   - name: chat
-    type: %s
-    owner: '100000000000000001'
-    %s: {%s}
-`, platform.name, platform.name, platform.settings)))
-			require.NoError(t, err)
-			_, _, err = c.validateRun()
-			require.NoError(t, err)
-			_, err = newApplication(t.Context(), c, nil)
-			require.EqualError(t, err, fmt.Sprintf("messaging.chat: %s adapter is not implemented yet", platform.name))
-			require.NoFileExists(t, c.Database.Path)
-			require.NoDirExists(t, c.Memory.Dir)
-			require.NoDirExists(t, c.Model.Workdir)
-		})
-	}
+    type: discord
+    owner: "200"
+    discord: {token: {env: TEST_DISCORD_TOKEN}}
+    conversations:
+      rules: [{id: "400", groups: ["700"]}]
+      direct_messages: {groups: ["701"]}
+heartbeat: {enabled: false}
+`))
+	require.NoError(t, err)
+	app, err := newApplication(t.Context(), c, nil)
+	require.NoError(t, err)
+	require.NoError(t, app.Shutdown(t.Context()))
+	require.FileExists(t, c.Database.Path)
 }
