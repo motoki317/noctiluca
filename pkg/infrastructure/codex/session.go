@@ -34,23 +34,36 @@ type session struct {
 	readerDone   chan struct{}
 	processDone  chan struct{}
 	shutdownDone chan struct{}
+	inputDone    chan struct{}
+	inputReady   chan struct{}
 	secret       []byte
 	mu           sync.RWMutex
 	nextID       uint64
 	calls        map[string]chan rpcFrame
 	threadID     string
 	promptHash   string
-	active       string
-	pending      bool
-	startID      string
-	turnReady    chan struct{}
+	current      *runningTurn
+	inputs       []string
+	commands     map[string]*runningCommand
+}
+
+type runningTurn struct {
+	id      string
+	ready   chan struct{}
+	refused bool
+}
+
+type runningCommand struct {
+	turnID   string
+	finished bool
 }
 
 func startSession(ctx context.Context, executable string, config domain.ModelSessionConfig) (*session, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	s := &session{ctx: sessionCtx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64),
 		done: make(chan struct{}), readerDone: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}),
-		calls: make(map[string]chan rpcFrame)}
+		inputDone: make(chan struct{}), inputReady: make(chan struct{}, 1),
+		calls: make(map[string]chan rpcFrame), commands: make(map[string]*runningCommand)}
 	if config.ToolHub.BearerToken != "" {
 		encoded, _ := json.Marshal(config.ToolHub.BearerToken)
 		s.secret = encoded[1 : len(encoded)-1]
@@ -93,6 +106,7 @@ func startSession(ctx context.Context, executable string, config domain.ModelSes
 		close(s.processDone)
 	}()
 	go s.shutdown()
+	go s.sendInputs()
 	go s.read(stdout)
 	return s, nil
 }
@@ -101,7 +115,10 @@ func (s *session) shutdown() {
 	defer close(s.shutdownDone)
 	<-s.ctx.Done()
 	s.mu.RLock()
-	ready := s.turnReady
+	var ready chan struct{}
+	if s.current != nil {
+		ready = s.current.ready
+	}
 	s.mu.RUnlock()
 	if ready != nil {
 		timer := time.NewTimer(time.Second)
@@ -113,12 +130,15 @@ func (s *session) shutdown() {
 		timer.Stop()
 	}
 	s.mu.RLock()
-	token, active := s.threadID, s.active
+	threadID, active := s.threadID, ""
+	if s.current != nil {
+		active = s.current.id
+	}
 	s.mu.RUnlock()
 	if active != "" {
 		// The core cancels the process context when its turn deadline expires.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		_ = s.call(ctx, "turn/interrupt", map[string]string{"threadId": token, "turnId": active}, nil)
+		_ = s.call(ctx, "turn/interrupt", map[string]string{"threadId": threadID, "turnId": active}, nil)
 		cancel()
 	}
 	_ = s.stdin.Close()
@@ -161,13 +181,9 @@ func (s *session) read(stdout io.ReadCloser) {
 			if !found {
 				continue
 			}
-			if call != nil {
-				select {
-				case call <- f:
-				default:
-				}
-			} else {
-				s.turnResponse(f)
+			select {
+			case call <- f:
+			default:
 			}
 			continue
 		}
@@ -191,28 +207,59 @@ func (s *session) read(stdout io.ReadCloser) {
 			readErr = errors.New("invalid codex notification")
 			break
 		}
-		s.mu.Lock()
+		s.mu.RLock()
 		if s.threadID != "" && n.ThreadID != "" && n.ThreadID != s.threadID {
-			s.mu.Unlock()
+			s.mu.RUnlock()
 			continue
 		}
-		switch f.Method {
-		case "turn/started":
-			s.active = n.Turn.ID
-			s.markTurnReady()
-		case "turn/completed":
-			if s.active == n.Turn.ID {
-				s.active, s.pending = "", false
-			}
-		}
-		s.mu.Unlock()
+		s.mu.RUnlock()
 		events, err := notificationEvents(f.Method, n)
 		if err != nil {
 			readErr = err
 			break
 		}
+		s.mu.Lock()
+		switch f.Method {
+		case "turn/started":
+			if s.current == nil {
+				s.current = &runningTurn{id: n.Turn.ID}
+			} else if s.current.id == "" {
+				s.current.id = n.Turn.ID
+				s.current.markReady()
+			}
+		case "turn/completed":
+			if s.current != nil && s.current.id == n.Turn.ID {
+				s.current = nil
+			} else {
+				events = nil
+			}
+			for _, command := range s.commands {
+				if command.turnID == n.Turn.ID {
+					command.finished = true
+				}
+			}
+		}
+		for i := range events {
+			event := &events[i]
+			if event.Kind == domain.ModelEventToolCall && event.ToolCall.Name == "commandExecution" {
+				if _, exists := s.commands[event.ToolCall.ID]; !exists {
+					s.commands[event.ToolCall.ID] = &runningCommand{turnID: n.TurnID}
+				}
+			} else if event.Kind == domain.ModelEventToolResult {
+				if command := s.commands[event.ToolCall.ID]; command != nil {
+					delete(s.commands, event.ToolCall.ID)
+					if command.finished {
+						event.Kind = domain.ModelEventBackgroundDone
+					}
+				}
+			}
+		}
+		s.mu.Unlock()
 		for _, event := range events {
 			s.emit(event)
+		}
+		if f.Method == "turn/completed" {
+			s.wakeInputs()
 		}
 	}
 	if s.ctx.Err() == nil {
@@ -227,40 +274,13 @@ func (s *session) read(stdout io.ReadCloser) {
 	close(s.readerDone)
 	s.cancel()
 	<-s.shutdownDone
+	<-s.inputDone
 }
 
-func (s *session) markTurnReady() {
-	if s.turnReady != nil {
-		close(s.turnReady)
-		s.turnReady = nil
-	}
-}
-
-func (s *session) turnResponse(f rpcFrame) {
-	var result struct {
-		Turn turn `json:"turn"`
-	}
-	var err error
-	if f.Error != nil {
-		err = f.Error
-	} else if json.Unmarshal(f.Result, &result) != nil || result.Turn.ID == "" {
-		err = errors.New("invalid codex response to turn/start")
-		s.cancel()
-	}
-	s.mu.Lock()
-	if string(f.ID) == s.startID {
-		if err != nil {
-			s.pending = false
-		} else if s.pending {
-			// A completed notification can precede the response to turn/start.
-			s.active = result.Turn.ID
-		}
-		s.markTurnReady()
-	}
-	s.mu.Unlock()
-	if err != nil {
-		s.emit(domain.ModelEvent{Kind: domain.ModelEventError, Err: err})
-		s.emit(domain.ModelEvent{Kind: domain.ModelEventTurnFinished})
+func (t *runningTurn) markReady() {
+	if t.ready != nil {
+		close(t.ready)
+		t.ready = nil
 	}
 }
 
@@ -300,25 +320,13 @@ func (s *session) request(ctx context.Context, method string, params any, respon
 		return "", err
 	}
 	s.mu.Lock()
-	if response == nil && (s.pending || s.active != "") {
-		s.mu.Unlock()
-		return "", fmt.Errorf("codex turn is already running: %w", domain.ErrRejected)
-	}
 	s.nextID++
 	id := strconv.FormatUint(s.nextID, 10)
 	s.calls[id] = response
-	if response == nil {
-		s.pending, s.startID = true, id
-		s.turnReady = make(chan struct{})
-	}
 	s.mu.Unlock()
 	if err := s.write(ctx, rpcFrame{ID: json.RawMessage(id), Method: method, Params: data}); err != nil {
 		s.mu.Lock()
 		delete(s.calls, id)
-		if response == nil {
-			s.pending = false
-			s.markTurnReady()
-		}
 		s.mu.Unlock()
 		return "", err
 	}
@@ -357,12 +365,6 @@ func (s *session) write(ctx context.Context, value any) error {
 }
 
 func (s *session) Send(ctx context.Context, input domain.UserInput) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if s.ctx.Err() != nil {
-		return errors.New("codex session is closed")
-	}
 	text := input.Text
 	if len(input.Attachments) != 0 {
 		refs, err := json.Marshal(input.Attachments)
@@ -371,8 +373,17 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 		}
 		text += "\n\nAttachment references (use the messaging tools to download):\n" + string(refs)
 	}
-	_, err := s.request(ctx, "turn/start", map[string]any{"threadId": s.threadID, "input": []map[string]string{{"type": "text", "text": text}}}, nil)
-	return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.ctx.Err() != nil {
+		return errors.New("codex session is closed")
+	}
+	s.inputs = append(s.inputs, text)
+	s.wakeInputs()
+	return nil
 }
 
 func (s *session) Events() <-chan domain.ModelEvent { return s.events }
@@ -384,6 +395,6 @@ func (s *session) ResumeToken() string {
 func (s *session) Idle() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return !s.pending && s.active == ""
+	return len(s.inputs) == 0 && s.current == nil && len(s.commands) == 0
 }
 func (s *session) Close() error { s.cancel(); <-s.done; return nil }

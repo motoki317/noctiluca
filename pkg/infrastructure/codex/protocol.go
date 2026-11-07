@@ -90,6 +90,7 @@ func notificationEvents(method string, n notification) ([]domain.ModelEvent, err
 			Tool      string          `json:"tool"`
 			Arguments json.RawMessage `json:"arguments"`
 			Status    string          `json:"status"`
+			Output    string          `json:"aggregatedOutput"`
 		}
 		if err := json.Unmarshal(n.Item, &item); err != nil {
 			return nil, errors.New("invalid codex item")
@@ -106,6 +107,7 @@ func notificationEvents(method string, n notification) ([]domain.ModelEvent, err
 		if method == "item/completed" {
 			event.Kind = domain.ModelEventToolResult
 			event.ToolCall = &domain.ToolCall{ID: item.ID}
+			event.Text = item.Output
 			if item.Status == "failed" || item.Status == "declined" {
 				event.Err = errors.New("codex tool " + item.Status)
 			}
