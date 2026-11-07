@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	sdk "github.com/slack-go/slack"
 
@@ -38,7 +41,7 @@ func (a *adapter) ToolNotes() string {
 		"Use the work target for watch and wake_at. Native background completions use the work target saved from their request. " +
 		"Run long work with Bash run_in_background or watch and end the turn immediately. Do not wait or poll. " +
 		"Use slack_read_thread, slack_read_history, and slack_search for context. Slack tools take bare channel IDs. " +
-		"To broadcast a thread upload, call slack_send with its permalink and broadcast=true."
+		"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true."
 }
 
 func (a *adapter) Tools() []domain.Tool {
@@ -72,7 +75,7 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("slack_read_history", "Read recent channel messages. Returns messages and the next cursor.", map[string]any{"channel": str, "limit": limit, "cursor": str}, []string{"channel"}, a.readHistory),
 		tool("slack_search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
 		tool("slack_download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
-		tool("slack_upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. To broadcast a thread upload, use slack_send with its permalink.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str}, []string{"channel", "path"}, a.upload),
+		tool("slack_upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
 		tool("slack_react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
 		tool("slack_send", "Post Markdown text using the same target rules as reply: keep existing threads, top level for chat and DM work, message thread for channel work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
@@ -186,6 +189,9 @@ func (a *adapter) download(ctx context.Context, in toolInput) (any, error) {
 }
 
 func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
+	if in.Broadcast && in.Thread == "" {
+		return nil, errors.New("broadcast requires thread_ts")
+	}
 	file, err := os.Open(in.Path)
 	if err != nil {
 		return nil, err
@@ -198,12 +204,37 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 	if !stat.Mode().IsRegular() || stat.Size() == 0 {
 		return nil, errors.New("upload requires a nonempty regular file")
 	}
-	result, err := a.bot.UploadFileContext(ctx, sdk.UploadFileParameters{Reader: file, FileSize: int(stat.Size()), Filename: filepath.Base(in.Path), Title: in.Title, Channel: in.Channel, ThreadTimestamp: in.Thread, InitialComment: mrkdwn(in.Text)})
+	filename := filepath.Base(in.Path)
+	params := sdk.UploadFileParameters{Reader: file, FileSize: int(stat.Size()), Filename: filename, Title: in.Title, Channel: in.Channel, ThreadTimestamp: in.Thread, InitialComment: mrkdwn(in.Text)}
+	if in.Broadcast {
+		if utf8.RuneCountInString(params.InitialComment) > 3000 {
+			return nil, errors.New("broadcast caption must be at most 3000 characters")
+		}
+		var header [512]byte
+		n, err := file.ReadAt(header[:], 0)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		switch http.DetectContentType(header[:n]) {
+		case "image/png", "image/jpeg", "image/gif":
+		default:
+			return nil, errors.New("broadcast requires a PNG, JPEG, or GIF image")
+		}
+		params.Channel, params.ThreadTimestamp, params.InitialComment = "", "", ""
+	}
+	result, err := a.bot.UploadFileContext(ctx, params)
 	if err != nil {
 		return nil, slackError("upload Slack file failed", err)
 	}
-	message := domain.OutboundMessage{Text: in.Text, Attachments: []domain.Attachment{{Ref: result.ID, Name: filepath.Base(in.Path)}}}
-	if err := a.record(ctx, result.ID, Conversation(in.Channel, in.Thread), message); err != nil {
+	id := result.ID
+	if in.Broadcast {
+		id, err = a.broadcastImage(ctx, in, result.ID, filename)
+		if err != nil {
+			return nil, err
+		}
+	}
+	message := domain.OutboundMessage{Text: in.Text, Attachments: []domain.Attachment{{Ref: result.ID, Name: filename}}}
+	if err := a.record(ctx, id, Conversation(in.Channel, in.Thread), message); err != nil {
 		return nil, err
 	}
 	info, _, _, err := a.bot.GetFileInfoContext(ctx, result.ID, 0, 0)
@@ -215,6 +246,34 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 		return map[string]string{"id": result.ID, "warning": "Uploaded, but could not read the permalink."}, nil
 	}
 	return map[string]string{"id": result.ID, "permalink": info.Permalink}, nil
+}
+
+func (a *adapter) broadcastImage(ctx context.Context, in toolInput, fileID, filename string) (string, error) {
+	text := mrkdwn(in.Text)
+	var blocks []sdk.Block
+	if text != "" {
+		blocks = append(blocks, sdk.NewSectionBlock(sdk.NewTextBlockObject("mrkdwn", text, false, false), nil, nil))
+	} else {
+		text = escape(filename)
+	}
+	blocks = append(blocks, sdk.NewImageBlockSlackFile(&sdk.SlackFileObject{ID: fileID}, filename, "", nil))
+	for attempt := 0; ; attempt++ {
+		_, timestamp, err := a.bot.PostMessageContext(ctx, in.Channel, sdk.MsgOptionTS(in.Thread), sdk.MsgOptionBroadcast(), sdk.MsgOptionText(text, false), sdk.MsgOptionBlocks(blocks...))
+		if err == nil {
+			return timestamp, nil
+		}
+		var response sdk.SlackErrorResponse
+		if attempt == 5 || !errors.As(err, &response) || response.Err != "invalid_blocks" {
+			return "", slackError("broadcast Slack image failed", err)
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (a *adapter) react(ctx context.Context, in toolInput) (any, error) {
