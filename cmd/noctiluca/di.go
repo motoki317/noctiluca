@@ -70,7 +70,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		return nil, err
 	}
 	events := repository.NewEventRepository(db)
-	messaging, err := slack.New(tokens, events, slackOptions...)
+	messaging, err := slack.New("slack", tokens, events, slackOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	}
 	rules := make(map[domain.ConversationRef]domain.AcceptRule, len(config.Conversations.Rules))
 	for _, r := range config.Conversations.Rules {
-		rules[slack.Conversation(r.ID, "")] = r.rule()
+		rules[slack.Conversation("slack", r.ID, "")] = r.rule()
 	}
 	direct := domain.AcceptRule{Users: []string{config.Owner}}
 	if config.Conversations.DirectMessages != nil {

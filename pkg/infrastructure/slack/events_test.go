@@ -76,7 +76,7 @@ func TestInboundNotifications(t *testing.T) {
 			}, false)
 			a.selfUser, a.selfBot = "USELF", "BSELF"
 			a.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
-				return ref == Conversation("CTEST", "") || ref == Conversation("GTEST", "") || (direct && ref == Conversation("DTEST", ""))
+				return ref == Conversation("slack", "CTEST", "") || ref == Conversation("slack", "GTEST", "") || (direct && ref == Conversation("slack", "DTEST", ""))
 			})
 			parsed, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":`+tc.event+`}`), slackevents.OptionNoVerifyToken())
 			require.NoError(t, err)

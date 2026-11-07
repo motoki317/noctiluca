@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -32,15 +31,13 @@ type messagingRouter struct {
 	byName    map[string]*messagingInstance
 }
 
-var instanceName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-
 func newMessagingRouter(configs []Messaging) (*messagingRouter, error) {
 	if len(configs) == 0 {
 		return nil, errors.New("at least one messaging entry is required")
 	}
 	router := &messagingRouter{byName: make(map[string]*messagingInstance, len(configs))}
 	for _, config := range configs {
-		if !instanceName.MatchString(config.Name) {
+		if !domain.ValidMessagingName(config.Name) {
 			return nil, fmt.Errorf("invalid messaging entry name %q", config.Name)
 		}
 		if _, exists := router.byName[config.Name]; exists {

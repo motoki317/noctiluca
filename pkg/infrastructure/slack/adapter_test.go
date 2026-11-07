@@ -20,13 +20,18 @@ type unusedHistory struct{ domain.EventRepository }
 
 func apiAdapter(t *testing.T, handler http.HandlerFunc, user bool) *adapter {
 	t.Helper()
+	return apiInstance(t, "slack", handler, user)
+}
+
+func apiInstance(t *testing.T, name string, handler http.HandlerFunc, user bool) *adapter {
+	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	config := Config{AppToken: "xapp-test", BotToken: "xoxb-test"}
 	if user {
 		config.UserToken = "xoxp-test"
 	}
-	a, err := newAdapter(config, &unusedHistory{}, sdk.OptionAPIURL(server.URL+"/"), sdk.OptionHTTPClient(server.Client()))
+	a, err := newAdapter(name, config, &unusedHistory{}, sdk.OptionAPIURL(server.URL+"/"), sdk.OptionHTTPClient(server.Client()))
 	require.NoError(t, err)
 	return a
 }
@@ -60,7 +65,7 @@ func TestSendAndGroups(t *testing.T) {
 					w.WriteHeader(500)
 				}
 			}, user)
-			id, err := a.Send(t.Context(), Conversation("CTEST", "123.000001"), domain.OutboundMessage{Text: "**bold** [link](https://example.test)", Attachments: []domain.Attachment{{Ref: "FTEST"}}})
+			id, err := a.Send(t.Context(), Conversation("slack", "CTEST", "123.000001"), domain.OutboundMessage{Text: "**bold** [link](https://example.test)", Attachments: []domain.Attachment{{Ref: "FTEST"}}})
 			require.NoError(t, err)
 			require.Equal(t, "124.000001", id)
 			groups, err := a.UserGroups(t.Context(), []string{"GTEST"})
@@ -126,17 +131,17 @@ func TestSocketMapping(t *testing.T) {
 			require.Equal(t, kind, e.Kind)
 			if e.Text == "hi <@USELF>" {
 				require.True(t, e.MentionsMe)
-				require.Equal(t, Conversation("CTEST", "123.000001"), e.Conversation)
-				require.Equal(t, Conversation("CTEST", ""), e.Parent)
+				require.Equal(t, Conversation("slack", "CTEST", "123.000001"), e.Conversation)
+				require.Equal(t, Conversation("slack", "CTEST", ""), e.Parent)
 				require.Equal(t, "FTEST", e.Attachments[0].Ref)
 			}
 			if e.Kind == domain.InboundEventMessageEdited {
-				require.Equal(t, Conversation("DTEST", ""), e.Conversation)
+				require.Equal(t, Conversation("slack", "DTEST", ""), e.Conversation)
 				require.Equal(t, "edited", e.Text)
 			}
 			if e.Kind == domain.InboundEventReaction {
 				require.Equal(t, domain.SenderHuman, e.Sender.Kind)
-				require.Equal(t, Conversation("CTEST", ""), e.Conversation)
+				require.Equal(t, Conversation("slack", "CTEST", ""), e.Conversation)
 				require.Contains(t, e.Text, "white_check_mark")
 			}
 			if e.Text == "alert" {
@@ -185,20 +190,20 @@ func TestBotReactionClassification(t *testing.T) {
 }
 
 func TestMessageSourceReferences(t *testing.T) {
-	a := &adapter{acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
+	a := &adapter{name: "slack", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
 	for _, channel := range []string{"DTEST", "CTEST", "GTEST"} {
 		for _, thread := range []string{"", "1.2"} {
 			event, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: channel, User: "U", TimeStamp: "2.3", ThreadTimeStamp: thread})
 			require.True(t, ok)
 			require.Equal(t, channel == "DTEST", event.Direct)
-			require.Equal(t, Conversation(channel, "2.3"), event.MessageRef)
-			require.Equal(t, Conversation(channel, thread), event.Conversation)
+			require.Equal(t, Conversation("slack", channel, "2.3"), event.MessageRef)
+			require.Equal(t, Conversation("slack", channel, thread), event.Conversation)
 		}
 	}
 }
 
 func TestDeletedMessageKeepsSenderAndThread(t *testing.T) {
-	a := &adapter{selfUser: "UBOT", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
+	a := &adapter{name: "slack", selfUser: "UBOT", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
 	parsed, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"message","subtype":"message_deleted","channel":"CTEST","previous_message":{"user":"UMEMBER","text":"old body","ts":"2.000001","thread_ts":"1.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, ok := a.inbound(t.Context(), parsed.InnerEvent.Data)
@@ -206,7 +211,7 @@ func TestDeletedMessageKeepsSenderAndThread(t *testing.T) {
 	require.True(t, event.Deleted)
 	require.Equal(t, domain.InboundEventMessageEdited, event.Kind)
 	require.Equal(t, "UMEMBER", event.Sender.ID)
-	require.Equal(t, Conversation("CTEST", "1.000001"), event.Conversation)
+	require.Equal(t, Conversation("slack", "CTEST", "1.000001"), event.Conversation)
 	require.Equal(t, "[message deleted]", event.Text)
 }
 
@@ -220,7 +225,7 @@ func TestOwnerDirectMessageUsesBot(t *testing.T) {
 	}, true)
 	ref, err := a.DirectMessage(t.Context(), "UOWNER")
 	require.NoError(t, err)
-	require.Equal(t, Conversation("DOWNER", ""), ref)
+	require.Equal(t, Conversation("slack", "DOWNER", ""), ref)
 }
 
 func TestUnfurlEditsAreDropped(t *testing.T) {
@@ -239,7 +244,7 @@ func TestUnfurlEditsAreDropped(t *testing.T) {
 			raw := `{"type":"event_callback","event":{"type":"message","subtype":"message_changed","channel":"CTEST","previous_message":{"user":"UMEMBER",` + tc.before + `},"message":{"user":"UMEMBER",` + tc.after + `}}}`
 			parsed, err := slackevents.ParseEvent(json.RawMessage(raw), slackevents.OptionNoVerifyToken())
 			require.NoError(t, err)
-			_, accepted := (&adapter{}).inbound(t.Context(), parsed.InnerEvent.Data)
+			_, accepted := (&adapter{name: "slack"}).inbound(t.Context(), parsed.InnerEvent.Data)
 			require.Equal(t, tc.accepted, accepted)
 		})
 	}
@@ -248,13 +253,13 @@ func TestUnfurlEditsAreDropped(t *testing.T) {
 func TestDeniedReactionDoesNotReadRemoteUserOrMessage(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("unexpected lookup: %s", r.URL.Path) }, false)
 	a.selfUser = "USELF"
-	a.SetConversationFilter(func(ref domain.ConversationRef, _ bool) bool { return ref == Conversation("CALLOWED", "") })
+	a.SetConversationFilter(func(ref domain.ConversationRef, _ bool) bool { return ref == Conversation("slack", "CALLOWED", "") })
 	data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UMEMBER","item_user":"USELF","reaction":"eyes","item":{"type":"message","channel":"CDENIED","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, present := a.inbound(t.Context(), data.InnerEvent.Data)
 	require.True(t, present)
 	require.Equal(t, domain.InboundEventReaction, event.Kind)
-	require.Equal(t, Conversation("CDENIED", ""), event.Conversation)
+	require.Equal(t, Conversation("slack", "CDENIED", ""), event.Conversation)
 	require.Empty(t, event.Parent)
 	require.Equal(t, "UMEMBER", event.Sender.ID)
 	require.Contains(t, event.Text, "eyes")

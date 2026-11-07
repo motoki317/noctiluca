@@ -47,7 +47,7 @@ func (a *adapter) userName(ctx context.Context, id string) string {
 }
 
 func (a *adapter) SourceInfo(ctx context.Context, ref domain.ConversationRef, sender string, root bool) domain.SourceInfo {
-	channel, thread, err := destination(ref)
+	channel, thread, err := a.destination(ref)
 	if err != nil {
 		return domain.SourceInfo{Conversation: string(ref), Sender: sender}
 	}

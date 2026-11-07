@@ -2,8 +2,13 @@ package domain
 
 import (
 	"context"
+	"regexp"
 	"time"
 )
+
+var messagingNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+func ValidMessagingName(name string) bool { return messagingNamePattern.MatchString(name) }
 
 type SourceInfo struct {
 	Conversation string

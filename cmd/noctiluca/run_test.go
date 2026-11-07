@@ -355,10 +355,10 @@ mcp_servers:
 	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('slack:unjoined-source', 'slack:other-reaction-source')").Scan(&droppedInbox))
 	require.Zero(t, droppedEvents)
 	require.Zero(t, droppedInbox)
-	inbound, err := history.ListInbound(t.Context(), slack.Conversation("D_DIRECT", ""), 10)
+	inbound, err := history.ListInbound(t.Context(), slack.Conversation("slack", "D_DIRECT", ""), 10)
 	require.NoError(t, err)
 	require.Len(t, inbound, 2)
-	reactions, err := history.ListInbound(t.Context(), slack.Conversation("C_UNLISTED", ""), 10)
+	reactions, err := history.ListInbound(t.Context(), slack.Conversation("slack", "C_UNLISTED", ""), 10)
 	require.NoError(t, err)
 	require.Len(t, reactions, 1)
 	require.Equal(t, domain.InboundEventReaction, reactions[0].Kind)
@@ -380,7 +380,7 @@ mcp_servers:
 	require.True(t, reactionEpisode.ContextOnly)
 	_, err = repository.NewSessionRepository(db).Get(t.Context(), "slack:C_UNLISTED:")
 	require.ErrorIs(t, err, domain.ErrNotFound)
-	outbound, err := history.ListOutbound(t.Context(), slack.Conversation("D_DIRECT", ""), 10)
+	outbound, err := history.ListOutbound(t.Context(), slack.Conversation("slack", "D_DIRECT", ""), 10)
 	require.NoError(t, err)
 	require.Len(t, outbound, 1)
 	require.Equal(t, "**Hello** from the hub", outbound[0].Message.Text)
@@ -502,7 +502,7 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 	require.NoError(t, err)
 	inbox := repository.NewInboxRepository(app.db)
 	makeItem := func(name, text string) domain.InboxItem {
-		ref := slack.Conversation("D_"+name, "")
+		ref := slack.Conversation("slack", "D_"+name, "")
 		return domain.InboxItem{SourceKey: name, SessionKey: domain.SessionKey(ref), Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: text}, Context: domain.SessionContext{Conversation: ref, Direct: true, Workdir: dir}}}
 	}
 	pending := makeItem("PENDING", "pending-success")

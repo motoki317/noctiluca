@@ -146,7 +146,7 @@ func TestBroadcastUpload(t *testing.T) {
 				require.NoError(t, err)
 				defer db.Close()
 				history := repository.NewEventRepository(db)
-				a, err := newAdapter(Config{AppToken: "xapp-test", BotToken: "xoxb-test", UserToken: "xoxp-test"}, history, sdk.OptionAPIURL("https://example.test/"), sdk.OptionHTTPClient(&http.Client{Transport: uploadTransport(handler)}))
+				a, err := newAdapter("slack", Config{AppToken: "xapp-test", BotToken: "xoxb-test", UserToken: "xoxp-test"}, history, sdk.OptionAPIURL("https://example.test/"), sdk.OptionHTTPClient(&http.Client{Transport: uploadTransport(handler)}))
 				require.NoError(t, err)
 				ctx := t.Context()
 				if tc.cancelAfter != 0 {
@@ -172,7 +172,7 @@ func TestBroadcastUpload(t *testing.T) {
 				for range tc.wantPosts {
 					expectedCalls = append(expectedCalls, "/chat.postMessage")
 				}
-				sent, historyErr := history.ListOutbound(t.Context(), Conversation("CTEST", "123.000001"), 10)
+				sent, historyErr := history.ListOutbound(t.Context(), Conversation("slack", "CTEST", "123.000001"), 10)
 				require.NoError(t, historyErr)
 				if tc.wantError != "" {
 					require.ErrorContains(t, err, tc.wantError)
