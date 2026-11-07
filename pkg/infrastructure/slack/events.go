@@ -16,13 +16,10 @@ import (
 
 func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, bool) {
 	var event domain.InboundEvent
-	var channel, thread string
+	var channel, thread, reactionUser string
+	var mentionsMe bool
 	switch e := data.(type) {
 	case *slackevents.MessageEvent:
-		// Unfurls change attachments without changing the user's message.
-		if e.SubType == "message_changed" && e.Message != nil && e.PreviousMessage != nil && e.Message.Text == e.PreviousMessage.Text && slices.EqualFunc(e.Message.Files, e.PreviousMessage.Files, func(a, b sdk.File) bool { return a.ID == b.ID }) {
-			return event, false
-		}
 		kind := domain.InboundEventMessage
 		switch e.SubType {
 		case "", "bot_message", "file_share", "me_message", "thread_broadcast":
@@ -42,10 +39,20 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		if m == nil {
 			m = &sdk.Msg{User: e.User, BotID: e.BotID, Text: e.Text, ThreadTimestamp: e.ThreadTimeStamp, Timestamp: e.TimeStamp, Username: e.Username}
 		}
-		if (a.selfUser != "" && m.User == a.selfUser) || (a.selfBot != "" && m.BotID == a.selfBot) {
+		channel, thread = e.Channel, m.ThreadTimestamp
+		if a.isSelf(m.User, m.BotID) {
+			if thread == "" {
+				thread = m.Timestamp
+			}
+			if channel != "" && thread != "" {
+				a.joinedThreads.Store(Conversation(channel, thread), struct{}{})
+			}
 			return event, false
 		}
-		channel, thread = e.Channel, m.ThreadTimestamp
+		// Unfurls change attachments without changing the user's message.
+		if e.SubType == "message_changed" && e.Message != nil && e.PreviousMessage != nil && e.Message.Text == e.PreviousMessage.Text && slices.EqualFunc(e.Message.Files, e.PreviousMessage.Files, func(a, b sdk.File) bool { return a.ID == b.ID }) {
+			return event, false
+		}
 		if thread == m.Timestamp {
 			thread = ""
 		}
@@ -56,7 +63,8 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 				sender.ID = m.BotID
 			}
 		}
-		event = domain.InboundEvent{MessageRef: Conversation(channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">"), ReceivedAt: time.Now()}
+		mentionsMe = a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">")
+		event = domain.InboundEvent{MessageRef: Conversation(channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: mentionsMe, ReceivedAt: time.Now()}
 		posted := m.Timestamp
 		if kind == domain.InboundEventMessageEdited {
 			posted = e.EventTimeStamp
@@ -82,19 +90,8 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			return event, false
 		}
 		channel = e.Item.Channel
+		reactionUser = e.ItemUser
 		sender := domain.Sender{ID: e.User, Kind: domain.SenderBot}
-		if a.acceptConversation == nil || a.acceptConversation(Conversation(channel, ""), strings.HasPrefix(channel, "D")) {
-			// Unknown senders must not bypass the core's bot restriction.
-			if user, err := a.bot.GetUserInfoContext(ctx, e.User); err == nil {
-				if !user.IsBot {
-					sender.Kind = domain.SenderHuman
-				}
-				sender.DisplayName = user.Profile.DisplayName
-			} else {
-				slog.WarnContext(ctx, "Reaction sender lookup failed", "channel", channel, "error", err)
-			}
-
-		}
 		// The target timestamp keeps the reaction useful even when its message is unavailable.
 		event = domain.InboundEvent{MessageRef: Conversation(channel, e.Item.Timestamp), Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
 		if at := timestamp(e.EventTimestamp); !at.IsZero() {
@@ -111,5 +108,67 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 	if thread != "" {
 		event.Parent = Conversation(channel, "")
 	}
+	acceptsConversation := a.acceptConversation == nil || a.acceptConversation(Conversation(channel, ""), event.Direct)
+	if !event.Direct {
+		switch {
+		case event.Kind == domain.InboundEventReaction:
+			if reactionUser != a.selfUser {
+				return event, false
+			}
+		case thread != "" && !mentionsMe && acceptsConversation:
+			joined, err := a.joinedThread(ctx, channel, thread)
+			if err != nil {
+				slog.WarnContext(ctx, "Thread participation lookup failed", "channel", channel, "thread", thread, "error", err)
+			} else if !joined {
+				return event, false
+			}
+		}
+	}
+	if event.Kind == domain.InboundEventReaction && acceptsConversation {
+		// Unknown senders must not bypass the core's bot restriction.
+		if user, err := a.bot.GetUserInfoContext(ctx, event.Sender.ID); err == nil {
+			if !user.IsBot {
+				event.Sender.Kind = domain.SenderHuman
+			}
+			event.Sender.DisplayName = user.Profile.DisplayName
+		} else {
+			slog.WarnContext(ctx, "Reaction sender lookup failed", "channel", channel, "error", err)
+		}
+	}
 	return event, true
+}
+
+func (a *adapter) isSelf(user, bot string) bool {
+	return (a.selfUser != "" && user == a.selfUser) || (a.selfBot != "" && bot == a.selfBot)
+}
+
+func (a *adapter) joinedThread(ctx context.Context, channel, thread string) (bool, error) {
+	ref := Conversation(channel, thread)
+	if _, ok := a.joinedThreads.Load(ref); ok {
+		return true, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	params := &sdk.GetConversationRepliesParameters{ChannelID: channel, Timestamp: thread, Limit: 100}
+	reader := a.bot
+	for {
+		messages, _, cursor, err := reader.GetConversationRepliesContext(ctx, params)
+		if reader == a.bot && a.fallbackReader(err) {
+			reader = a.reader
+			messages, _, cursor, err = reader.GetConversationRepliesContext(ctx, params)
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, m := range messages {
+			if a.isSelf(m.User, m.BotID) {
+				a.joinedThreads.Store(ref, struct{}{})
+				return true, nil
+			}
+		}
+		if cursor == "" {
+			return false, nil
+		}
+		params.Cursor = cursor
+	}
 }

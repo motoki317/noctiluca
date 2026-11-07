@@ -187,7 +187,7 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 	var socketClose sync.Once
 	var groupReads atomic.Int32
 	var app *application
-	acks := make(chan string, 4)
+	acks := make(chan string, 6)
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "https://api.slack.com" }}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -219,7 +219,9 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 				envelope := fmt.Sprintf(`{"type":"events_api","envelope_id":"event-%d","payload":{"type":"event_callback","event_id":"source-%d","event":{"type":"message","channel":"D_DIRECT","channel_type":"im","user":%q,"text":"hello","ts":"1.2"}}}`, i, min(i, 1), user)
 				require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(envelope)))
 			}
-			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"reaction","payload":{"type":"event_callback","event_id":"reaction-source","event":{"type":"reaction_added","user":"U_MEMBER","reaction":"thumbsdown","item":{"type":"message","channel":"C_UNLISTED","ts":"1.2"}}}}`)))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"reaction","payload":{"type":"event_callback","event_id":"reaction-source","event":{"type":"reaction_added","user":"U_MEMBER","item_user":"U_BOT","reaction":"thumbsdown","item":{"type":"message","channel":"C_UNLISTED","ts":"1.2"}}}}`)))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"unjoined","payload":{"type":"event_callback","event_id":"unjoined-source","event":{"type":"message","channel":"C_CHANNEL","user":"U_MEMBER","text":"unjoined reply","ts":"8.1","thread_ts":"8.0"}}}`)))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"other-reaction","payload":{"type":"event_callback","event_id":"other-reaction-source","event":{"type":"reaction_added","user":"U_MEMBER","item_user":"U_OTHER","reaction":"eyes","item":{"type":"message","channel":"C_CHANNEL","ts":"8.2"}}}}`)))
 			for {
 				_, raw, err := conn.ReadMessage()
 				if err != nil {
@@ -292,7 +294,7 @@ mcp_servers:
 	}
 	require.Equal(t, "D_DIRECT", posted.Get("channel"))
 	require.Equal(t, "*Hello* from the hub", posted.Get("text"))
-	for range 4 {
+	for range 6 {
 		select {
 		case <-acks:
 		case <-time.After(time.Second):
@@ -347,6 +349,11 @@ mcp_servers:
 	require.NoError(t, err)
 	defer db.Close()
 	history := repository.NewEventRepository(db)
+	var droppedEvents, droppedInbox int
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM events WHERE message_ref IN ('slack:C_CHANNEL:8.1', 'slack:C_CHANNEL:8.2')").Scan(&droppedEvents))
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('slack:unjoined-source', 'slack:other-reaction-source')").Scan(&droppedInbox))
+	require.Zero(t, droppedEvents)
+	require.Zero(t, droppedInbox)
 	inbound, err := history.ListInbound(t.Context(), slack.Conversation("D_DIRECT", ""), 10)
 	require.NoError(t, err)
 	require.Len(t, inbound, 2)

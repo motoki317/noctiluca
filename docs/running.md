@@ -25,6 +25,17 @@ Start from [config.example.yaml](../config.example.yaml). Each token is `{env: N
 - `heartbeat`, `cron`, `consolidate`: background tasks. Consolidation is off until `consolidate.enabled: true`.
 - `mcp_servers`: external MCP servers. Every session can use the tools they expose; `tools` limits which ones load.
 
+## Conversation events
+
+Before channel rules apply, the Slack adapter selects these events:
+
+- Top-level messages, including edits and deletions.
+- Thread messages that mention the agent or belong to a thread where it posted the root or a reply. Edits, deletions, and thread broadcasts follow the same rule.
+- Reactions on messages the agent posted.
+
+The configured sender, bot, and mention restrictions still apply to these events. In DMs, every message and reaction reaches the configured `direct_messages` rules.
+
+The adapter checks thread participation through Slack, including posts from before this instance started. If that lookup fails, it logs a warning and forwards the event to the channel rules.
 
 ## Run
 

@@ -20,6 +20,8 @@ flowchart LR
 
 ## A message, end to end
 
+The diagram follows an event that passes the filter described in [Conversation events](running.md#conversation-events). The adapter acknowledges dropped events without calling the core or writing to the database.
+
 ```mermaid
 sequenceDiagram
   participant S as Slack

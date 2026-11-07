@@ -97,8 +97,8 @@ func TestSourceInfoRetriesFailedLookups(t *testing.T) {
 }
 
 func TestReactionUsesPostedTime(t *testing.T) {
-	a := &adapter{acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
-	event, ok := a.inbound(t.Context(), &slackevents.ReactionAddedEvent{User: "U1", EventTimestamp: "1730000003.000001", Item: slackevents.Item{Type: "message", Channel: "C1", Timestamp: "1.0"}})
+	a := &adapter{selfUser: "USELF", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
+	event, ok := a.inbound(t.Context(), &slackevents.ReactionAddedEvent{User: "U1", ItemUser: "USELF", EventTimestamp: "1730000003.000001", Item: slackevents.Item{Type: "message", Channel: "C1", Timestamp: "1.0"}})
 	require.True(t, ok)
 	require.Equal(t, time.Unix(1730000003, 1000), event.ReceivedAt)
 }
