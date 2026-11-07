@@ -70,21 +70,26 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		return nil, err
 	}
 	events := repository.NewEventRepository(db)
-	messaging, err := slack.New("slack", tokens, events, slackOptions...)
-	if err != nil {
-		return nil, err
+	messaging := make([]core.Messaging, 0, len(config.Messaging))
+	for i, instance := range config.Messaging {
+		adapter, err := slack.New(instance.Name, tokens[i], events, slackOptions...)
+		if err != nil {
+			return nil, err
+		}
+		rules := make(map[domain.ConversationRef]domain.AcceptRule, len(instance.Conversations.Rules))
+		for _, r := range instance.Conversations.Rules {
+			rules[slack.Conversation(instance.Name, r.ID, "")] = r.rule()
+		}
+		direct := domain.AcceptRule{Users: []string{instance.Owner}}
+		if instance.Conversations.DirectMessages != nil {
+			direct = instance.Conversations.DirectMessages.rule()
+		}
+		messaging = append(messaging, core.Messaging{Name: instance.Name, Adapter: adapter, Owner: instance.Owner, Rules: rules,
+			DirectMessages: &direct, GroupRefreshInterval: instance.groupRefreshInterval()})
 	}
 	external, err := mcpclient.New(config.MCPServers, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, logger)
 	if err != nil {
 		return nil, err
-	}
-	rules := make(map[domain.ConversationRef]domain.AcceptRule, len(config.Conversations.Rules))
-	for _, r := range config.Conversations.Rules {
-		rules[slack.Conversation("slack", r.ID, "")] = r.rule()
-	}
-	direct := domain.AcceptRule{Users: []string{config.Owner}}
-	if config.Conversations.DirectMessages != nil {
-		direct = config.Conversations.DirectMessages.rule()
 	}
 
 	model := claude.New(config.Model.Executable, config.Model.Name)
@@ -119,8 +124,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		Workdir:     config.Model.Workdir,
 		Jobs:        jobs, Procedure: procedure, TaskTimeout: config.Tasks.Timeout, TurnTimeout: config.Model.TurnTimeout,
 		Completed: consolidate.Checkpoint(episodes),
-	}, []core.Messaging{{Name: "slack", Adapter: messaging, Owner: config.Owner, Rules: rules,
-		DirectMessages: &direct, GroupRefreshInterval: config.Slack.GroupRefreshInterval}}, model, hub, events, repository.NewSessionRepository(db), nil,
+	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {
 		return nil, err

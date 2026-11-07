@@ -48,7 +48,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "memory", "owner"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory", "owner", "smoke.md"), []byte("This is a smoke test. Follow each user request literally. Post only through the reply tool. Do not read files unless explicitly requested for the smoke test. Do not change files, use external services, or persist test words in memory. When asked to watch a command, call watch, end the turn immediately, and reply only after its exit notification.\n"), 0600))
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("owner: U_OWNER\nslack:\n  app_token: {env: TEST_APP_TOKEN}\n  bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude, name: haiku, turn_timeout: 2m}\nheartbeat: {enabled: false}\nconversations:\n  rules:\n    - {id: C_ROOM, users: [U_OWNER], require_mention: false}\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\n    conversations:\n      rules:\n        - {id: C_ROOM, users: [U_OWNER], require_mention: false}\nmodel: {executable: ./claude, name: haiku, turn_timeout: 2m}\nheartbeat: {enabled: false}\n"), 0600))
 	config, err := loadConfig(path)
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
