@@ -153,31 +153,33 @@ func TestRecoveryFailureAndTaskDeadline(t *testing.T) {
 }
 
 func TestSlowOpenDoesNotBlockAnotherConversation(t *testing.T) {
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
-	require.NoError(t, err)
-	defer db.Close()
-	inbox := repository.NewInboxRepository(db)
-	for _, key := range []string{"slow-open", "fast"} {
-		item := TaskItem(key, "input", "")
-		item.SessionKey = domain.SessionKey(key)
-		item.Lane = "conv"
-		item.Payload.Context.TaskName = ""
-		_, err := inbox.Enqueue(t.Context(), item)
+	synctest.Test(t, func(t *testing.T) {
+		db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
 		require.NoError(t, err)
-	}
-	m := &modelFake{opened: make(chan *sessionFake, 2)}
-	h := &hubFake{closed: make(chan domain.SessionKey, 4)}
-	r := New(Config{TurnTimeout: 100 * time.Millisecond, MaxAttempts: 1}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), m, h)
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- r.Start(ctx) }()
-	s := take(t, m.opened)
-	require.Equal(t, domain.SessionKey("fast"), s.config.Key)
-	take(t, s.inputs)
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	require.Equal(t, domain.SessionKey("slow-open"), take(t, h.closed))
-	cancel()
-	require.NoError(t, take(t, done))
+		defer db.Close()
+		inbox := repository.NewInboxRepository(db)
+		for _, key := range []string{"slow-open", "fast"} {
+			item := TaskItem(key, "input", "")
+			item.SessionKey = domain.SessionKey(key)
+			item.Lane = "conv"
+			item.Payload.Context.TaskName = ""
+			_, err := inbox.Enqueue(t.Context(), item)
+			require.NoError(t, err)
+		}
+		m := &modelFake{opened: make(chan *sessionFake, 2)}
+		h := &hubFake{closed: make(chan domain.SessionKey, 4)}
+		r := New(Config{TurnTimeout: 100 * time.Millisecond, MaxAttempts: 1}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), m, h)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- r.Start(ctx) }()
+		s := take(t, m.opened)
+		require.Equal(t, domain.SessionKey("fast"), s.config.Key)
+		take(t, s.inputs)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		require.Equal(t, domain.SessionKey("slow-open"), take(t, h.closed))
+		cancel()
+		require.NoError(t, take(t, done))
+	})
 }
 
 func TestNoticeRetrySurvivesRestart(t *testing.T) {

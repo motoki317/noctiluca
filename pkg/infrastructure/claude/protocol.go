@@ -16,6 +16,7 @@ const authRemedy = "check `claude auth status`; run `claude /login` if the login
 
 type frame struct {
 	Result           string   `json:"result"`
+	Errors           []string `json:"errors"`
 	Type             string   `json:"type"`
 	Subtype          string   `json:"subtype"`
 	SessionID        string   `json:"session_id"`
@@ -61,6 +62,10 @@ type contentBlock struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
+}
+
+func (f frame) failedResult() bool {
+	return f.Type == "result" && (f.IsError || strings.HasPrefix(f.Subtype, "error"))
 }
 
 func parseFrame(data []byte) (frame, error) {
@@ -152,7 +157,7 @@ func (p *parser) events(f frame) []domain.ModelEvent {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: fmt.Sprintf("%s (%s): %s", f.TaskID, f.Status, f.Summary)})
 		}
 	case "result":
-		if f.IsError || strings.HasPrefix(f.Subtype, "error") {
+		if f.failedResult() {
 			// CLI error bodies can contain prompts, credentials, or tool output.
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("claude turn failed: " + authRemedy)})
 			f.Result = ""
