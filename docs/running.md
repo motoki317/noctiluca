@@ -13,13 +13,14 @@ Neither build needs cgo. Release archives for Linux and macOS are on the [Releas
 ## Requirements
 
 - Git, and Claude CLI 2.1.316 or newer logged in with a subscription.
-- A Slack app with Socket Mode, subscribed to channel and DM message events and `reaction_added`. It needs an app token (`connections:write`) and a bot token. An optional user token (`channels:history`, `channels:read`, `search:read`, `files:read`) lets the agent read any public channel the user joined and search the workspace. Posts always use the bot token.
+- For each Slack entry, a Slack app with Socket Mode, subscribed to channel and DM message events and `reaction_added`. It needs an app token (`connections:write`) and a bot token. An optional user token (`channels:history`, `channels:read`, `search:read`, `files:read`) lets the agent read any public channel that the token's user joined and search the workspace. Posts always use the bot token.
 
 ## Configure
 
 Start from [config.example.yaml](../config.example.yaml). Each token is `{env: NAME}` or `{file: path}`. Relative paths resolve against the config file.
 
-- `conversations.rules`: one rule per Slack channel ID — allowed users and user groups, `allow_bots`, `require_mention`. DMs accept only the owner unless `direct_messages` says otherwise. Unlisted channels start no turns.
+- `messaging`: one entry per chat account, in a list. Each entry has a `name` (lowercase letters, digits, and `_`, starting with a letter), a `type` (`slack`), the type's settings (Slack: tokens and `group_refresh_interval`), the account's `owner` user ID, and `conversations`. Owner notices go to the owner of the first entry. The name prefixes the entry's tool names and the conversation refs stored in the database, so renaming an entry detaches its existing sessions and history.
+- `conversations.rules` in an entry: one rule per channel ID, with allowed users and user groups, `allow_bots`, and `require_mention`. DMs accept only that entry's owner unless `direct_messages` says otherwise. Unlisted channels start no turns.
 - `model.workdir`: where Claude runs. Keep config, database, tokens, and memory outside it. Config validation rejects overlaps.
 - `memory.dir`: the memory repository. noctiluca initializes it as a Git repository if missing.
 - `heartbeat`, `cron`, `consolidate`: background tasks. Consolidation is off until `consolidate.enabled: true`.
@@ -43,7 +44,7 @@ Before channel rules apply, the Slack adapter selects these events:
 
 The configured sender, bot, and mention restrictions still apply to these events. In DMs, every message and reaction reaches the configured `direct_messages` rules.
 
-The adapter checks thread participation through Slack, including posts from before this instance started. If that lookup fails, it logs a warning and forwards the event to the channel rules.
+The adapter checks thread participation through Slack, including posts from before noctiluca started. If that lookup fails, it logs a warning and forwards the event to the channel rules.
 
 ## Run
 
