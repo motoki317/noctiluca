@@ -16,6 +16,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
+	github.com/traPtitech/go-traq v0.0.0-20261107131309-a729c099e6ce
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sync v0.24.0
 )
@@ -44,4 +45,5 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	gopkg.in/validator.v2 v2.0.1 // indirect
 )

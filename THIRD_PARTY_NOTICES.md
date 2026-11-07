@@ -80,6 +80,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## traPtitech/traQ
+
+Source: [traPtitech/traQ](https://github.com/traPtitech/traQ). License: MIT.
+
+`pkg/infrastructure/traq/events.go` implements traQ's WebSocket bot envelope and the message and stamp payloads that traQ defines in `service/bot/event/payload/`.
+The field names follow the [bot protocol documentation](https://github.com/traPtitech/traQ-bot-console/tree/master/src/docs/bot) in traPtitech/traQ-bot-console.
+No upstream implementation code was copied.
+
 ## Research and design
 
 These credits acknowledge ideas, not copied research code or paper text. They do not apply noctiluca's MIT License to the referenced works.
