@@ -11,8 +11,7 @@ import (
 
 func (c *core) replyTool() domain.Tool {
 	return domain.Tool{Name: "reply", Description: `Post only when addressed or reporting requested work. Copy the input's reply target for chat and factual answers. Copy its work target for shell commands, reviews, drafts, and background completions. Both targets preserve existing threads and keep top-level DMs at top level.
-If the message arrived before your last reply, answer only what it adds; do not repeat your previous reply. If a follow-up asks to append a phrase, send only that phrase once the answer is posted.
-End long work turns with native background execution or watch. Keep the work target for completion.`, InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy the reply target for chat, or the work target for work and background completions."},"text":{"type":"string"},"attachments":{"type":"array","items":{"type":"object","properties":{"Ref":{"type":"string"},"Name":{"type":"string"},"MIMEType":{"type":"string"}},"required":["Ref"],"additionalProperties":false}}},"required":["target","text"],"additionalProperties":false}`), Handler: c.reply}
+If the message arrived before your last reply, answer only what it adds. Do not repeat your previous reply. If a follow-up asks to append a phrase, send only that phrase once the answer is posted.`, InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy the reply target for chat, or the work target for work and background completions."},"text":{"type":"string"},"attachments":{"type":"array","items":{"type":"object","properties":{"Ref":{"type":"string"},"Name":{"type":"string"},"MIMEType":{"type":"string"}},"required":["Ref"],"additionalProperties":false}}},"required":["target","text"],"additionalProperties":false}`), Handler: c.reply}
 }
 
 func (c *core) reply(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -36,11 +35,12 @@ func (c *core) reply(ctx context.Context, raw json.RawMessage) (json.RawMessage,
 		return nil, errors.New("target is required; copy a target from the input")
 	}
 	if args.Target == "owner" {
-		provider, ok := c.messaging.(domain.DirectMessageProvider)
+		first := c.messaging.instances[0]
+		provider, ok := first.config.Adapter.(domain.DirectMessageProvider)
 		if !ok {
 			return nil, errors.New("owner destination unavailable")
 		}
-		ref, err := provider.DirectMessage(ctx, c.config.Owner)
+		ref, err := provider.DirectMessage(ctx, first.config.Owner)
 		if err != nil {
 			return nil, err
 		}

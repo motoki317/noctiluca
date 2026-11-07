@@ -25,8 +25,16 @@ func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserI
 		return domain.UserInput{}, fmt.Errorf("%w: input context: %w", domain.ErrPersistence, err)
 	}
 	var info domain.SourceInfo
-	if provider, ok := c.messaging.(domain.SourceInfoProvider); ok && target != "" && target != "owner" {
-		info = provider.SourceInfo(ctx, target, sender, !history.ThreadSeen && history.Root == nil)
+	owner := ""
+	if target != "" && target != "owner" {
+		instance, err := c.messaging.resolve(target)
+		if err != nil {
+			return domain.UserInput{}, err
+		}
+		owner = instance.config.Owner
+		if provider, ok := instance.config.Adapter.(domain.SourceInfoProvider); ok {
+			info = provider.SourceInfo(ctx, target, sender, !history.ThreadSeen && history.Root == nil)
+		}
 	}
 	if history.Root != nil {
 		info.ThreadText = history.Root.Text
@@ -34,7 +42,7 @@ func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserI
 			info.ThreadAt = history.Root.ReceivedAt
 		}
 	}
-	return formatInput(item, history, info, c.config.Owner, time.Local), nil
+	return formatInput(item, history, info, owner, time.Local), nil
 }
 
 func formatInput(item domain.InboxItem, history domain.InputContext, info domain.SourceInfo, owner string, location *time.Location) domain.UserInput {

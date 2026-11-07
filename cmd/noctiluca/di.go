@@ -115,12 +115,12 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		}
 	}
 	agent, err := core.New(core.Config{
-		Owner: config.Owner, Rules: rules, DirectMessages: &direct,
-		IdleTimeout: config.Model.IdleTimeout, GroupRefreshInterval: config.Slack.GroupRefreshInterval,
-		Workdir: config.Model.Workdir,
-		Jobs:    jobs, Procedure: procedure, TaskTimeout: config.Tasks.Timeout, TurnTimeout: config.Model.TurnTimeout,
+		IdleTimeout: config.Model.IdleTimeout,
+		Workdir:     config.Model.Workdir,
+		Jobs:        jobs, Procedure: procedure, TaskTimeout: config.Tasks.Timeout, TurnTimeout: config.Model.TurnTimeout,
 		Completed: consolidate.Checkpoint(episodes),
-	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
+	}, []core.Messaging{{Name: "slack", Adapter: messaging, Owner: config.Owner, Rules: rules,
+		DirectMessages: &direct, GroupRefreshInterval: config.Slack.GroupRefreshInterval}}, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {
 		return nil, err

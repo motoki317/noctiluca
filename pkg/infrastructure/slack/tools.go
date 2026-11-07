@@ -35,11 +35,7 @@ type toolInput struct {
 }
 
 func (a *adapter) ToolNotes() string {
-	return "One session covers a channel and all its threads. Inputs name the sender, place, local time, and reply/work targets. Process queued conversation messages that the CLI delivers during tool calls. Each has its own sender and targets. " +
-		"Reply only when addressed (a mention, a request to you, or a DM). Stay silent for chatter between other people. " +
-		"Copy targets exactly. A ref ending in a colon is top level: do not append a timestamp. " +
-		"Use the work target for watch and wake_at. Native background completions use the work target saved from their request. " +
-		"Run long work with Bash run_in_background or watch and end the turn immediately. Do not wait or poll. " +
+	return "A ref ending in a colon is top level: do not append a timestamp. " +
 		"Use slack_read_thread, slack_read_history, and slack_search for context. Slack tools take bare channel IDs. " +
 		"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true."
 }

@@ -118,7 +118,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			deliveryHub, err := toolhub.New(toolhub.Config{})
 			require.NoError(t, err)
 			messaging := &noticeMessaging{out: make(chan domain.SentMessage, 1)}
-			c, err := core.New(core.Config{Owner: "owner"}, messaging, noticeModel{}, deliveryHub, repository.NewEventRepository(db), repository.NewSessionRepository(db), nil, repository.NewScheduleRepository(db), repository.NewWatchRepository(db), nil, nil, inbox)
+			c, err := core.New(core.Config{}, []core.Messaging{{Name: "dm", Adapter: messaging, Owner: "owner"}}, noticeModel{}, deliveryHub, repository.NewEventRepository(db), repository.NewSessionRepository(db), nil, repository.NewScheduleRepository(db), repository.NewWatchRepository(db), nil, nil, inbox)
 			require.NoError(t, err)
 			coreDone := make(chan error, 1)
 			go func() { coreDone <- c.Start(t.Context()) }()
