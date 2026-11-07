@@ -19,8 +19,9 @@ messaging:
           require_mention: true
 
 model:
-  executable: claude
-  name: haiku
+  type: claude  # or codex; executable defaults to the type name
+  name: haiku  # with codex: a Codex model name, or omit for Codex's default
+  # reasoning_effort: medium  # codex only
   idle_timeout: 1h
   turn_timeout: 2h
   # Defaults to work/ beside the database, created with mode 0700.
