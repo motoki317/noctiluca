@@ -49,6 +49,22 @@ func (r *eventRepository) SaveOutbound(ctx context.Context, message domain.SentM
 const inboundColumns = `e.kind, e.conversation, e.parent, e.sender_id, e.sender_display_name,
 	e.sender_kind, e.text, e.attachments, e.mentions_me, e.received_at, e.deleted, e.accepted, e.message_ref, e.direct`
 
+func (r *eventRepository) GetInbound(ctx context.Context, messageRef domain.ConversationRef) (domain.InboundEvent, error) {
+	if messageRef == "" {
+		return domain.InboundEvent{}, domain.ErrNotFound
+	}
+	events, err := r.queryInbound(ctx, `SELECT `+inboundColumns+` FROM events e
+		WHERE e.message_ref=? AND e.kind IN ('message','message_edited')
+		ORDER BY e.received_at DESC, e.id DESC LIMIT 1`, messageRef)
+	if err != nil {
+		return domain.InboundEvent{}, err
+	}
+	if len(events) == 0 {
+		return domain.InboundEvent{}, domain.ErrNotFound
+	}
+	return events[0], nil
+}
+
 func (r *eventRepository) ListInbound(ctx context.Context, conversation domain.ConversationRef, limit int) ([]domain.InboundEvent, error) {
 	if limit <= 0 {
 		return nil, errors.New("limit must be positive")

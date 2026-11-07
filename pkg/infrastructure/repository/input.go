@@ -17,12 +17,12 @@ func (r *eventRepository) InputContext(ctx context.Context, key domain.SessionKe
 	if err != nil {
 		return info, err
 	}
-	roots, err := r.queryInbound(ctx, `SELECT `+inboundColumns+` FROM events e WHERE message_ref=? AND kind IN ('message','message_edited') ORDER BY received_at DESC, id DESC LIMIT 1`, conversation)
-	if err != nil {
+	root, err := r.GetInbound(ctx, conversation)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return info, err
 	}
-	if len(roots) > 0 {
-		info.Root = &roots[0]
+	if err == nil {
+		info.Root = &root
 	}
 	err = r.db.QueryRowContext(ctx, `SELECT sent_at FROM sends WHERE conversation=? ORDER BY sent_at DESC, id DESC LIMIT 1`, conversation).Scan(&info.LastReply)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
