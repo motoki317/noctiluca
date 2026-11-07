@@ -5,6 +5,7 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,19 @@ import (
 )
 
 type adapter struct{ executable, model, effort string }
+
+const backgroundInstruction = "In this harness, a command you leave running in the background never reports back to you. Run any command that may outlast the turn with the watch tool, never with nohup or &."
+
+func developerInstructions(prompt string) string { return prompt + "\n\n" + backgroundInstruction }
+
+func promptHash(prompt string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))[:16] }
+
+func formatResumeToken(threadID, hash string) string { return threadID + ":" + hash }
+
+func parseResumeToken(token string) (string, string) {
+	threadID, hash, _ := strings.Cut(token, ":")
+	return threadID, hash
+}
 
 func New(executable, model, effort string) domain.ModelAdapter {
 	if executable == "" {
@@ -58,8 +72,10 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 			"http_headers": map[string]string{"Authorization": "Bearer " + config.ToolHub.BearerToken},
 		}
 	}
-	params := threadParams{Cwd: workdir, Model: a.model, DeveloperInstructions: config.SystemPrompt,
-		ApprovalPolicy: "never", Sandbox: "danger-full-access", Config: overrides, ThreadID: config.ResumeToken}
+	prompt := developerInstructions(config.SystemPrompt)
+	threadID, previousHash := parseResumeToken(config.ResumeToken)
+	params := threadParams{Cwd: workdir, Model: a.model, DeveloperInstructions: prompt,
+		ApprovalPolicy: "never", Sandbox: "danger-full-access", Config: overrides, ThreadID: threadID}
 	method := "thread/start"
 	if params.ThreadID != "" {
 		method = "thread/resume"
@@ -80,8 +96,29 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 	if result.Thread.ID == "" {
 		return nil, errors.New("codex returned no thread id")
 	}
+	if params.ThreadID != "" && previousHash != promptHash(prompt) {
+		err := s.call(initCtx, "thread/inject_items", map[string]any{
+			"threadId": result.Thread.ID,
+			"items": []map[string]any{{"type": "message", "role": "developer",
+				"content": []map[string]string{{"type": "input_text", "text": prompt}}}},
+		}, nil)
+		// Older Codex versions lack thread/inject_items.
+		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 ||
+			(rpcErr.Code == -32600 && strings.HasPrefix(rpcErr.Message, "Invalid request: unknown variant `thread/inject_items`"))) {
+			slog.WarnContext(ctx, "Codex prompt injection is unavailable; starting a fresh session")
+			params.ThreadID, params.ExcludeTurns = "", false
+			result = threadResult{}
+			err = s.call(initCtx, "thread/start", params, &result)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("refresh codex instructions: %w", err)
+		}
+		if result.Thread.ID == "" {
+			return nil, errors.New("codex returned no thread id")
+		}
+	}
 	s.mu.Lock()
-	s.token = result.Thread.ID
+	s.threadID, s.promptHash = result.Thread.ID, promptHash(prompt)
 	s.mu.Unlock()
 	opened = true
 	return s, nil

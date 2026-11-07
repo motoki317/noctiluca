@@ -38,7 +38,8 @@ type session struct {
 	mu           sync.RWMutex
 	nextID       uint64
 	calls        map[string]chan rpcFrame
-	token        string
+	threadID     string
+	promptHash   string
 	active       string
 	pending      bool
 	startID      string
@@ -112,7 +113,7 @@ func (s *session) shutdown() {
 		timer.Stop()
 	}
 	s.mu.RLock()
-	token, active := s.token, s.active
+	token, active := s.threadID, s.active
 	s.mu.RUnlock()
 	if active != "" {
 		// The core cancels the process context when its turn deadline expires.
@@ -191,7 +192,7 @@ func (s *session) read(stdout io.ReadCloser) {
 			break
 		}
 		s.mu.Lock()
-		if s.token != "" && n.ThreadID != "" && n.ThreadID != s.token {
+		if s.threadID != "" && n.ThreadID != "" && n.ThreadID != s.threadID {
 			s.mu.Unlock()
 			continue
 		}
@@ -370,12 +371,16 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 		}
 		text += "\n\nAttachment references (use the messaging tools to download):\n" + string(refs)
 	}
-	_, err := s.request(ctx, "turn/start", map[string]any{"threadId": s.ResumeToken(), "input": []map[string]string{{"type": "text", "text": text}}}, nil)
+	_, err := s.request(ctx, "turn/start", map[string]any{"threadId": s.threadID, "input": []map[string]string{{"type": "text", "text": text}}}, nil)
 	return err
 }
 
 func (s *session) Events() <-chan domain.ModelEvent { return s.events }
-func (s *session) ResumeToken() string              { s.mu.RLock(); defer s.mu.RUnlock(); return s.token }
+func (s *session) ResumeToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return formatResumeToken(s.threadID, s.promptHash)
+}
 func (s *session) Idle() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

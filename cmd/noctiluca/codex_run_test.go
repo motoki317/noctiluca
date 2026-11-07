@@ -145,7 +145,7 @@ heartbeat: {enabled: false}
 			}
 			require.Eventually(t, func() bool {
 				saved, err := repository.NewSessionRepository(app.db).Get(t.Context(), domain.SessionKey("slack:D_OWNER:"))
-				return err == nil && saved.ResumeToken == "codex-thread" && saved.Turn == nil
+				return err == nil && strings.HasPrefix(saved.ResumeToken, "codex-thread:") && saved.Turn == nil
 			}, 5*time.Second, 10*time.Millisecond)
 		})
 	}

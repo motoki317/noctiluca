@@ -114,7 +114,22 @@ func TestAppServerHelper(t *testing.T) {
 				reject("permission denied secret-bearer")
 				continue
 			}
+			if mode == "injection-fresh-missing-id" && f.Method == "thread/start" {
+				respond(map[string]any{})
+				continue
+			}
 			respond(map[string]any{"thread": map[string]string{"id": "thread-1"}})
+		case "thread/inject_items":
+			switch mode {
+			case "no-injection", "injection-fresh-missing-id":
+				emit(rpcFrame{ID: f.ID, Error: &rpcError{Code: -32601, Message: "Method not found"}})
+			case "unknown-injection":
+				reject("Invalid request: unknown variant `thread/inject_items`, expected one of `initialize`, `thread/start`")
+			case "injection-error":
+				reject("invalid item")
+			default:
+				respond(map[string]any{})
+			}
 		case "turn/start":
 			if mode == "reject" {
 				reject("turn rejected")
@@ -202,7 +217,8 @@ func nextEvent(t *testing.T, s domain.ModelSession) domain.ModelEvent {
 }
 
 func TestOpenResumeAndSettings(t *testing.T) {
-	for _, resume := range []string{"", "thread-1"} {
+	token := "thread-1:" + promptHash(developerInstructions("System instructions"))
+	for _, resume := range []string{"", token} {
 		t.Run("resume="+resume, func(t *testing.T) {
 			path, dir := fakeServer(t, "normal")
 			t.Setenv("CODEX_HOME", filepath.Join(dir, "shared-home"))
@@ -211,7 +227,7 @@ func TestOpenResumeAndSettings(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			require.True(t, s.Idle())
-			require.Equal(t, "thread-1", s.ResumeToken())
+			require.Equal(t, token, s.ResumeToken())
 			capture, err := os.ReadFile(filepath.Join(dir, "invocation.json"))
 			require.NoError(t, err)
 			var inv struct {
@@ -233,10 +249,11 @@ func TestOpenResumeAndSettings(t *testing.T) {
 			require.Equal(t, method, frames[2].Method)
 			var params threadParams
 			require.NoError(t, json.Unmarshal(frames[2].Params, &params))
-			require.Equal(t, resume, params.ThreadID)
+			threadID, _, _ := strings.Cut(resume, ":")
+			require.Equal(t, threadID, params.ThreadID)
 			require.Equal(t, resume != "", params.ExcludeTurns)
 			require.Equal(t, dir, params.Cwd)
-			require.Equal(t, "System instructions", params.DeveloperInstructions)
+			require.Equal(t, "System instructions\n\n"+backgroundInstruction, params.DeveloperInstructions)
 			require.Equal(t, "never", params.ApprovalPolicy)
 			require.Equal(t, "danger-full-access", params.Sandbox)
 			require.Equal(t, "test-model", params.Model)
@@ -257,7 +274,7 @@ func TestMissingThreadFallback(t *testing.T) {
 	require.NoError(t, s.Close())
 	require.Contains(t, logs.String(), "WARN")
 	require.Contains(t, logs.String(), "starting a fresh session")
-	require.Equal(t, "thread-1", s.ResumeToken())
+	require.Equal(t, "thread-1:"+promptHash(developerInstructions("")), s.ResumeToken())
 	frames := requests(t, dir)
 	require.Len(t, frames, 4)
 	require.Equal(t, "thread/resume", frames[2].Method)
