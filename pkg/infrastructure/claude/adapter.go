@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
@@ -91,7 +92,12 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 		args = append(args, "--model", a.model)
 	}
 	if config.ResumeToken != "" {
-		args = append(args, "--resume", config.ResumeToken)
+		if _, err := uuid.Parse(config.ResumeToken); err != nil {
+			slog.WarnContext(ctx, "Claude resume token is not a UUID; starting a fresh session")
+			config.ResumeToken = ""
+		} else {
+			args = append(args, "--resume", config.ResumeToken)
+		}
 	}
 	if config.SystemPrompt != "" {
 		path := filepath.Join(dir, "prompt.txt")

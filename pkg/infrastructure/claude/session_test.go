@@ -25,6 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const savedSessionID = "11111111-1111-4111-8111-111111111111"
+
 type invocation struct {
 	Args                               []string
 	MCP                                json.RawMessage
@@ -141,7 +143,7 @@ func TestCLIHelper(t *testing.T) {
 		if os.Getenv("NOCTILUCA_TEST_INIT_AFTER_READ") == "1" {
 			scan.Scan()
 		}
-		fmt.Fprintln(os.Stderr, "private stderr: No conversation found with session ID: saved-session")
+		fmt.Fprintln(os.Stderr, "private stderr: No conversation found with session ID: "+savedSessionID)
 		emit(startupFailure)
 		os.Exit(1)
 	}
@@ -333,7 +335,7 @@ func TestSessionSteerResumeAndConfig(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "fake-secret")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "fake-token")
 	t.Setenv("CLAUDE_CODE_SIMPLE", "1")
-	s, err := New(path, "haiku").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session", SystemPrompt: "Owner instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "test-bearer"}})
+	s, err := New(path, "haiku").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID, SystemPrompt: "Owner instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "test-bearer"}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	inv := readInvocation(t, dir)
@@ -348,7 +350,7 @@ func TestSessionSteerResumeAndConfig(t *testing.T) {
 	require.NotContains(t, joined, "--bare")
 	require.NotContains(t, joined, "test-bearer")
 	require.True(t, s.Idle())
-	for _, flag := range []string{"--resume saved-session", "--model haiku", "--setting-sources user,project,local", "--permission-mode default", "--strict-mcp-config", "--allowedTools mcp__noctiluca__*"} {
+	for _, flag := range []string{"--resume " + savedSessionID, "--model haiku", "--setting-sources user,project,local", "--permission-mode default", "--strict-mcp-config", "--allowedTools mcp__noctiluca__*"} {
 		require.Contains(t, joined, flag)
 	}
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "first"}))
@@ -398,6 +400,31 @@ func readInvocations(t *testing.T, dir string) []invocation {
 	return invocations
 }
 
+func TestCodexResumeStartsFresh(t *testing.T) {
+	path, dir := fakeCLI(t, "echo")
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	token := savedSessionID + ":10086c95f9520188"
+	s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: token})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	invocations := readInvocations(t, dir)
+	require.Len(t, invocations, 1)
+	require.NotContains(t, invocations[0].Args, "--resume")
+	require.NotEqual(t, token, s.ResumeToken())
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "fresh input"}))
+	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
+	}
+	require.Equal(t, "test-session", s.ResumeToken())
+	var record struct{ Level, Msg string }
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
+	require.Equal(t, "WARN", record.Level)
+	require.Contains(t, record.Msg, "fresh session")
+	require.NotContains(t, logs.String(), token)
+}
+
 func TestMissingResumeStartsFresh(t *testing.T) {
 	for _, afterRead := range []string{"0", "1"} {
 		t.Run("after-read-"+afterRead, func(t *testing.T) {
@@ -407,7 +434,7 @@ func TestMissingResumeStartsFresh(t *testing.T) {
 			previous := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(previous) })
-			config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session", SystemPrompt: "Owner instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "test-bearer"}}
+			config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID, SystemPrompt: "Owner instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "test-bearer"}}
 			s, err := New(path, "haiku").Open(t.Context(), config)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
@@ -418,7 +445,7 @@ func TestMissingResumeStartsFresh(t *testing.T) {
 			require.Equal(t, "test-session", s.ResumeToken())
 			invocations := readInvocations(t, dir)
 			require.Len(t, invocations, 2)
-			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume saved-session")
+			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
 			require.NotContains(t, invocations[1].Args, "--resume")
 			for _, inv := range invocations {
 				require.Contains(t, strings.Join(inv.Args, " "), "--model haiku")
@@ -448,9 +475,9 @@ func TestInitializationExitKeepsResume(t *testing.T) {
 		{"auth", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Authentication required","Run login"]}`, "Authentication required; Run login"},
 		{"crash", "", authRemedy},
 		{"other-session", `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: other-session"]}`, "other-session"},
-		{"result-body", `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"No conversation found with session ID: saved-session"}`, authRemedy},
-		{"other-frame", `{"type":"system","subtype":"notice","errors":["No conversation found with session ID: saved-session"]}`, authRemedy},
-		{"successful-result", `{"type":"result","subtype":"success","errors":["No conversation found with session ID: saved-session"]}`, authRemedy},
+		{"result-body", `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"No conversation found with session ID: ` + savedSessionID + `"}`, authRemedy},
+		{"other-frame", `{"type":"system","subtype":"notice","errors":["No conversation found with session ID: ` + savedSessionID + `"]}`, authRemedy},
+		{"successful-result", `{"type":"result","subtype":"success","errors":["No conversation found with session ID: ` + savedSessionID + `"]}`, authRemedy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, afterRead := range []string{"0", "1"} {
@@ -462,7 +489,7 @@ func TestInitializationExitKeepsResume(t *testing.T) {
 					previous := slog.Default()
 					slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 					t.Cleanup(func() { slog.SetDefault(previous) })
-					config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session"}
+					config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID}
 					s, err := New(path, "").Open(t.Context(), config)
 					require.ErrorContains(t, err, "claude exited before initialization")
 					require.ErrorContains(t, err, tc.detail)
@@ -471,8 +498,8 @@ func TestInitializationExitKeepsResume(t *testing.T) {
 					require.Nil(t, s)
 					invocations := readInvocations(t, dir)
 					require.Len(t, invocations, 1)
-					require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume saved-session")
-					require.Equal(t, "saved-session", config.ResumeToken)
+					require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
+					require.Equal(t, savedSessionID, config.ResumeToken)
 					require.Empty(t, logs.String())
 				})
 			}
@@ -481,16 +508,16 @@ func TestInitializationExitKeepsResume(t *testing.T) {
 }
 
 func TestMissingResumeFallbackFailure(t *testing.T) {
-	for _, detail := range []string{"Authentication required", "No conversation found with session ID: saved-session"} {
+	for _, detail := range []string{"Authentication required", "No conversation found with session ID: " + savedSessionID} {
 		t.Run(detail, func(t *testing.T) {
 			path, dir := fakeCLI(t, "missing-resume")
 			t.Setenv("NOCTILUCA_TEST_INIT_ERROR", fmt.Sprintf(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":[%q]}`, detail))
-			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session"})
+			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID})
 			require.Nil(t, s)
 			require.ErrorContains(t, err, "claude exited before initialization: "+detail)
 			invocations := readInvocations(t, dir)
 			require.Len(t, invocations, 2)
-			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume saved-session")
+			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
 			require.NotContains(t, invocations[1].Args, "--resume")
 		})
 	}
@@ -502,7 +529,7 @@ func TestInitializationCancellationKeepsCause(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := New(path, "").Open(ctx, domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved-session"})
+		_, err := New(path, "").Open(ctx, domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID})
 		done <- err
 	}()
 	require.Eventually(t, func() bool {

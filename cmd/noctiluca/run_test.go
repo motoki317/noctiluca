@@ -484,6 +484,7 @@ func TestRunCancellationDuringStartup(t *testing.T) {
 }
 
 func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
+	const recoveryToken = "22222222-2222-4222-8222-222222222222"
 	dir := t.TempDir()
 	binary, err := os.Executable()
 	require.NoError(t, err)
@@ -519,7 +520,7 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 		if item.SourceKey == recovered.SourceKey {
 			_, err = inbox.Claim(t.Context(), id, time.Now())
 			require.NoError(t, err)
-			require.NoError(t, repository.NewSessionRepository(app.db).Save(t.Context(), domain.Session{Key: item.SessionKey, ResumeToken: "recovery-token"}))
+			require.NoError(t, repository.NewSessionRepository(app.db).Save(t.Context(), domain.Session{Key: item.SessionKey, ResumeToken: recoveryToken}))
 		}
 	}
 	_, err = repository.NewWatchRepository(app.db).Add(t.Context(), domain.Watch{Command: "must never restart", CWD: dir, Item: makeItem("WATCH", "unused")})
@@ -554,7 +555,7 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "recovery.jsonl"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "recover-success")
-	require.Contains(t, string(data), "recovery-token")
+	require.Contains(t, string(data), recoveryToken)
 	require.Contains(t, string(data), "interrupted by restart; exit unknown")
 	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
 		var record struct{ PID, Child int }
