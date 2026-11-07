@@ -144,6 +144,7 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "image.png")
 	require.NoError(t, os.WriteFile(path, body, 0o600))
 	missingInfo := false
+	botReadScope := true
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/upload" {
 			require.Equal(t, "Bearer xoxb-test", r.Header.Get("Authorization"))
@@ -171,8 +172,11 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 			require.Empty(t, r.Form.Get("reply_broadcast"))
 			_, _ = w.Write([]byte(`{"ok":true,"files":[{"id":"FTEST","title":"Photo"}]}`))
 		case "/files.info":
-			require.Equal(t, "xoxp-test", r.Form.Get("token"))
-			if missingInfo {
+			if !botReadScope && r.Form.Get("token") == "xoxb-test" {
+				_, _ = w.Write([]byte(`{"ok":false,"error":"missing_scope"}`))
+				return
+			}
+			if missingInfo || (botReadScope && r.Form.Get("token") != "xoxb-test") {
 				_, _ = w.Write([]byte(`{"ok":false,"error":"file_not_found"}`))
 				return
 			}
@@ -203,12 +207,15 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sends, 2)
 	require.Equal(t, "FTEST", sends[1].Message.Attachments[0].Ref)
+	botReadScope = false
+	result = invoke(t, a, "slack_upload_file", args)
+	require.Contains(t, string(result), `"permalink":"https://example.test/file"`)
 	missingInfo = true
 	result = invoke(t, a, "slack_upload_file", args)
 	require.Contains(t, string(result), `"warning"`)
 	sends, err = a.history.ListOutbound(t.Context(), Conversation("CTEST", "123.000001"), 10)
 	require.NoError(t, err)
-	require.Len(t, sends, 3)
+	require.Len(t, sends, 4)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.NoError(t, a.record(ctx, "already-posted", Conversation("CTEST", ""), domain.OutboundMessage{Text: "posted"}))

@@ -206,7 +206,11 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 	if err := a.record(ctx, result.ID, Conversation(in.Channel, in.Thread), message); err != nil {
 		return nil, err
 	}
-	info, _, _, err := a.reader.GetFileInfoContext(ctx, result.ID, 0, 0)
+	info, _, _, err := a.bot.GetFileInfoContext(ctx, result.ID, 0, 0)
+	var response sdk.SlackErrorResponse
+	if a.reader != a.bot && errors.As(err, &response) && response.Err == "missing_scope" {
+		info, _, _, err = a.reader.GetFileInfoContext(ctx, result.ID, 0, 0)
+	}
 	if err != nil {
 		return map[string]string{"id": result.ID, "warning": "Uploaded, but could not read the permalink."}, nil
 	}
