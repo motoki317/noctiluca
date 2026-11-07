@@ -15,7 +15,7 @@ flowchart LR
   Hub -->|reply, watch, wake_at, schedules| Core
   Hub -->|Slack tools| MA
   Hub --> Ext[external MCP servers]
-  Hub --> Mem[(memory Git repo)]
+  CLI -->|file tools and git| Mem[(memory Git repo)]
 ```
 
 ## A message, end to end
@@ -103,13 +103,13 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 | Where | What |
 |---|---|
 | SQLite | events and sends (with full-text search), inbox, sessions and resume tokens, schedules, watches, OAuth tokens |
-| memory Git repo | `owner/` (the owner's handwritten files) and `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. The heartbeat and consolidation send `procedures/heartbeat.md` and `procedures/consolidate.md` as their input. Every memory-tool write is one commit. |
+| memory Git repo | `owner/` (the owner's handwritten files) and the agent's `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. The heartbeat and consolidation send `procedures/heartbeat.md` and `procedures/consolidate.md` as their input. |
 
 ## Trust model
 
 `conversations.rules` decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and Claude's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
 
-The memory tools refuse writes, deletes, and reverts under `owner/`. This guards against mistakes, not against a session that edits those files through the shell.
+Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 
 Owner notices and the `owner` reply target go to the config's `owner` user. Input headers append ` (owner)` to that user's name so the model knows who the owner is; the marker grants no permission.
 

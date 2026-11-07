@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 			_, err = inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
 			seen := make(chan string, 1)
-			model := scriptModel{script: func(ctx context.Context, config domain.ModelSessionConfig, input domain.UserInput) error {
+			model := scriptModel{script: func(ctx context.Context, _ domain.ModelSessionConfig, input domain.UserInput) error {
 				seen <- input.Text
 				if fails {
 					return errors.New("model failed")
@@ -81,8 +82,7 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 				if len(batch.Items) != 1 || batch.Items[0].Input != "The release is Friday" {
 					return errors.New("missing episode")
 				}
-				ctx = domain.WithToolSession(ctx, domain.ToolSession{Key: config.Key})
-				return store.Write(ctx, "topics/release.md", "The release is Friday", "Record the taught release date")
+				return os.WriteFile(filepath.Join(store.Dir(), "topics/release.md"), []byte("The release is Friday"), 0600)
 			}}
 			r := reconcile.New(reconcile.Config{MaxAttempts: 1, Completed: Checkpoint(episodes), Procedure: func(ctx context.Context, name string) (string, error) {
 				return store.Read(ctx, "procedures/"+name+".md")

@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -116,61 +115,27 @@ func TestSeedingCanRestartAfterGitFailure(t *testing.T) {
 	}
 }
 
-func TestWritesCommitsAndIsolation(t *testing.T) {
+func TestReadPaths(t *testing.T) {
 	s, dir := setup(t)
-	ctx := t.Context()
-	require.NoError(t, s.Write(ctx, "topics/one.md", "first\n", "Record the first fact"))
-	require.NoError(t, s.Write(ctx, "topics/one.md", "first\n", "Confirm the first fact"))
-	require.Equal(t, "3\n", git(t, dir, "rev-list", "--count", "HEAD"))
-	require.Equal(t, "Confirm the first fact\n\n", git(t, dir, "log", "-1", "--format=%B"))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "topics/other.md"), []byte("staged"), 0600))
-	git(t, dir, "add", "topics/other.md")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "topics/other.md"), []byte("unstaged"), 0600))
-	require.NoError(t, s.Write(ctx, "topics/one.md", "changed\n", "Update the fact"))
-	require.Equal(t, "topics/one.md\n", git(t, dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))
-	require.Equal(t, "staged", git(t, dir, "show", ":topics/other.md"))
-	data, err := os.ReadFile(filepath.Join(dir, "topics/other.md"))
-	require.NoError(t, err)
-	require.Equal(t, "unstaged", string(data))
-	require.ErrorContains(t, s.Write(ctx, "topics/other.md", "overwrite", "Reject dirty target"), "uncommitted")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git/index.lock"), nil, 0600))
-	require.Error(t, s.Write(ctx, "topics/one.md", "failed", "Cannot acquire git lock"))
-	text, err := s.Read(ctx, "topics/one.md")
-	require.NoError(t, err)
-	require.Equal(t, "changed\n", text)
-	require.NoError(t, os.Remove(filepath.Join(dir, ".git/index.lock")))
-	require.NoError(t, s.Write(ctx, "topics/one.md", "recovered", "Recover after lock"))
-}
-
-func TestPathsPermissionsAndCoreLimit(t *testing.T) {
-	s, dir := setup(t)
-	ctx := t.Context()
-	require.NoError(t, s.Write(t.Context(), "notes/unknown.md", "unknown", "Record a note"))
-	require.ErrorContains(t, s.Write(ctx, "owner/persona.md", "persona", "Set persona"), "owner/ is read-only")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "owner/persona.md"), []byte("persona"), 0600))
-	text, err := s.Read(ctx, "owner/persona.md")
+	text, err := s.Read(t.Context(), "owner/persona.md")
 	require.NoError(t, err)
 	require.Equal(t, "persona", text)
 	for _, name := range []string{"../outside", "/outside", "owner/../core.md", ".git/config", "topics/.git/config", ".", "topics/a\nb", "topics/a\tb", "topics/a\x7fb", "topics/a\u0085b", "topics/a\\b"} {
-		require.Error(t, s.Write(ctx, name, "bad", "Invalid path"), name)
-		_, err := s.Read(ctx, name)
+		_, err := s.Read(t.Context(), name)
+		require.Error(t, err, name)
+		_, err = s.List(t.Context(), name)
 		require.Error(t, err, name)
 	}
 	require.NoError(t, os.Symlink("../owner/persona.md", filepath.Join(dir, "topics/link.md")))
-	require.Error(t, s.Write(ctx, "topics/link.md", "changed", "Symlink bypass"))
-	_, err = s.Read(ctx, "topics/link.md")
+	_, err = s.Read(t.Context(), "topics/link.md")
 	require.Error(t, err)
-	require.NoError(t, s.Write(ctx, "core.md", strings.Repeat("x", 8192), "Fill core"))
-	head := git(t, dir, "rev-parse", "HEAD")
-	require.ErrorContains(t, s.Write(ctx, "core.md", strings.Repeat("x", 8193), "Overflow core"), "merge or delete")
-	require.Error(t, s.Write(ctx, "core.md", strings.Repeat("語", 2731), "Multibyte overflow"))
-	require.Equal(t, head, git(t, dir, "rev-parse", "HEAD"))
-	text, err = s.Read(ctx, "core.md")
+	names, err := s.List(t.Context(), "topics")
 	require.NoError(t, err)
-	require.Len(t, text, 8192)
+	require.Empty(t, names)
 }
 
-func TestInitExistingFilesSearchAndReopen(t *testing.T) {
+func TestInitExistingFilesAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	git(t, dir, "init", "--quiet")
 	root := filepath.Join(dir, "memory")
@@ -181,38 +146,64 @@ func TestInitExistingFilesSearchAndReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, root+"\n", git(t, root, "rev-parse", "--show-toplevel"))
 	require.Equal(t, "outside.txt\nowner/persona.md\n", git(t, root, "ls-tree", "-r", "--name-only", "HEAD"))
-	matches, err := s.Search(t.Context(), "[x]")
-	require.NoError(t, err)
-	require.Equal(t, []domain.MemoryMatch{{Path: "owner/persona.md", Line: 2, Text: "日本語 [x]"}}, matches)
+	require.NoDirExists(t, filepath.Join(root, ".git/noctiluca-snapshots"))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "topics/untracked.md"), []byte("日本語 untracked"), 0600))
-	matches, err = s.Search(t.Context(), "日本")
+	text, err := s.Read(t.Context(), "topics/untracked.md")
 	require.NoError(t, err)
-	require.Len(t, matches, 2)
-	matches, err = s.Search(t.Context(), "missing")
-	require.NoError(t, err)
-	require.Empty(t, matches)
-	_, err = s.Search(t.Context(), "")
-	require.Error(t, err)
+	require.Equal(t, "日本語 untracked", text)
 	s, err = memory.New(t.Context(), memory.Config{Path: root})
 	require.NoError(t, err)
 	names, err := s.List(t.Context(), "owner")
 	require.NoError(t, err)
 	require.Equal(t, []string{"owner/persona.md"}, names)
-	require.ErrorContains(t, s.Write(t.Context(), "owner/persona.md", "updated", "Update preferences"), "owner/ is read-only")
+	names, err = s.List(t.Context(), "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"outside.txt", "owner/persona.md", "topics/untracked.md"}, names)
+	require.Equal(t, "?? topics/untracked.md\n", git(t, root, "status", "--porcelain", "--untracked-files=all"))
 }
 
-func TestConcurrentWritesAndCancellation(t *testing.T) {
-	s, dir := setup(t)
-	ctx := t.Context()
-	var wg sync.WaitGroup
-	for i := range 8 {
-		wg.Go(func() {
-			require.NoError(t, s.Write(ctx, "topics/parallel.md", strings.Repeat("x", i), "Concurrent update"))
-		})
-	}
-	wg.Wait()
-	require.Equal(t, "9\n", git(t, dir, "rev-list", "--count", "HEAD"))
-	cancelled, cancel := context.WithCancel(ctx)
+func TestReadCancellation(t *testing.T) {
+	s, _ := setup(t)
+	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.ErrorIs(t, s.Write(cancelled, "topics/parallel.md", "cancelled", "Cancelled update"), context.Canceled)
+	_, err := s.Read(cancelled, "core.md")
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = s.List(cancelled, "")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestUnbornRepositoryPreservesStagedFiles(t *testing.T) {
+	dir := t.TempDir()
+	git(t, dir, "init", "--quiet")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "core.md"), []byte("staged"), 0600))
+	git(t, dir, "add", "core.md")
+	_, err := memory.New(t.Context(), memory.Config{Path: dir})
+	require.NoError(t, err)
+	require.Empty(t, git(t, dir, "ls-tree", "--name-only", "HEAD"))
+	require.Equal(t, "A  core.md\n", git(t, dir, "status", "--porcelain"))
+}
+
+func TestOversizedCoreRemainsReadable(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Repeat("x", 8*1024+1)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "core.md"), []byte(content), 0600))
+	store, err := memory.New(t.Context(), memory.Config{Path: dir})
+	require.NoError(t, err)
+	text, err := store.Read(t.Context(), "core.md")
+	require.NoError(t, err)
+	require.Equal(t, content, text)
+}
+
+func TestStartupPreservesGitWorktrees(t *testing.T) {
+	_, dir := setup(t)
+	oldSnapshot := filepath.Join(dir, ".git/noctiluca-snapshots/old")
+	git(t, dir, "worktree", "add", "--detach", oldSnapshot, "HEAD")
+	missing := filepath.Join(t.TempDir(), "missing")
+	git(t, dir, "worktree", "add", "--detach", missing, "HEAD")
+	require.NoError(t, os.RemoveAll(missing))
+	before := git(t, dir, "worktree", "list", "--porcelain")
+	_, err := memory.New(t.Context(), memory.Config{Path: dir})
+	require.NoError(t, err)
+	require.DirExists(t, oldSnapshot)
+	require.Equal(t, before, git(t, dir, "worktree", "list", "--porcelain"))
 }

@@ -7,7 +7,7 @@ Treat ambiguous and context-only episodes as context rather than evidence of a s
 
 ## Learn from the episodes
 
-Commit facts the owner taught and clear factual corrections with `memory_write`.
+Record facts the owner taught and clear factual corrections.
 When several episodes show the same lesson, write it once as a general rule in the topic or procedure where it applies. Do not infer a rule from one failed conversation.
 
 ## Tidy the memory you maintain
@@ -18,9 +18,9 @@ Everything outside `owner/` is your own memory. Keep it short, current, and easy
 - Replace a running log with its latest state. A todo item keeps its request, link, done condition, and current status, not a history of every check.
 - Merge duplicates. Generalize several specific notes into one rule when they say the same thing.
 - Move a fact to the file where a reader would look for it. Split a file that mixes topics. Keep `core.md` to what every turn needs.
-- Check `memory_sizes` and keep every file well below its cap.
 
-Make each change a separate `memory_write` (with `delete: true` to remove a file) whose commit message says why. Do not rewrite a whole document in one edit: whole rewrites lose detail.
+Make each change a separate commit.
+Do not rewrite a whole document in one edit: whole rewrites lose detail.
 
 ## Propose the rest
 

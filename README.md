@@ -10,7 +10,7 @@ flowchart LR
   Core --- DB[(SQLite inbox)]
   CLI -->|MCP| Hub[tool hub]
   Hub -->|reply| MA
-  Hub --> Mem[(memory Git repo)]
+  CLI -->|file tools and git| Mem[(memory Git repo)]
 ```
 
 - [Running](docs/running.md): build, configure, run, test, release

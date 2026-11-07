@@ -86,8 +86,7 @@ type Config struct {
 		IdleTimeout time.Duration `mapstructure:"idle_timeout"`
 	} `mapstructure:"model"`
 	Memory struct {
-		Dir    string              `mapstructure:"dir"`
-		Limits domain.MemoryLimits `mapstructure:"limits"`
+		Dir string `mapstructure:"dir"`
 	} `mapstructure:"memory"`
 	Database repository.Config `mapstructure:"database"`
 	ToolHub  struct {
