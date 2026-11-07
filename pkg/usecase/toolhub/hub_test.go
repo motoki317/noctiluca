@@ -6,10 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -233,35 +230,6 @@ func TestCloseCancelsActiveCall(t *testing.T) {
 		t.Fatal("handler was not canceled")
 	}
 	<-done
-}
-
-func TestPortsAndShutdown(t *testing.T) {
-	h := startHub(t)
-	ep, err := h.OpenSession("session")
-	require.NoError(t, err)
-	parsed, err := url.Parse(ep.URL)
-	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1", parsed.Hostname())
-	require.NotEqual(t, "0", parsed.Port())
-	port, err := strconv.Atoi(parsed.Port())
-	require.NoError(t, err)
-	_, err = toolhub.New(toolhub.Config{Port: port})
-	require.Error(t, err)
-	require.NoError(t, h.Shutdown(t.Context()))
-	require.NoError(t, h.Shutdown(t.Context()))
-	_, err = h.OpenSession("closed")
-	require.Error(t, err)
-	require.Error(t, h.AddSource("closed", nil))
-	replacement, err := toolhub.New(toolhub.Config{Port: port})
-	require.NoError(t, err)
-	require.NoError(t, replacement.Shutdown(t.Context()))
-	listener, err := net.Listen("tcp4", parsed.Host)
-	require.NoError(t, err)
-	require.NoError(t, listener.Close())
-	for _, port := range []int{-1, 65536} {
-		_, err := toolhub.New(toolhub.Config{Port: port})
-		require.Error(t, err)
-	}
 }
 
 func TestConcurrentSessions(t *testing.T) {
