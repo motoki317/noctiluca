@@ -35,13 +35,9 @@ type toolInput struct {
 }
 
 func (a *adapter) ToolNotes() string {
-	return "One session covers a channel and all its threads. Inputs name the sender, place, local time, and reply/work targets. Process queued conversation messages that the CLI delivers during tool calls. Each has its own sender and targets. " +
-		"Reply only when addressed (a mention, a request to you, or a DM). Stay silent for chatter between other people. " +
-		"Copy targets exactly. A ref ending in a colon is top level: do not append a timestamp. " +
-		"Use the work target for watch and wake_at. Native background completions use the work target saved from their request. " +
-		"Run long work with Bash run_in_background or watch and end the turn immediately. Do not wait or poll. " +
-		"Use slack_read_thread, slack_read_history, and slack_search for context. Slack tools take bare channel IDs. " +
-		"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true."
+	return "A ref ending in a colon is top level: do not append a timestamp. " +
+		fmt.Sprintf("Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context. Slack tools take bare channel IDs. "+
+			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true.", a.name)
 }
 
 func (a *adapter) Tools() []domain.Tool {
@@ -49,7 +45,7 @@ func (a *adapter) Tools() []domain.Tool {
 	limit := map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
 	tool := func(name, description string, properties map[string]any, required []string, handler func(context.Context, toolInput) (any, error)) domain.Tool {
 		schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
-		return domain.Tool{Name: name, ReadOnly: name == "slack_read_thread" || name == "slack_read_history" || name == "slack_search", Description: description, InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		return domain.Tool{Name: a.name + "_" + name, ReadOnly: name == "read_thread" || name == "read_history" || name == "search", Description: description, InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var input toolInput
 			if err := json.Unmarshal(raw, &input); err != nil {
 				return nil, err
@@ -71,13 +67,13 @@ func (a *adapter) Tools() []domain.Tool {
 		}}
 	}
 	return []domain.Tool{
-		tool("slack_read_thread", "Read a thread. Returns messages and the next cursor.", map[string]any{"channel": str, "thread_ts": str, "limit": limit, "cursor": str}, []string{"channel", "thread_ts"}, a.readThread),
-		tool("slack_read_history", "Read recent channel messages. Returns messages and the next cursor.", map[string]any{"channel": str, "limit": limit, "cursor": str}, []string{"channel"}, a.readHistory),
-		tool("slack_search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
-		tool("slack_download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
-		tool("slack_upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
-		tool("slack_react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
-		tool("slack_send", "Post Markdown text using the same target rules as reply: keep existing threads, top level for chat and DM work, message thread for channel work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
+		tool("read_thread", "Read a thread. Returns messages and the next cursor.", map[string]any{"channel": str, "thread_ts": str, "limit": limit, "cursor": str}, []string{"channel", "thread_ts"}, a.readThread),
+		tool("read_history", "Read recent channel messages. Returns messages and the next cursor.", map[string]any{"channel": str, "limit": limit, "cursor": str}, []string{"channel"}, a.readHistory),
+		tool("search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
+		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
+		tool("upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
+		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
+		tool("send", "Post Markdown text using the same target rules as reply: keep existing threads, top level for chat and DM work, message thread for channel work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
 
@@ -234,7 +230,7 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 		}
 	}
 	message := domain.OutboundMessage{Text: in.Text, Attachments: []domain.Attachment{{Ref: result.ID, Name: filename}}}
-	if err := a.record(ctx, id, Conversation(in.Channel, in.Thread), message); err != nil {
+	if err := a.record(ctx, id, Conversation(a.name, in.Channel, in.Thread), message); err != nil {
 		return nil, err
 	}
 	info, _, _, err := a.bot.GetFileInfoContext(ctx, result.ID, 0, 0)
@@ -284,7 +280,7 @@ func (a *adapter) react(ctx context.Context, in toolInput) (any, error) {
 }
 
 func (a *adapter) sendTool(ctx context.Context, in toolInput) (any, error) {
-	ref := Conversation(in.Channel, in.Thread)
+	ref := Conversation(a.name, in.Channel, in.Thread)
 	message := domain.OutboundMessage{Text: in.Text}
 	id, err := a.post(ctx, ref, message, in.Broadcast)
 	if err != nil {

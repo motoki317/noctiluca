@@ -1,26 +1,29 @@
 # Architecture
 
-One noctiluca process runs one agent. The core knows no platform or model names: a messaging adapter translates Slack, and a model adapter translates the Claude CLI.
+One noctiluca process runs one agent. The core knows no platform or model names: each messaging adapter translates one chat account (Slack today), and a model adapter translates a model CLI (the Claude CLI today).
 
 ```mermaid
 flowchart LR
-  Slack <-->|Socket Mode, Web API| MA[messaging adapter<br/>pkg/infrastructure/slack]
-  MA -->|InboundEvent| Core[core<br/>pkg/usecase/core]
+  Chat[chat accounts] <--> MA[messaging adapters<br/>one per messaging entry]
+  MA <-->|InboundEvent, Send| Core[core<br/>pkg/usecase/core]
   Core -->|inbox row| DB[(SQLite)]
   Sched[schedules, wake_at, watch] -->|inbox row| DB
   DB --> Rec[reconciler<br/>pkg/usecase/reconcile]
-  Rec -->|Open / Send| Model[model adapter<br/>pkg/infrastructure/claude]
-  Model <--> CLI[claude CLI]
+  Rec -->|Open / Send| Model[model adapter]
+  Model <--> CLI[model CLI]
   CLI -->|MCP, session token| Hub[tool hub<br/>pkg/usecase/toolhub]
   Hub -->|reply, watch, wake_at, schedules| Core
-  Hub -->|Slack tools| MA
+  Hub -->|adapter tools| MA
   Hub --> Ext[external MCP servers]
   CLI -->|file tools and git| Mem[(memory Git repo)]
+  MA -.- E1[e.g. Slack<br/>pkg/infrastructure/slack]:::example
+  Model -.- E2[e.g. Claude Code<br/>pkg/infrastructure/claude]:::example
+  classDef example font-size:11px,fill:none,stroke-dasharray:3 3
 ```
 
 ## A message, end to end
 
-The diagram follows an event that passes the filter described in [Conversation events](running.md#conversation-events). The adapter acknowledges dropped events without calling the core or writing to the database.
+The diagram follows a Slack event that passes the filter described in [Conversation events](running.md#conversation-events). The adapter acknowledges dropped events without calling the core or writing to the database.
 
 ```mermaid
 sequenceDiagram
@@ -40,7 +43,8 @@ sequenceDiagram
   R->>M: Send (starts a turn, or queues behind the running one)
   R->>D: row done
   M->>H: reply(target, text)
-  H->>A: Send
+  H->>C: reply
+  C->>A: Send (to the adapter named by the target's prefix)
   A->>S: chat.postMessage
   M-->>R: turn_finished
 ```
@@ -78,7 +82,9 @@ type MessagingAdapter interface {
 }
 ```
 
-`ConversationRef` is an opaque string that only the adapter interprets. `InboundEvent` carries the conversation and its parent, the sender (human or bot), text, attachments, and whether the agent is mentioned. An adapter can also implement `UserGroupProvider` (group membership for accept rules), `DirectMessageProvider` (the owner's DM, for notices), and `ConversationFilter` (skips remote lookups in channels without a rule).
+Each adapter is a named entry under `messaging` in the config. The core reads only the first segment of a `ConversationRef`, which is the entry's name, and routes `Send`, the `reply` tool, and lookups to the adapter with that name. The rest of the ref is opaque, and only that adapter interprets it. An adapter's tools carry the same name as a prefix (`slack_send` for an entry named `slack`).
+
+`InboundEvent` carries the conversation and its parent, the sender (human or bot), text, attachments, and whether the agent is mentioned. An adapter can also implement `SourceInfoProvider` (readable channel and sender names for input headers), `UserGroupProvider` (group membership for accept rules), `DirectMessageProvider` (the owner's DM, for notices), and `ConversationFilter` (skips remote lookups in channels without a rule).
 
 Core ↔ model adapter (`pkg/domain/model.go`):
 
@@ -107,10 +113,10 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 
 ## Trust model
 
-`conversations.rules` decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and Claude's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
+Each `messaging` entry's `conversations` rules decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and Claude's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
 
 Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 
-Owner notices and the `owner` reply target go to the config's `owner` user. Input headers append ` (owner)` to that user's name so the model knows who the owner is; the marker grants no permission.
+Owner notices, and replies whose target is the literal `owner`, go to the `owner` of the first `messaging` entry. Input headers append ` (owner)` to a sender whose ID matches the `owner` of the entry the message came from, so the model knows who the owner is. The marker grants no permission.
 
 Real isolation needs a separate Unix user for the model, without access to noctiluca's config, tokens, and database. It is out of scope.

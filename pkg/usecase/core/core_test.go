@@ -41,7 +41,7 @@ func (f *fakeMessaging) Send(_ context.Context, to domain.ConversationRef, messa
 func (*fakeMessaging) Tools() []domain.Tool { return nil }
 func (*fakeMessaging) ToolNotes() string    { return "" }
 func (*fakeMessaging) DirectMessage(_ context.Context, user string) (domain.ConversationRef, error) {
-	return domain.ConversationRef("dm:" + user), nil
+	return domain.ConversationRef("test:dm:" + user), nil
 }
 
 type fakeModel struct {
@@ -89,6 +89,7 @@ func (s *fakeSession) Close() error {
 type fakeHub struct {
 	mu       sync.Mutex
 	tools    map[string]domain.Tool
+	sources  map[string][]domain.Tool
 	sessions map[domain.SessionKey]bool
 	closed   chan domain.SessionKey
 	count    int
@@ -99,7 +100,14 @@ func (*fakeHub) Shutdown(context.Context) error  { return nil }
 func (f *fakeHub) ReplaceSource(name string, tools []domain.Tool) error {
 	return f.AddSource(name, tools)
 }
-func (f *fakeHub) AddSource(_ string, tools []domain.Tool) error {
+func (f *fakeHub) AddSource(name string, tools []domain.Tool) error {
+	if f.sources == nil {
+		f.sources = make(map[string][]domain.Tool)
+	}
+	if _, exists := f.sources[name]; exists {
+		return fmt.Errorf("duplicate source %q", name)
+	}
+	f.sources[name] = tools
 	for _, t := range tools {
 		f.tools[t.Name] = t
 	}
@@ -135,29 +143,37 @@ type fixture struct {
 	wantError string
 }
 
-func setup(t *testing.T, config Config, prompt domain.PromptAssembler) *fixture {
-	return setupGroups(t, config, prompt, nil)
+func setup(t *testing.T, config Config, messaging Messaging, prompt domain.PromptAssembler) *fixture {
+	return setupGroups(t, config, messaging, prompt, nil)
 }
 
-func setupGroups(t *testing.T, config Config, prompt domain.PromptAssembler, groups func(context.Context, []string) (map[string][]string, error)) *fixture {
-	return setupExternal(t, config, prompt, groups, nil)
+func setupGroups(t *testing.T, config Config, messaging Messaging, prompt domain.PromptAssembler, groups func(context.Context, []string) (map[string][]string, error)) *fixture {
+	return setupExternal(t, config, messaging, prompt, groups, nil)
 }
 
-func setupExternal(t *testing.T, config Config, prompt domain.PromptAssembler, groups func(context.Context, []string) (map[string][]string, error), external domain.ExternalTools) *fixture {
-	return setupMemory(t, config, prompt, groups, external, nil)
+func setupExternal(t *testing.T, config Config, messaging Messaging, prompt domain.PromptAssembler, groups func(context.Context, []string) (map[string][]string, error), external domain.ExternalTools) *fixture {
+	return setupMemory(t, config, messaging, prompt, groups, external, nil)
 }
 
-func setupMemory(t *testing.T, config Config, prompt domain.PromptAssembler, groups func(context.Context, []string) (map[string][]string, error), external domain.ExternalTools, memory domain.MemoryStore) *fixture {
+func setupMemory(t *testing.T, config Config, messaging Messaging, prompt domain.PromptAssembler, groups func(context.Context, []string) (map[string][]string, error), external domain.ExternalTools, memory domain.MemoryStore) *fixture {
+	t.Helper()
+	m := &fakeMessaging{in: make(chan domain.InboundEvent), out: make(chan domain.SentMessage, 10)}
+	messaging.Name, messaging.Adapter = "test", m
+	if groups != nil {
+		messaging.Adapter = &groupMessaging{fakeMessaging: m, groups: groups}
+	}
+	f := setupInstances(t, config, []Messaging{messaging}, prompt, external, memory)
+	f.messaging = m
+	return f
+}
+
+func setupInstances(t *testing.T, config Config, messaging []Messaging, prompt domain.PromptAssembler, external domain.ExternalTools, memory domain.MemoryStore) *fixture {
 	t.Helper()
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "history.db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	f := &fixture{messaging: &fakeMessaging{in: make(chan domain.InboundEvent), out: make(chan domain.SentMessage, 10)}, model: &fakeModel{opened: make(chan *fakeSession, 10)},
+	f := &fixture{model: &fakeModel{opened: make(chan *fakeSession, 10)},
 		hub: &fakeHub{tools: make(map[string]domain.Tool), sessions: make(map[domain.SessionKey]bool), closed: make(chan domain.SessionKey, 10)}, events: repository.NewEventRepository(db), sessions: repository.NewSessionRepository(db), done: make(chan error, 1)}
-	var messaging domain.MessagingAdapter = f.messaging
-	if groups != nil {
-		messaging = &groupMessaging{fakeMessaging: f.messaging, groups: groups}
-	}
 	f.core, err = New(config, messaging, f.model, f.hub, f.events, f.sessions, prompt, repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, memory, repository.NewInboxRepository(db))
 	require.NoError(t, err)
 	go func() { f.done <- f.core.Start(context.Background()) }()
@@ -190,19 +206,19 @@ func message(to domain.ConversationRef, user, text string) domain.InboundEvent {
 
 func TestConversationFlow(t *testing.T) {
 	var prompts atomic.Int32
-	f := setup(t, Config{Owner: "owner", Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"owner", "member"}}, "dm": {Users: []string{"owner"}}}},
+	f := setup(t, Config{}, Messaging{Owner: "owner", Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"owner", "member"}}, "test:dm": {Users: []string{"owner"}}}},
 		func(_ context.Context, identity domain.ToolSession) (string, error) {
 			prompts.Add(1)
 			return "fresh context", nil
 		})
-	f.messaging.in <- message("room", "owner", "first")
+	f.messaging.in <- message("test:room", "owner", "first")
 	s := take(t, f.model.opened)
 	require.NotContains(t, take(t, s.inputs).Text, "fresh context")
 	require.Contains(t, s.config.SystemPrompt, "fresh context")
-	require.True(t, f.hub.active("room"))
+	require.True(t, f.hub.active("test:room"))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.messaging.in <- message("room", "member", "steer")
+	f.messaging.in <- message("test:room", "member", "steer")
 	require.Contains(t, take(t, s.inputs).Text, "steer")
 	require.EqualValues(t, 1, prompts.Load())
 	select {
@@ -213,25 +229,25 @@ func TestConversationFlow(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventText, Text: "never post this"}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "background done"}
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room"})
-	result, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"room","text":"visible"}`))
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test:room"})
+	result, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"test:room","text":"visible"}`))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"id":"sent"}`, string(result))
 	require.Equal(t, "visible", take(t, f.messaging.out).Message.Text)
-	sends, err := f.events.ListOutbound(t.Context(), "room", 30)
+	sends, err := f.events.ListOutbound(t.Context(), "test:room", 30)
 	require.NoError(t, err)
 	require.Len(t, sends, 1)
-	f.messaging.in <- message("room", "denied", "still recorded")
-	f.messaging.in <- message("dm", "owner", "private")
+	f.messaging.in <- message("test:room", "denied", "still recorded")
+	f.messaging.in <- message("test:dm", "owner", "private")
 	dm := take(t, f.model.opened)
 	take(t, dm.inputs)
-	require.True(t, f.hub.active("dm"))
-	inbound, err := f.events.ListInbound(t.Context(), "room", 30)
+	require.True(t, f.hub.active("test:dm"))
+	inbound, err := f.events.ListInbound(t.Context(), "test:room", 30)
 	require.NoError(t, err)
 	require.Len(t, inbound, 3)
 	require.NoError(t, s.Close())
-	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
-	records, err := f.events.ListModel(t.Context(), "room", 30)
+	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
+	records, err := f.events.ListModel(t.Context(), "test:room", 30)
 	require.NoError(t, err)
 	require.Len(t, records, 5)
 	require.Equal(t, domain.ModelEventBackgroundDone, records[0].Event.Kind)
@@ -243,29 +259,29 @@ func TestConversationFlow(t *testing.T) {
 }
 
 func TestChannelThreadsIdleAndResume(t *testing.T) {
-	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, func(_ context.Context, _ domain.ToolSession) (string, error) {
+	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond}, Messaging{Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"member"}}}}, func(_ context.Context, _ domain.ToolSession) (string, error) {
 		return "memory context", nil
 	})
-	require.NoError(t, f.events.SaveInbound(t.Context(), message("room", "denied", "old parent history")))
-	e := message("thread-a", "member", "first")
-	e.Parent = "room"
+	require.NoError(t, f.events.SaveInbound(t.Context(), message("test:room", "denied", "old parent history")))
+	e := message("test:thread-a", "member", "first")
+	e.Parent = "test:room"
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	input := take(t, s.inputs)
-	require.Contains(t, input.Text, "room · thread | member |")
-	require.Contains(t, input.Text, "reply → thread-a | work → thread-a")
+	require.Contains(t, input.Text, "test:room · thread | member |")
+	require.Contains(t, input.Text, "reply → test:thread-a | work → test:thread-a")
 	require.NotContains(t, input.Text, "old parent history")
 	require.NotContains(t, input.Text, "memory context")
 	require.Contains(t, s.config.SystemPrompt, "memory context")
-	for _, ref := range []domain.ConversationRef{"thread-b", "room"} {
+	for _, ref := range []domain.ConversationRef{"test:thread-b", "test:room"} {
 		e = message(ref, "member", "queued")
-		if ref != "room" {
-			e.Parent = "room"
+		if ref != "test:room" {
+			e.Parent = "test:room"
 		}
 		f.messaging.in <- e
 		input = take(t, s.inputs)
-		require.Contains(t, input.Text, "room · ")
-		if ref == "room" {
+		require.Contains(t, input.Text, "test:room · ")
+		if ref == "test:room" {
 			require.Contains(t, input.Text, "top level")
 		}
 	}
@@ -274,10 +290,10 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 		t.Fatal("opened a session per thread")
 	default:
 	}
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room"})
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test:room"})
 	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"text":"missing target"}`))
 	require.ErrorContains(t, err, "target is required")
-	for _, target := range []string{"thread-a", "thread-b", "room", "room-message"} {
+	for _, target := range []string{"test:thread-a", "test:thread-b", "test:room", "test:room-message"} {
 		_, err = f.hub.tools["reply"].Handler(ctx, json.RawMessage(fmt.Sprintf(`{"target":%q,"text":"answer"}`, target)))
 		require.NoError(t, err)
 		require.Equal(t, domain.ConversationRef(target), take(t, f.messaging.out).Conversation)
@@ -289,28 +305,28 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 		t.Fatal("closed a busy session")
 	case <-time.After(80 * time.Millisecond):
 	}
-	require.True(t, f.hub.active("room"))
+	require.True(t, f.hub.active("test:room"))
 	s.idle.Store(true)
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "done"}
-	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
-	saved, err := f.sessions.Get(t.Context(), "room")
+	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
+	saved, err := f.sessions.Get(t.Context(), "test:room")
 	require.NoError(t, err)
-	require.Equal(t, "resume-room", saved.ResumeToken)
+	require.Equal(t, "resume-test:room", saved.ResumeToken)
 	f.messaging.in <- e
 	resumed := take(t, f.model.opened)
-	require.Equal(t, "resume-room", resumed.config.ResumeToken)
+	require.Equal(t, "resume-test:room", resumed.config.ResumeToken)
 	require.NotEqual(t, s.config.ToolHub.BearerToken, resumed.config.ToolHub.BearerToken)
 	require.NotContains(t, take(t, resumed.inputs).Text, "parent_history")
 }
 
 func TestOpenFailureRevokesGrant(t *testing.T) {
-	f := setup(t, Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, nil)
+	f := setup(t, Config{}, Messaging{Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"member"}}}}, nil)
 	f.model.fail = true
 
-	f.messaging.in <- message("room", "member", "hello")
-	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
-	require.False(t, f.hub.active("room"))
-	events, err := f.events.ListInbound(t.Context(), "room", 1)
+	f.messaging.in <- message("test:room", "member", "hello")
+	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
+	require.False(t, f.hub.active("test:room"))
+	events, err := f.events.ListInbound(t.Context(), "test:room", 1)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 }
@@ -318,9 +334,10 @@ func TestOpenFailureRevokesGrant(t *testing.T) {
 func TestAcceptRules(t *testing.T) {
 	h := &fakeHub{tools: make(map[string]domain.Tool)}
 	m := &fakeMessaging{}
-	config := Config{Owner: "owner", UserGroups: map[string][]string{"team": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{
-		"room": {Groups: []string{"team"}, RequireMention: true}, "bots": {Users: []string{"bot"}, AllowBots: true}, "dm": {Users: []string{"owner"}}, "blocked": {}}}
-	c, err := New(config, m, &fakeModel{}, h, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, &unusedWatches{}, nil, nil, &unusedInbox{})
+	config := Messaging{Owner: "owner", UserGroups: map[string][]string{"team": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{
+		"test:room": {Groups: []string{"team"}, RequireMention: true}, "test:bots": {Users: []string{"bot"}, AllowBots: true}, "test:dm": {Users: []string{"owner"}}, "test:blocked": {}}}
+	config.Name, config.Adapter = "test", m
+	c, err := New(Config{}, []Messaging{config}, &fakeModel{}, h, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, &unusedWatches{}, nil, nil, &unusedInbox{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, c.Shutdown(context.Background())) })
 	impl := c.(*core)
@@ -329,8 +346,8 @@ func TestAcceptRules(t *testing.T) {
 		user               string
 		bot, mention, want bool
 	}{
-		{"room", "member", false, true, true}, {"room", "member", false, false, false}, {"room", "outsider", false, true, false},
-		{"room", "member", true, true, false}, {"bots", "bot", true, false, true}, {"dm", "owner", false, false, true}, {"blocked", "owner", false, false, false}, {"unknown", "owner", false, false, false},
+		{"test:room", "member", false, true, true}, {"test:room", "member", false, false, false}, {"test:room", "outsider", false, true, false},
+		{"test:room", "member", true, true, false}, {"test:bots", "bot", true, false, true}, {"test:dm", "owner", false, false, true}, {"test:blocked", "owner", false, false, false}, {"test:unknown", "owner", false, false, false},
 	} {
 		e := message(tc.to, tc.user, "")
 		e.MentionsMe = tc.mention
@@ -340,16 +357,16 @@ func TestAcceptRules(t *testing.T) {
 		_, ok := impl.accepted(e)
 		require.Equal(t, tc.want, ok)
 	}
-	config.Rules["dm"] = domain.AcceptRule{Users: []string{"member"}}
-	r, ok := impl.accepted(message("dm", "owner", ""))
+	config.Rules["test:dm"] = domain.AcceptRule{Users: []string{"member"}}
+	r, ok := impl.accepted(message("test:dm", "owner", ""))
 	require.True(t, ok)
 	require.Contains(t, r.users, "owner")
-	thread := message("thread", "member", "")
-	thread.Parent = "room"
+	thread := message("test:thread", "member", "")
+	thread.Parent = "test:room"
 	thread.MentionsMe = true
 	_, ok = impl.accepted(thread)
 	require.True(t, ok)
-	require.Equal(t, domain.ConversationRef("room"), channel(thread))
+	require.Equal(t, domain.ConversationRef("test:room"), channel(thread))
 }
 
 type unusedEvents struct{ domain.EventRepository }
@@ -360,14 +377,14 @@ type unusedWatches struct{ domain.WatchRepository }
 func (*fakeMessaging) Shutdown(context.Context) error { return nil }
 
 func TestShutdownDuringInput(t *testing.T) {
-	f := setup(t, Config{Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, nil)
+	f := setup(t, Config{}, Messaging{Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"member"}}}}, nil)
 	entered := make(chan struct{})
 	f.model.send = func(ctx context.Context, _ domain.UserInput) error {
 		close(entered)
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	f.messaging.in <- message("room", "member", "start")
+	f.messaging.in <- message("test:room", "member", "start")
 	take(t, entered)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
@@ -377,17 +394,17 @@ func TestShutdownDuringInput(t *testing.T) {
 type unusedInbox struct{ domain.InboxRepository }
 
 func TestConversationCanReplyToOwner(t *testing.T) {
-	f := setup(t, Config{Owner: "owner", Rules: map[domain.ConversationRef]domain.AcceptRule{"room": {Users: []string{"member"}}}}, nil)
-	f.messaging.in <- message("room", "member", "report to owner")
+	f := setup(t, Config{}, Messaging{Owner: "owner", Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"member"}}}}, nil)
+	f.messaging.in <- message("test:room", "member", "report to owner")
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "room"})
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test:room"})
 	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"owner","text":"requested report"}`))
 	require.NoError(t, err)
 	sent := take(t, f.messaging.out)
-	require.Equal(t, domain.ConversationRef("dm:owner"), sent.Conversation)
+	require.Equal(t, domain.ConversationRef("test:dm:owner"), sent.Conversation)
 	require.Equal(t, "requested report", sent.Message.Text)
-	history, err := f.events.ListOutbound(t.Context(), "dm:owner", 10)
+	history, err := f.events.ListOutbound(t.Context(), "test:dm:owner", 10)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
 }

@@ -25,6 +25,7 @@ type Config struct {
 }
 
 type adapter struct {
+	name               string
 	names              sync.Map
 	joinedThreads      sync.Map
 	acceptConversation func(domain.ConversationRef, bool) bool
@@ -37,11 +38,14 @@ type adapter struct {
 	ack                func(context.Context, string, any) error
 }
 
-func New(config Config, history domain.EventRepository, options ...sdk.Option) (domain.MessagingAdapter, error) {
-	return newAdapter(config, history, options...)
+func New(name string, config Config, history domain.EventRepository, options ...sdk.Option) (domain.MessagingAdapter, error) {
+	return newAdapter(name, config, history, options...)
 }
 
-func newAdapter(config Config, history domain.EventRepository, options ...sdk.Option) (*adapter, error) {
+func newAdapter(name string, config Config, history domain.EventRepository, options ...sdk.Option) (*adapter, error) {
+	if !domain.ValidMessagingName(name) {
+		return nil, errors.New("invalid messaging entry name")
+	}
 	if config.AppToken == "" || config.BotToken == "" {
 		return nil, errors.New("app and bot tokens are required for Slack")
 	}
@@ -55,7 +59,7 @@ func newAdapter(config Config, history domain.EventRepository, options ...sdk.Op
 		reader = sdk.New(config.UserToken, options...)
 	}
 	socket := socketmode.New(bot)
-	return &adapter{bot: bot, reader: reader, history: history, socketEvents: socket.Events, runSocket: socket.RunContext, ack: socket.AckCtx}, nil
+	return &adapter{name: name, bot: bot, reader: reader, history: history, socketEvents: socket.Events, runSocket: socket.RunContext, ack: socket.AckCtx}, nil
 }
 
 func (a *adapter) Start(ctx context.Context, consume func(context.Context, domain.InboundEvent) error) error {
@@ -101,11 +105,11 @@ func (a *adapter) Start(ctx context.Context, consume func(context.Context, domai
 					if payload, ok := e.Data.(slackevents.EventsAPIEvent); ok {
 						if event, ok := a.inbound(ctx, payload.InnerEvent.Data); ok {
 							if callback, ok := payload.Data.(*slackevents.EventsAPICallbackEvent); ok {
-								event.SourceKey = "slack:" + callback.EventID
+								event.SourceKey = a.name + ":" + callback.EventID
 							}
-							if event.SourceKey == "" || event.SourceKey == "slack:" {
+							if event.SourceKey == "" || event.SourceKey == a.name+":" {
 								if e.Request != nil {
-									event.SourceKey = "slack:" + e.Request.EnvelopeID
+									event.SourceKey = a.name + ":" + e.Request.EnvelopeID
 								}
 							}
 							if err := consume(ctx, event); err != nil {
@@ -144,13 +148,13 @@ func (a *adapter) UserGroups(ctx context.Context, ids []string) (map[string][]st
 	return groups, nil
 }
 
-func Conversation(channel, thread string) domain.ConversationRef {
-	return domain.ConversationRef("slack:" + channel + ":" + thread)
+func Conversation(name, channel, thread string) domain.ConversationRef {
+	return domain.ConversationRef(name + ":" + channel + ":" + thread)
 }
 
-func destination(ref domain.ConversationRef) (string, string, error) {
+func (a *adapter) destination(ref domain.ConversationRef) (string, string, error) {
 	parts := strings.Split(string(ref), ":")
-	if len(parts) != 3 || parts[0] != "slack" || parts[1] == "" || strings.ContainsAny(parts[1], " \t\n\r") {
+	if len(parts) != 3 || parts[0] != a.name || parts[1] == "" || strings.ContainsAny(parts[1], " \t\n\r") {
 		return "", "", errors.New("invalid Slack conversation reference")
 	}
 	return parts[1], parts[2], nil
@@ -161,7 +165,7 @@ func (a *adapter) Send(ctx context.Context, ref domain.ConversationRef, message 
 }
 
 func (a *adapter) post(ctx context.Context, ref domain.ConversationRef, message domain.OutboundMessage, broadcast bool) (string, error) {
-	channel, thread, err := destination(ref)
+	channel, thread, err := a.destination(ref)
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +204,7 @@ func (a *adapter) DirectMessage(ctx context.Context, user string) (domain.Conver
 	if err != nil {
 		return "", errors.New("open owner direct message failed")
 	}
-	return Conversation(channel.ID, ""), nil
+	return Conversation(a.name, channel.ID, ""), nil
 }
 
 func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef, bool) bool) {

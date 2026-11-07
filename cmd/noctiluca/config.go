@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -62,14 +63,15 @@ func (r acceptConfig) rule() domain.AcceptRule {
 	return domain.AcceptRule{Users: r.Users, Groups: r.Groups, AllowBots: r.AllowBots, RequireMention: r.RequireMention}
 }
 
-type Config struct {
-	Consolidate consolidate.Config `mapstructure:"consolidate"`
-	Owner       string             `mapstructure:"owner"`
-	Slack       struct {
-		AppToken             secretRef     `mapstructure:"app_token"`
-		BotToken             secretRef     `mapstructure:"bot_token"`
-		UserToken            secretRef     `mapstructure:"user_token"`
-		GroupRefreshInterval time.Duration `mapstructure:"group_refresh_interval"`
+type messagingConfig struct {
+	Name  string `mapstructure:"name"`
+	Type  string `mapstructure:"type"`
+	Owner string `mapstructure:"owner"`
+	Slack struct {
+		AppToken             secretRef      `mapstructure:"app_token"`
+		BotToken             secretRef      `mapstructure:"bot_token"`
+		UserToken            secretRef      `mapstructure:"user_token"`
+		GroupRefreshInterval *time.Duration `mapstructure:"group_refresh_interval"`
 	} `mapstructure:"slack"`
 	Conversations struct {
 		DirectMessages *acceptConfig `mapstructure:"direct_messages"`
@@ -78,7 +80,19 @@ type Config struct {
 			acceptConfig `mapstructure:",squash"`
 		} `mapstructure:"rules"`
 	} `mapstructure:"conversations"`
-	Model struct {
+}
+
+func (c messagingConfig) groupRefreshInterval() time.Duration {
+	if c.Slack.GroupRefreshInterval == nil {
+		return time.Hour
+	}
+	return *c.Slack.GroupRefreshInterval
+}
+
+type Config struct {
+	Consolidate consolidate.Config `mapstructure:"consolidate"`
+	Messaging   []messagingConfig  `mapstructure:"messaging"`
+	Model       struct {
 		Workdir     string        `mapstructure:"workdir"`
 		TurnTimeout time.Duration `mapstructure:"turn_timeout"`
 		Executable  string        `mapstructure:"executable"`
@@ -112,18 +126,14 @@ func loadConfig(path string) (Config, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
 	for key, value := range map[string]any{
-		"owner": "", "log.level": "INFO", "database.path": "noctiluca.db", "memory.dir": "memory",
+		"log.level": "INFO", "database.path": "noctiluca.db", "memory.dir": "memory",
 		"model.workdir": "", "model.turn_timeout": "2h", "model.executable": "claude", "model.name": "", "model.idle_timeout": "1h",
 		"toolhub.listen": "127.0.0.1:0", "heartbeat.enabled": true, "heartbeat.interval": "1h",
-		"slack.group_refresh_interval": "1h", "tasks.timeout": "30m",
+		"tasks.timeout":       "30m",
 		"consolidate.enabled": false, "consolidate.cron": "0 4 * * *", "consolidate.tz": "UTC",
 		"consolidate.negative_reactions": []string{"-1", "thumbsdown"},
 	} {
 		v.SetDefault(key, value)
-	}
-	for _, token := range []string{"app_token", "bot_token", "user_token"} {
-		v.SetDefault("slack."+token+".env", "")
-		v.SetDefault("slack."+token+".file", "")
 	}
 	v.SetEnvPrefix("NOCTILUCA")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -140,6 +150,13 @@ func loadConfig(path string) (Config, error) {
 			return Config{}, errors.New("invalid config: expected a YAML mapping")
 		}
 		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+	// Viper omits empty maps and null values from strict decoding.
+	keys := v.AllKeys()
+	for _, key := range []string{"owner", "slack", "conversations"} {
+		if v.InConfig(key) || slices.Contains(keys, key) {
+			return Config{}, errors.New("invalid config: move owner, slack, and conversations into messaging entries")
+		}
 	}
 	var config Config
 	if err := v.UnmarshalExact(&config); err != nil {
@@ -165,9 +182,12 @@ func loadConfig(path string) (Config, error) {
 	if config.Model.Workdir == "" {
 		config.Model.Workdir = filepath.Join(filepath.Dir(config.Database.Path), "work")
 	}
-	config.Slack.AppToken.File = absolute(config.Slack.AppToken.File)
-	config.Slack.BotToken.File = absolute(config.Slack.BotToken.File)
-	config.Slack.UserToken.File = absolute(config.Slack.UserToken.File)
+	for i := range config.Messaging {
+		slack := &config.Messaging[i].Slack
+		slack.AppToken.File = absolute(slack.AppToken.File)
+		slack.BotToken.File = absolute(slack.BotToken.File)
+		slack.UserToken.File = absolute(slack.UserToken.File)
+	}
 	if strings.ContainsRune(config.Model.Executable, filepath.Separator) {
 		config.Model.Executable = absolute(config.Model.Executable)
 	}
@@ -177,60 +197,78 @@ func loadConfig(path string) (Config, error) {
 	return config, mcpclient.Validate(config.MCPServers)
 }
 
-func (c Config) validateRun() (slack.Config, int, error) {
-	if strings.TrimSpace(c.Owner) == "" {
-		return slack.Config{}, 0, errors.New("owner is required")
+func (c Config) validateRun() ([]slack.Config, int, error) {
+	if len(c.Messaging) == 0 {
+		return nil, 0, errors.New("messaging requires at least one entry")
+	}
+	names := map[string]bool{}
+	for _, instance := range c.Messaging {
+		if !domain.ValidMessagingName(instance.Name) || names[instance.Name] {
+			return nil, 0, errors.New("messaging names must be unique and match ^[a-z][a-z0-9_]*$")
+		}
+		names[instance.Name] = true
+		if instance.Type != "slack" {
+			return nil, 0, fmt.Errorf("messaging.%s.type must be slack", instance.Name)
+		}
+		if strings.TrimSpace(instance.Owner) == "" {
+			return nil, 0, fmt.Errorf("messaging.%s.owner is required", instance.Name)
+		}
+		if instance.groupRefreshInterval() <= 0 {
+			return nil, 0, fmt.Errorf("messaging.%s.slack.group_refresh_interval must be positive", instance.Name)
+		}
 	}
 	if c.Memory.Dir == "" || c.Database.Path == "" || c.Model.Executable == "" {
-		return slack.Config{}, 0, errors.New("memory.dir, database.path, and model.executable are required")
+		return nil, 0, errors.New("memory.dir, database.path, and model.executable are required")
 	}
-	if c.Model.TurnTimeout <= 0 || c.Tasks.Timeout <= 0 || c.Model.IdleTimeout <= 0 || c.Heartbeat.Interval <= 0 || c.Slack.GroupRefreshInterval <= 0 {
-		return slack.Config{}, 0, errors.New("idle, heartbeat, and group refresh intervals must be positive")
+	if c.Model.TurnTimeout <= 0 || c.Tasks.Timeout <= 0 || c.Model.IdleTimeout <= 0 || c.Heartbeat.Interval <= 0 {
+		return nil, 0, errors.New("timeouts and intervals must be positive")
 	}
 	host, port, err := net.SplitHostPort(c.ToolHub.Listen)
 	number, numberErr := strconv.Atoi(port)
 	if err != nil || host != "127.0.0.1" || numberErr != nil || number < 0 || number > 65535 {
-		return slack.Config{}, 0, errors.New("toolhub.listen must be 127.0.0.1:<port>, with port 0 through 65535")
+		return nil, 0, errors.New("toolhub.listen must be 127.0.0.1:<port>, with port 0 through 65535")
 	}
 	if err := c.validateWorkdir(); err != nil {
-		return slack.Config{}, 0, err
+		return nil, 0, err
 	}
 	if c.Consolidate.Enabled {
 		if err := reconcile.ValidateCron(c.Consolidate.Cron); err != nil {
-			return slack.Config{}, 0, err
+			return nil, 0, err
 		}
 	}
 	for _, job := range c.Cron {
 		if err := reconcile.ValidateCron(job.Cron); err != nil {
-			return slack.Config{}, 0, err
+			return nil, 0, err
 		}
 		if job.Name == "heartbeat" || job.Name == "consolidate" {
-			return slack.Config{}, 0, errors.New("heartbeat and consolidate are reserved cron names")
+			return nil, 0, errors.New("heartbeat and consolidate are reserved cron names")
 		}
 	}
-	seen := map[string]bool{}
-	for _, rule := range c.Conversations.Rules {
-		if rule.ID == "" || strings.ContainsAny(rule.ID, ": \t\r\n") || seen[rule.ID] {
-			return slack.Config{}, 0, errors.New("conversation rules require unique channel IDs")
+	tokens := make([]slack.Config, len(c.Messaging))
+	for i, instance := range c.Messaging {
+		seen := map[string]bool{}
+		for _, rule := range instance.Conversations.Rules {
+			if rule.ID == "" || strings.ContainsAny(rule.ID, ": \t\r\n") || seen[rule.ID] {
+				return nil, 0, fmt.Errorf("messaging.%s conversation rules require unique channel IDs", instance.Name)
+			}
+			seen[rule.ID] = true
 		}
-		seen[rule.ID] = true
-	}
-	var tokens slack.Config
-	for _, field := range []struct {
-		name     string
-		source   secretRef
-		target   *string
-		required bool
-	}{
-		{"app_token", c.Slack.AppToken, &tokens.AppToken, true},
-		{"bot_token", c.Slack.BotToken, &tokens.BotToken, true},
-		{"user_token", c.Slack.UserToken, &tokens.UserToken, false},
-	} {
-		value, err := field.source.read(field.required)
-		if err != nil {
-			return slack.Config{}, 0, fmt.Errorf("slack.%s: %w", field.name, err)
+		for _, field := range []struct {
+			name     string
+			source   secretRef
+			target   *string
+			required bool
+		}{
+			{"app_token", instance.Slack.AppToken, &tokens[i].AppToken, true},
+			{"bot_token", instance.Slack.BotToken, &tokens[i].BotToken, true},
+			{"user_token", instance.Slack.UserToken, &tokens[i].UserToken, false},
+		} {
+			value, err := field.source.read(field.required)
+			if err != nil {
+				return nil, 0, fmt.Errorf("messaging.%s.slack.%s: %w", instance.Name, field.name, err)
+			}
+			*field.target = value
 		}
-		*field.target = value
 	}
 	return tokens, number, nil
 }
@@ -263,7 +301,11 @@ func (c Config) validateWorkdir() error {
 		rel, err := filepath.Rel(base, path)
 		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	}
-	for _, path := range []string{c.path, c.Database.Path, c.Memory.Dir, c.Slack.AppToken.File, c.Slack.BotToken.File, c.Slack.UserToken.File} {
+	paths := []string{c.path, c.Database.Path, c.Memory.Dir}
+	for _, instance := range c.Messaging {
+		paths = append(paths, instance.Slack.AppToken.File, instance.Slack.BotToken.File, instance.Slack.UserToken.File)
+	}
+	for _, path := range paths {
 		if path == "" {
 			continue
 		}

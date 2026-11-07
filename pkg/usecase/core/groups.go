@@ -37,7 +37,48 @@ type compiledRules struct {
 	direct        *rule
 }
 
-func compileRules(config Config) (compiledRules, error) {
+func newMessagingInstance(config Messaging) (*messagingInstance, error) {
+	if config.GroupRefreshInterval < 0 {
+		return nil, errors.New("group refresh interval must be positive")
+	}
+	if config.GroupRefreshInterval == 0 {
+		config.GroupRefreshInterval = time.Hour
+	}
+	config.Rules = cloneRules(config.Rules)
+	config.UserGroups = cloneGroups(config.UserGroups)
+	all := make([]domain.AcceptRule, 0, len(config.Rules)+1)
+	for _, r := range config.Rules {
+		all = append(all, r)
+	}
+	if config.DirectMessages != nil {
+		direct := cloneRule(*config.DirectMessages)
+		config.DirectMessages = &direct
+		all = append(all, direct)
+	}
+	var ids []string
+	for _, r := range all {
+		for _, id := range r.Groups {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	slices.Sort(ids)
+	if _, ok := config.Adapter.(domain.UserGroupProvider); ok {
+		for _, id := range ids {
+			if _, exists := config.UserGroups[id]; !exists {
+				config.UserGroups[id] = nil
+			}
+		}
+	}
+	rules, err := compileRules(config)
+	if err != nil {
+		return nil, err
+	}
+	return &messagingInstance{config: config, rules: rules, groupIDs: ids}, nil
+}
+
+func compileRules(config Messaging) (compiledRules, error) {
 	rules := compiledRules{conversations: make(map[domain.ConversationRef]rule, len(config.Rules))}
 	for conversation, value := range config.Rules {
 		if conversation == "" {
@@ -59,7 +100,7 @@ func compileRules(config Config) (compiledRules, error) {
 	return rules, nil
 }
 
-func compileRule(config Config, value domain.AcceptRule) (rule, error) {
+func compileRule(config Messaging, value domain.AcceptRule) (rule, error) {
 	r := rule{users: make(map[string]struct{}), allowBots: value.AllowBots, requireMention: value.RequireMention}
 	users := slices.Clone(value.Users)
 	for _, group := range value.Groups {
@@ -78,7 +119,12 @@ func compileRule(config Config, value domain.AcceptRule) (rule, error) {
 	return r, nil
 }
 
-func (c *core) findRule(rules compiledRules, conversation domain.ConversationRef, direct bool) (rule, bool) {
+func (c *core) findRule(conversation domain.ConversationRef, direct bool) (rule, bool) {
+	instance, err := c.messaging.resolve(conversation)
+	if err != nil {
+		return rule{}, false
+	}
+	rules := instance.rules
 	r, ok := rules.conversations[conversation]
 	if !ok && direct && rules.direct != nil {
 		return *rules.direct, true
@@ -86,44 +132,42 @@ func (c *core) findRule(rules compiledRules, conversation domain.ConversationRef
 	return r, ok
 }
 
-func (c *core) UpdateUserGroups(ctx context.Context, groups map[string][]string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return c.applyGroups(groups)
-}
-func (c *core) applyGroups(groups map[string][]string) error {
+func (c *core) applyGroups(instance *messagingInstance, groups map[string][]string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	config := c.config
+	config := instance.config
 	config.UserGroups = cloneGroups(groups)
 	rules, err := compileRules(config)
 	if err != nil {
 		return err
 	}
-	c.config.UserGroups = config.UserGroups
-	c.rules = rules
+	instance.config.UserGroups = config.UserGroups
+	instance.rules = rules
 	c.reconciler.Notify()
 	return nil
 }
 
-func (c *core) refreshGroups(ctx context.Context, provider domain.UserGroupProvider) error {
-	ticker := time.NewTicker(c.config.GroupRefreshInterval)
+func (c *core) loadGroups(ctx context.Context, instance *messagingInstance, provider domain.UserGroupProvider) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	groups, err := provider.UserGroups(refreshCtx, instance.groupIDs)
+	if err == nil && refreshCtx.Err() == nil {
+		err = c.applyGroups(instance, groups)
+	}
+	if err != nil && ctx.Err() == nil {
+		slog.WarnContext(ctx, "User group refresh failed; retaining previous membership", "messaging_entry", instance.config.Name, "error", err)
+	}
+}
+
+func (c *core) refreshGroups(ctx context.Context, instance *messagingInstance, provider domain.UserGroupProvider) error {
+	ticker := time.NewTicker(instance.config.GroupRefreshInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			groups, err := provider.UserGroups(refreshCtx, c.groupIDs)
-			if err == nil {
-				err = c.UpdateUserGroups(refreshCtx, groups)
-			}
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				slog.WarnContext(ctx, "User group refresh failed; retaining previous membership")
-			}
+			c.loadGroups(ctx, instance, provider)
 		}
 	}
 }

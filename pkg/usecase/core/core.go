@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -18,20 +17,15 @@ import (
 )
 
 type Config struct {
-	Owner                string
-	Rules                map[domain.ConversationRef]domain.AcceptRule
-	DirectMessages       *domain.AcceptRule
-	UserGroups           map[string][]string
-	IdleTimeout          time.Duration
-	TaskTimeout          time.Duration
-	TurnTimeout          time.Duration
-	RetryDelay           time.Duration
-	MaxAttempts          int
-	GroupRefreshInterval time.Duration
-	Workdir              string
-	Jobs                 []domain.Schedule
-	Procedure            func(context.Context, string) (string, error)
-	Completed            func(context.Context, string, time.Time) error
+	IdleTimeout time.Duration
+	TaskTimeout time.Duration
+	TurnTimeout time.Duration
+	RetryDelay  time.Duration
+	MaxAttempts int
+	Workdir     string
+	Jobs        []domain.Schedule
+	Procedure   func(context.Context, string) (string, error)
+	Completed   func(context.Context, string, time.Time) error
 }
 type rule struct {
 	users                     map[string]struct{}
@@ -39,8 +33,7 @@ type rule struct {
 }
 type core struct {
 	config           Config
-	rules            compiledRules
-	messaging        domain.MessagingAdapter
+	messaging        *messagingRouter
 	events           domain.EventRepository
 	sessions         domain.SessionRepository
 	inbox            domain.InboxRepository
@@ -52,70 +45,45 @@ type core struct {
 	cancel           context.CancelFunc
 	started, stopped bool
 	done             chan struct{}
-	groupIDs         []string
 }
 
-func New(config Config, messaging domain.MessagingAdapter, model domain.ModelAdapter, hub domain.ToolHub, events domain.EventRepository, sessions domain.SessionRepository, prompt domain.PromptAssembler, schedules domain.ScheduleRepository, watches domain.WatchRepository, external domain.ExternalTools, memory domain.MemoryStore, inbox domain.InboxRepository) (domain.Core, error) {
-	if messaging == nil || model == nil || hub == nil || events == nil || sessions == nil || schedules == nil || inbox == nil {
+func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub domain.ToolHub, events domain.EventRepository, sessions domain.SessionRepository, prompt domain.PromptAssembler, schedules domain.ScheduleRepository, watches domain.WatchRepository, external domain.ExternalTools, memory domain.MemoryStore, inbox domain.InboxRepository) (domain.Core, error) {
+	if model == nil || hub == nil || events == nil || sessions == nil || schedules == nil || inbox == nil {
 		return nil, errors.New("core dependencies are required")
 	}
-	if config.IdleTimeout < 0 || config.TaskTimeout < 0 || config.GroupRefreshInterval < 0 {
+	if config.IdleTimeout < 0 || config.TaskTimeout < 0 {
 		return nil, errors.New("timeouts must be positive")
 	}
-	if config.GroupRefreshInterval == 0 {
-		config.GroupRefreshInterval = time.Hour
-	}
-	config.Rules = cloneRules(config.Rules)
-	config.UserGroups = cloneGroups(config.UserGroups)
-	if config.DirectMessages != nil {
-		direct := cloneRule(*config.DirectMessages)
-		config.DirectMessages = &direct
-	}
-	all := make([]domain.AcceptRule, 0, len(config.Rules)+1)
-	for _, r := range config.Rules {
-		all = append(all, r)
-	}
-	if config.DirectMessages != nil {
-		all = append(all, *config.DirectMessages)
-	}
-	var ids []string
-	for _, r := range all {
-		for _, id := range r.Groups {
-			if !slices.Contains(ids, id) {
-				ids = append(ids, id)
-			}
-		}
-	}
-	slices.Sort(ids)
-	if _, ok := messaging.(domain.UserGroupProvider); ok {
-		for _, id := range ids {
-			if _, exists := config.UserGroups[id]; !exists {
-				config.UserGroups[id] = nil
-			}
-		}
-	}
-	rules, err := compileRules(config)
+	router, err := newMessagingRouter(messaging)
 	if err != nil {
 		return nil, err
 	}
-	c := &core{config: config, rules: rules, messaging: messaging, events: events, sessions: sessions, inbox: inbox, hub: hub, external: external, done: make(chan struct{}), groupIDs: ids}
-	if filter, ok := messaging.(domain.ConversationFilter); ok {
-		filter.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			rule, ok := c.findRule(c.rules, ref, direct)
-			return ok && len(rule.users) > 0
-		})
+	c := &core{config: config, messaging: router, events: events, sessions: sessions, inbox: inbox, hub: hub, external: external, done: make(chan struct{})}
+	for _, instance := range router.instances {
+		if filter, ok := instance.config.Adapter.(domain.ConversationFilter); ok {
+			filter.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				owner, err := router.resolve(ref)
+				if err != nil || owner != instance {
+					return false
+				}
+				rule, ok := c.findRule(ref, direct)
+				return ok && len(rule.users) > 0
+			})
+		}
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: memoryusecase.Prompt(memory, messaging.ToolNotes()+"\n\n"+c.replyTool().Description, prompt), Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, schedules, sessions, events, model, hub)
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: memoryusecase.Prompt(memory, c.toolNotes(), prompt), Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
 	tools := append([]domain.Tool{c.replyTool()}, c.reconciler.Tools()...)
 	tools = append(tools, c.watcher.Tools()...)
 	if err := hub.AddSource("core", tools); err != nil {
 		return nil, err
 	}
-	if err := hub.AddSource("messaging", messaging.Tools()); err != nil {
-		return nil, err
+	for _, instance := range router.instances {
+		if err := hub.AddSource("messaging:"+instance.config.Name, instance.config.Adapter.Tools()); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -150,16 +118,13 @@ func (c *core) Start(ctx context.Context) (result error) {
 			slog.WarnContext(ctx, "External tools unavailable", "error", err)
 		}
 	}
-	if provider, ok := c.messaging.(domain.UserGroupProvider); ok && len(c.groupIDs) > 0 {
-		groups, err := provider.UserGroups(ctx, c.groupIDs)
-		if err != nil {
-			slog.WarnContext(ctx, "User group lookup failed", "error", err)
-			groups = c.config.UserGroups
-		}
-		if err := c.applyGroups(groups); err != nil {
-			return err
+	var initialGroups sync.WaitGroup
+	for _, instance := range c.messaging.instances {
+		if provider, ok := instance.config.Adapter.(domain.UserGroupProvider); ok && len(instance.groupIDs) > 0 {
+			initialGroups.Go(func() { c.loadGroups(ctx, instance, provider) })
 		}
 	}
+	initialGroups.Wait()
 	if err := c.reconciler.Install(ctx, c.config.Jobs); err != nil {
 		return err
 	}
@@ -167,12 +132,14 @@ func (c *core) Start(ctx context.Context) (result error) {
 	g.Go(func() error { return c.hub.Start(runCtx) })
 	g.Go(func() error { return c.reconciler.Start(runCtx) })
 	g.Go(func() error { return c.watcher.Start(runCtx) })
-	g.Go(func() error { return c.runMessaging(runCtx) })
+	for _, instance := range c.messaging.instances {
+		g.Go(func() error { return c.runMessaging(runCtx, instance) })
+		if provider, ok := instance.config.Adapter.(domain.UserGroupProvider); ok && len(instance.groupIDs) > 0 {
+			g.Go(func() error { return c.refreshGroups(runCtx, instance, provider) })
+		}
+	}
 	if c.external != nil {
 		g.Go(func() error { return c.external.Start(runCtx) })
-	}
-	if provider, ok := c.messaging.(domain.UserGroupProvider); ok && len(c.groupIDs) > 0 {
-		g.Go(func() error { return c.refreshGroups(runCtx, provider) })
 	}
 	result = g.Wait()
 	if ctx.Err() != nil {
@@ -185,7 +152,7 @@ func (c *core) Shutdown(ctx context.Context) error {
 	if !c.started {
 		c.stopped = true
 		c.mu.Unlock()
-		return c.hub.Shutdown(ctx)
+		return errors.Join(c.hub.Shutdown(ctx), c.messaging.Shutdown(ctx))
 	}
 	c.cancel()
 	c.mu.Unlock()
@@ -197,7 +164,7 @@ func (c *core) Shutdown(ctx context.Context) error {
 	}
 }
 func (c *core) accepted(event domain.InboundEvent) (rule, bool) {
-	r, ok := c.findRule(c.rules, channel(event), event.Direct)
+	r, ok := c.findRule(channel(event), event.Direct)
 	if !ok || event.Conversation == "" || (r.requireMention && !event.MentionsMe) {
 		return r, false
 	}
@@ -255,12 +222,13 @@ func (c *core) workItem(ctx context.Context, key domain.SessionKey) (domain.Inbo
 }
 
 func (c *core) notifyOwner(ctx context.Context, text string) error {
-	provider, ok := c.messaging.(domain.DirectMessageProvider)
+	first := c.messaging.instances[0]
+	provider, ok := first.config.Adapter.(domain.DirectMessageProvider)
 	if !ok {
 		slog.WarnContext(ctx, "Messaging adapter has no owner DM destination")
 		return nil
 	}
-	ref, err := provider.DirectMessage(ctx, c.config.Owner)
+	ref, err := provider.DirectMessage(ctx, first.config.Owner)
 	if err != nil {
 		return err
 	}
@@ -281,19 +249,30 @@ func (c *core) acceptSession(info domain.SessionContext) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r, ok := c.findRule(c.rules, info.Conversation, info.Direct)
+	r, ok := c.findRule(info.Conversation, info.Direct)
 	return ok && len(r.users) > 0
 }
-func (c *core) runMessaging(ctx context.Context) error {
+func (c *core) runMessaging(ctx context.Context, instance *messagingInstance) error {
 	for ctx.Err() == nil {
-		err := c.messaging.Start(ctx, c.receive)
+		err := instance.config.Adapter.Start(ctx, func(ctx context.Context, event domain.InboundEvent) error {
+			for _, ref := range []domain.ConversationRef{event.Conversation, channel(event)} {
+				owner, err := c.messaging.resolve(ref)
+				if err != nil {
+					return err
+				}
+				if owner != instance {
+					return fmt.Errorf("event ref %q does not belong to messaging entry %q", ref, instance.config.Name)
+				}
+			}
+			return c.receive(ctx, event)
+		})
 		if ctx.Err() != nil {
 			return nil
 		}
 		if errors.Is(err, domain.ErrPersistence) {
 			return err
 		}
-		slog.WarnContext(ctx, "Messaging connection ended; retrying", "error", err)
+		slog.WarnContext(ctx, "Messaging connection ended; retrying", "messaging_entry", instance.config.Name, "error", err)
 		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():

@@ -5,6 +5,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 ## Scope
 
 - One agent per instance. Several agents run as several instances that talk on the messaging platform.
+- One agent, several chat accounts, each a named `messaging` entry whose name prefixes its refs and tool names. The core needs a prefix anyway to route a ref to its adapter. A name instead of a platform type also lets two workspaces of one platform run side by side.
 - Only what a current workload needs (see Workloads). noctiluca replaces OpenClaw mainly to drop features and configuration that got in the way.
 
 ## Runtime
@@ -39,7 +40,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 
 | Workload | What it needs |
 |---|---|
-| Owner DMs, team channels open to a user group, with or without mentions | `conversations.rules`, group refresh |
+| Owner DMs, team channels open to a user group, with or without mentions | `conversations` rules, group refresh |
 | Alert channels where bot posts start an investigation, a reaction marks it done | top-level bot posts, replies in joined threads, read tools that show reactions on alert posts |
 | Hourly heartbeat over a todo list | heartbeat schedule, `procedures/heartbeat.md` |
 | Daily photo: morning DM preview, evening thread post sent to the channel too | cron with timezone, upload and broadcast tools |

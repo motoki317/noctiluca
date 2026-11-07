@@ -45,7 +45,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 				thread = m.Timestamp
 			}
 			if channel != "" && thread != "" {
-				a.joinedThreads.Store(Conversation(channel, thread), struct{}{})
+				a.joinedThreads.Store(Conversation(a.name, channel, thread), struct{}{})
 			}
 			return event, false
 		}
@@ -64,7 +64,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			}
 		}
 		mentionsMe = a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">")
-		event = domain.InboundEvent{MessageRef: Conversation(channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: mentionsMe, ReceivedAt: time.Now()}
+		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: mentionsMe, ReceivedAt: time.Now()}
 		posted := m.Timestamp
 		if kind == domain.InboundEventMessageEdited {
 			posted = e.EventTimeStamp
@@ -93,7 +93,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		reactionUser = e.ItemUser
 		sender := domain.Sender{ID: e.User, Kind: domain.SenderBot}
 		// The target timestamp keeps the reaction useful even when its message is unavailable.
-		event = domain.InboundEvent{MessageRef: Conversation(channel, e.Item.Timestamp), Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
+		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, e.Item.Timestamp), Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
 		if at := timestamp(e.EventTimestamp); !at.IsZero() {
 			event.ReceivedAt = at
 		}
@@ -104,11 +104,11 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		return event, false
 	}
 	event.Direct = strings.HasPrefix(channel, "D")
-	event.Conversation = Conversation(channel, thread)
+	event.Conversation = Conversation(a.name, channel, thread)
 	if thread != "" {
-		event.Parent = Conversation(channel, "")
+		event.Parent = Conversation(a.name, channel, "")
 	}
-	acceptsConversation := a.acceptConversation == nil || a.acceptConversation(Conversation(channel, ""), event.Direct)
+	acceptsConversation := a.acceptConversation == nil || a.acceptConversation(Conversation(a.name, channel, ""), event.Direct)
 	if !event.Direct {
 		switch {
 		case event.Kind == domain.InboundEventReaction:
@@ -143,7 +143,7 @@ func (a *adapter) isSelf(user, bot string) bool {
 }
 
 func (a *adapter) joinedThread(ctx context.Context, channel, thread string) (bool, error) {
-	ref := Conversation(channel, thread)
+	ref := Conversation(a.name, channel, thread)
 	if _, ok := a.joinedThreads.Load(ref); ok {
 		return true, nil
 	}

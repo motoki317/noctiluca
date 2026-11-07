@@ -32,30 +32,30 @@ func TestSourceInfoNamesAndRoot(t *testing.T) {
 			t.Errorf("unexpected request %s", r.URL.Path)
 		}
 	}, false)
-	info := a.SourceInfo(t.Context(), Conversation("C1", "1730000000.123456"), "U1", true)
+	info := a.SourceInfo(t.Context(), Conversation("slack", "C1", "1730000000.123456"), "U1", true)
 	require.Equal(t, "#general", info.Conversation)
 	require.Equal(t, "Alex", info.Sender)
 	require.Equal(t, "Root question", info.ThreadText)
 	require.Equal(t, time.Unix(1730000000, 123456000), info.ThreadAt)
-	a.SourceInfo(t.Context(), Conversation("C1", "1730000000.123456"), "U1", false)
+	a.SourceInfo(t.Context(), Conversation("slack", "C1", "1730000000.123456"), "U1", false)
 	require.Equal(t, 1, calls["/users.info"])
 	require.Equal(t, 1, calls["/conversations.info"])
 	require.Equal(t, 1, calls["/conversations.replies"])
-	require.Equal(t, "Alex", a.SourceInfo(t.Context(), Conversation("D1", ""), "U1", false).Conversation)
+	require.Equal(t, "Alex", a.SourceInfo(t.Context(), Conversation("slack", "D1", ""), "U1", false).Conversation)
 }
 
 func TestSourceInfoUnavailableFallsBackToIDs(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"ok":false,"error":"missing_scope"}`)
 	}, false)
-	info := a.SourceInfo(t.Context(), Conversation("C1", "1.2"), "U1", true)
+	info := a.SourceInfo(t.Context(), Conversation("slack", "C1", "1.2"), "U1", true)
 	require.Equal(t, "C1", info.Conversation)
 	require.Equal(t, "U1", info.Sender)
 	require.Empty(t, info.ThreadText)
 }
 
 func TestInboundUsesPostedTime(t *testing.T) {
-	a := &adapter{}
+	a := &adapter{name: "slack"}
 	for _, tt := range []struct {
 		name  string
 		event *slackevents.MessageEvent
@@ -86,7 +86,7 @@ func TestSourceInfoRetriesFailedLookups(t *testing.T) {
 			fmt.Fprint(w, `{"ok":true,"channel":{"name":"general"}}`)
 		}
 	}, false)
-	ref := Conversation("C1", "")
+	ref := Conversation("slack", "C1", "")
 	info := a.SourceInfo(t.Context(), ref, "U1", false)
 	require.Equal(t, "U1", info.Sender)
 	require.Equal(t, "C1", info.Conversation)
@@ -97,7 +97,7 @@ func TestSourceInfoRetriesFailedLookups(t *testing.T) {
 }
 
 func TestReactionUsesPostedTime(t *testing.T) {
-	a := &adapter{selfUser: "USELF", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
+	a := &adapter{name: "slack", selfUser: "USELF", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
 	event, ok := a.inbound(t.Context(), &slackevents.ReactionAddedEvent{User: "U1", ItemUser: "USELF", EventTimestamp: "1730000003.000001", Item: slackevents.Item{Type: "message", Channel: "C1", Timestamp: "1.0"}})
 	require.True(t, ok)
 	require.Equal(t, time.Unix(1730000003, 1000), event.ReceivedAt)
@@ -116,7 +116,7 @@ func TestSourceInfoRetriesDMPeerName(t *testing.T) {
 			fmt.Fprint(w, `{"ok":false,"error":"ratelimited"}`)
 		}
 	}, false)
-	ref := Conversation("D1", "")
+	ref := Conversation("slack", "D1", "")
 	require.Equal(t, "U1", a.SourceInfo(t.Context(), ref, "U1", false).Conversation)
 	healthy = true
 	require.Equal(t, "Alex", a.SourceInfo(t.Context(), ref, "U1", false).Conversation)

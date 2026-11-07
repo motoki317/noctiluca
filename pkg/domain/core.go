@@ -15,5 +15,4 @@ type PromptAssembler func(context.Context, ToolSession) (string, error)
 type Core interface {
 	Start(context.Context) error
 	Shutdown(context.Context) error
-	UpdateUserGroups(context.Context, map[string][]string) error
 }

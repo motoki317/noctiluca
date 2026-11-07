@@ -1,21 +1,22 @@
-owner: &owner U_OWNER_ID
-
-slack:
-  app_token: {env: SLACK_APP_TOKEN}
-  bot_token: {env: SLACK_BOT_TOKEN}
-  # Optional read token. Choose env or file for each token.
-  # user_token: {file: secrets/slack-user-token}
-  group_refresh_interval: 1h
-
-conversations:
-  direct_messages:
-    users: [*owner]
-  rules:
-    - id: C_CHANNEL_ID
-      users: [*owner]
-      groups: [S_USER_GROUP_ID]
-      allow_bots: false
-      require_mention: true
+messaging:
+  - name: slack
+    type: slack
+    owner: &owner U_OWNER_ID
+    slack:
+      app_token: {env: SLACK_APP_TOKEN}
+      bot_token: {env: SLACK_BOT_TOKEN}
+      # Optional read token. Choose env or file for each token.
+      # user_token: {file: secrets/slack-user-token}
+      group_refresh_interval: 1h
+    conversations:
+      direct_messages:
+        users: [*owner]
+      rules:
+        - id: C_CHANNEL_ID
+          users: [*owner]
+          groups: [S_USER_GROUP_ID]
+          allow_bots: false
+          require_mention: true
 
 model:
   executable: claude
