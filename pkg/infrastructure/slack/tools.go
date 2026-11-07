@@ -155,6 +155,9 @@ func (a *adapter) download(ctx context.Context, in toolInput) (any, error) {
 	if file.URLPrivateDownload == "" {
 		return nil, errors.New("file has no Slack private download URL")
 	}
+	if err := os.MkdirAll(filepath.Dir(in.Path), 0o700); err != nil {
+		return nil, err
+	}
 	out, err := os.OpenFile(in.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err

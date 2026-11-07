@@ -89,7 +89,21 @@ func TestDownloadRawBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, body, got)
 	_, err = a.download(t.Context(), toolInput{FileID: "FTEST", Path: path})
-	require.Error(t, err)
+	require.ErrorIs(t, err, os.ErrExist)
+	t.Run("missing parent directories", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "a", "b", "file")
+		invoke(t, a, "slack_download_file", map[string]string{"file_id": "FTEST", "path": path})
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Equal(t, body, got)
+		for _, parent := range []string{filepath.Join(dir, "a"), filepath.Dir(path)} {
+			info, err := os.Stat(parent)
+			require.NoError(t, err)
+			require.True(t, info.IsDir())
+			require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+		}
+	})
 	fail = true
 	path = filepath.Join(t.TempDir(), "denied.png")
 	_, err = a.download(t.Context(), toolInput{FileID: "FTEST", Path: path})
