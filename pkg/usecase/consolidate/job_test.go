@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -54,9 +55,8 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 			db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
 			require.NoError(t, err)
 			defer db.Close()
-			store, err := memory.New(t.Context(), memory.Config{Path: t.TempDir()})
+			store, err := memory.New(t.Context(), memory.Config{Path: t.TempDir(), Defaults: Procedures})
 			require.NoError(t, err)
-			store = WithProcedures(store.(domain.MemoryHistory))
 			episodes := repository.NewEpisodeRepository(db)
 			events := repository.NewEventRepository(db)
 			require.NoError(t, events.SaveInbound(t.Context(), domain.InboundEvent{Sender: domain.Sender{Kind: domain.SenderHuman}, Conversation: "room", Kind: domain.InboundEventMessage, Text: "The release is Friday", ReceivedAt: time.Now().Add(-time.Minute)}))
@@ -66,7 +66,7 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 			_, err = inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
 			seen := make(chan string, 1)
-			model := scriptModel{script: func(ctx context.Context, config domain.ModelSessionConfig, input domain.UserInput) error {
+			model := scriptModel{script: func(ctx context.Context, _ domain.ModelSessionConfig, input domain.UserInput) error {
 				seen <- input.Text
 				if fails {
 					return errors.New("model failed")
@@ -82,8 +82,7 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 				if len(batch.Items) != 1 || batch.Items[0].Input != "The release is Friday" {
 					return errors.New("missing episode")
 				}
-				ctx = domain.WithToolSession(ctx, domain.ToolSession{Key: config.Key})
-				return store.Write(ctx, "topics/release.md", "The release is Friday", "Record the taught release date")
+				return os.WriteFile(filepath.Join(store.Dir(), "topics/release.md"), []byte("The release is Friday"), 0600)
 			}}
 			r := reconcile.New(reconcile.Config{MaxAttempts: 1, Completed: Checkpoint(episodes), Procedure: func(ctx context.Context, name string) (string, error) {
 				return store.Read(ctx, "procedures/"+name+".md")
@@ -124,26 +123,6 @@ func TestConsolidationIsAnOrdinaryTask(t *testing.T) {
 	}
 }
 
-func TestDefaultProceduresPreserveOwnerEdits(t *testing.T) {
-	store, err := memory.New(t.Context(), memory.Config{Path: t.TempDir()})
-	require.NoError(t, err)
-	store = WithProcedures(store.(domain.MemoryHistory))
-	owner := domain.WithToolSession(t.Context(), domain.ToolSession{})
-	require.NoError(t, store.Write(owner, "procedures/consolidate.md", "owner override", "Customize consolidation"))
-	before, err := store.(domain.MemoryHistory).Revision(t.Context())
-	require.NoError(t, err)
-	store = WithProcedures(store.(domain.MemoryHistory))
-	after, err := store.(domain.MemoryHistory).Revision(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-	text, err := store.Read(t.Context(), "procedures/consolidate.md")
-	require.NoError(t, err)
-	require.Equal(t, "owner override", text)
-	text, err = store.Read(t.Context(), "procedures/hillclimb.md")
-	require.NoError(t, err)
-	require.Contains(t, text, "separate subagent")
-}
-
 func TestSkippedProcedureAndContinuationKeepCheckpoint(t *testing.T) {
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
 	require.NoError(t, err)
@@ -177,24 +156,4 @@ func TestSkippedProcedureAndContinuationKeepCheckpoint(t *testing.T) {
 	at, err := episodes.LastRun(t.Context())
 	require.NoError(t, err)
 	require.True(t, at.IsZero())
-}
-
-func TestDefaultProceduresDoNotConsumeMemoryCaps(t *testing.T) {
-	raw, err := memory.New(t.Context(), memory.Config{Path: t.TempDir(), Limits: domain.MemoryLimits{FileBytes: 1, TotalBytes: 1, FileCount: 1}})
-	require.NoError(t, err)
-	store := WithProcedures(raw.(domain.MemoryHistory))
-	text, err := store.Read(t.Context(), "procedures/consolidate.md")
-	require.NoError(t, err)
-	require.Contains(t, text, "factual corrections")
-	matches, err := store.Search(t.Context(), "separate subagent")
-	require.NoError(t, err)
-	require.Len(t, matches, 1)
-	require.Equal(t, "procedures/hillclimb.md", matches[0].Path)
-	names, err := store.List(t.Context(), "procedures")
-	require.NoError(t, err)
-	require.Len(t, names, 2)
-	sizes, err := store.Sizes(t.Context())
-	require.NoError(t, err)
-	require.Zero(t, sizes.FileCount)
-	require.Zero(t, sizes.TotalBytes)
 }

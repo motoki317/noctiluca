@@ -26,6 +26,7 @@ type Config struct {
 
 type adapter struct {
 	names              sync.Map
+	joinedThreads      sync.Map
 	acceptConversation func(domain.ConversationRef, bool) bool
 	life               lifecycle.Group
 	bot, reader        *sdk.Client

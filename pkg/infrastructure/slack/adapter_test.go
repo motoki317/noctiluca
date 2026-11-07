@@ -77,6 +77,8 @@ func TestSocketMapping(t *testing.T) {
 			_, _ = w.Write([]byte(`{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`))
 		case "/users.info":
 			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"UMEMBER","is_bot":false}}`))
+		case "/conversations.replies":
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
 		default:
 			t.Errorf("unexpected API %s", r.URL.Path)
 		}
@@ -103,8 +105,10 @@ func TestSocketMapping(t *testing.T) {
 		`{"type":"message","channel":"CTEST","bot_id":"BSELF","text":"self","ts":"2","subtype":"bot_message"}`,
 		`{"type":"message","channel":"CTEST","user":"UMEMBER","text":"hi <@USELF>","ts":"124.000001","thread_ts":"123.000001","files":[{"id":"FTEST","name":"a.png","mimetype":"image/png"}]}`,
 		`{"type":"message","channel":"DTEST","subtype":"message_changed","message":{"user":"UMEMBER","text":"edited","ts":"125.000001"}}`,
-		`{"type":"reaction_added","user":"UMEMBER","reaction":"white_check_mark","item":{"type":"message","channel":"CTEST","ts":"124.000001"}}`,
+		`{"type":"reaction_added","user":"UMEMBER","item_user":"USELF","reaction":"white_check_mark","item":{"type":"message","channel":"CTEST","ts":"124.000001"}}`,
 		`{"type":"message","subtype":"bot_message","channel":"CTEST","bot_id":"BOTHER","text":"alert","ts":"126.000001"}`,
+		`{"type":"message","channel":"CTEST","user":"UMEMBER","text":"unjoined","ts":"127.000001","thread_ts":"126.000001"}`,
+		`{"type":"reaction_added","user":"UMEMBER","item_user":"UOTHER","reaction":"eyes","item":{"type":"message","channel":"CTEST","ts":"126.000001"}}`,
 	} {
 		payload := json.RawMessage(`{"type":"event_callback","event":` + raw + `}`)
 		parsed, err := slackevents.ParseEvent(payload, slackevents.OptionNoVerifyToken())
@@ -171,7 +175,8 @@ func TestBotReactionClassification(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"ok":false,"error":"missing_scope"}`))
 		}, false)
-		data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UBOT","reaction":"eyes","item":{"type":"message","channel":"CTEST","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
+		a.selfUser = "USELF"
+		data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UBOT","item_user":"USELF","reaction":"eyes","item":{"type":"message","channel":"CTEST","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
 		require.NoError(t, err)
 		event, accepted := a.inbound(t.Context(), data.InnerEvent.Data)
 		require.True(t, accepted)
@@ -180,9 +185,10 @@ func TestBotReactionClassification(t *testing.T) {
 }
 
 func TestMessageSourceReferences(t *testing.T) {
+	a := &adapter{acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
 	for _, channel := range []string{"DTEST", "CTEST", "GTEST"} {
 		for _, thread := range []string{"", "1.2"} {
-			event, ok := (&adapter{}).inbound(t.Context(), &slackevents.MessageEvent{Channel: channel, User: "U", TimeStamp: "2.3", ThreadTimeStamp: thread})
+			event, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: channel, User: "U", TimeStamp: "2.3", ThreadTimeStamp: thread})
 			require.True(t, ok)
 			require.Equal(t, channel == "DTEST", event.Direct)
 			require.Equal(t, Conversation(channel, "2.3"), event.MessageRef)
@@ -192,7 +198,7 @@ func TestMessageSourceReferences(t *testing.T) {
 }
 
 func TestDeletedMessageKeepsSenderAndThread(t *testing.T) {
-	a := &adapter{selfUser: "UBOT"}
+	a := &adapter{selfUser: "UBOT", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
 	parsed, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"message","subtype":"message_deleted","channel":"CTEST","previous_message":{"user":"UMEMBER","text":"old body","ts":"2.000001","thread_ts":"1.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, ok := a.inbound(t.Context(), parsed.InnerEvent.Data)
@@ -241,8 +247,9 @@ func TestUnfurlEditsAreDropped(t *testing.T) {
 
 func TestDeniedReactionDoesNotReadRemoteUserOrMessage(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("unexpected lookup: %s", r.URL.Path) }, false)
+	a.selfUser = "USELF"
 	a.SetConversationFilter(func(ref domain.ConversationRef, _ bool) bool { return ref == Conversation("CALLOWED", "") })
-	data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UMEMBER","reaction":"eyes","item":{"type":"message","channel":"CDENIED","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
+	data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UMEMBER","item_user":"USELF","reaction":"eyes","item":{"type":"message","channel":"CDENIED","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, present := a.inbound(t.Context(), data.InnerEvent.Data)
 	require.True(t, present)

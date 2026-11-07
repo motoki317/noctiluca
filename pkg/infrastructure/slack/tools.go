@@ -84,6 +84,12 @@ type messageView struct {
 	Timestamp string              `json:"ts"`
 	Thread    string              `json:"thread_ts,omitempty"`
 	Files     []domain.Attachment `json:"files,omitempty"`
+	Reactions []reactionView      `json:"reactions,omitempty"`
+}
+
+type reactionView struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 func messagesView(messages []sdk.Message) []messageView {
@@ -92,6 +98,9 @@ func messagesView(messages []sdk.Message) []messageView {
 		v := messageView{User: m.User, Text: m.Text, Timestamp: m.Timestamp, Thread: m.ThreadTimestamp}
 		for _, f := range m.Files {
 			v.Files = append(v.Files, domain.Attachment{Ref: f.ID, Name: f.Name, MIMEType: f.Mimetype})
+		}
+		for _, r := range m.Reactions {
+			v.Reactions = append(v.Reactions, reactionView{Name: r.Name, Count: r.Count})
 		}
 		result = append(result, v)
 	}
@@ -154,6 +163,9 @@ func (a *adapter) download(ctx context.Context, in toolInput) (any, error) {
 	}
 	if file.URLPrivateDownload == "" {
 		return nil, errors.New("file has no Slack private download URL")
+	}
+	if err := os.MkdirAll(filepath.Dir(in.Path), 0o700); err != nil {
+		return nil, err
 	}
 	out, err := os.OpenFile(in.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {

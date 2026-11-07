@@ -111,9 +111,6 @@ func New(config Config, messaging domain.MessagingAdapter, model domain.ModelAda
 	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
 	tools := append([]domain.Tool{c.replyTool()}, c.reconciler.Tools()...)
 	tools = append(tools, c.watcher.Tools()...)
-	if memory != nil {
-		tools = append(tools, memoryusecase.Tools(memory)...)
-	}
 	if err := hub.AddSource("core", tools); err != nil {
 		return nil, err
 	}

@@ -34,7 +34,7 @@ conversations:
       allow_bots: true
       require_mention: true
 model: {executable: ./claude, name: haiku, idle_timeout: 2h}
-memory: {dir: memories, limits: {core_bytes: 4096, file_bytes: 16384, total_bytes: 65536, file_count: 20}}
+memory: {dir: memories}
 database: {path: history.db}
 toolhub: {listen: '127.0.0.1:12345'}
 heartbeat: {enabled: false, interval: 30m}
@@ -57,10 +57,6 @@ cron:
 	require.Equal(t, []string{"S_GROUP"}, c.Conversations.Rules[0].Groups)
 	require.True(t, c.Conversations.Rules[0].RequireMention)
 	require.True(t, c.Conversations.Rules[0].AllowBots)
-	require.EqualValues(t, 4096, c.Memory.Limits.CoreBytes)
-	require.EqualValues(t, 16384, c.Memory.Limits.FileBytes)
-	require.EqualValues(t, 65536, c.Memory.Limits.TotalBytes)
-	require.Equal(t, 20, c.Memory.Limits.FileCount)
 	require.False(t, c.Heartbeat.Enabled)
 	require.Equal(t, 30*time.Minute, c.Heartbeat.Interval)
 	require.Equal(t, 2*time.Hour, c.Model.IdleTimeout)
@@ -178,14 +174,9 @@ func TestReservedCronNames(t *testing.T) {
 	}
 }
 
-func TestStartupWithRestrictiveMemoryCaps(t *testing.T) {
-	t.Setenv("TEST_APP_TOKEN", "xapp-fake")
-	t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
-	c, err := loadConfig(writeConfig(t, "owner: U_OWNER\nslack:\n  app_token: {env: TEST_APP_TOKEN}\n  bot_token: {env: TEST_BOT_TOKEN}\nmemory:\n  limits: {file_bytes: 1, total_bytes: 1, file_count: 1}\n"))
-	require.NoError(t, err)
-	app, err := newApplication(t.Context(), c, nil)
-	require.NoError(t, err)
-	require.NoError(t, app.Shutdown(t.Context()))
+func TestRemovedMemoryLimitConfigRejected(t *testing.T) {
+	_, err := loadConfig(writeConfig(t, "memory: {limits: {core_bytes: 4096}}\n"))
+	require.ErrorContains(t, err, "invalid config")
 }
 
 func TestModelWorkdirAndTimeoutDefaults(t *testing.T) {

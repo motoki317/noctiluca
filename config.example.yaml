@@ -28,11 +28,6 @@ model:
 
 memory:
   dir: memory
-  limits:
-    core_bytes: 8192
-    file_bytes: 65536
-    total_bytes: 1048576
-    file_count: 128
 
 database:
   path: noctiluca.db

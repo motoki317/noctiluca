@@ -24,13 +24,14 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 
 - The official `claude` CLI on the owner's subscription, one process per session, over stream-json. Claude Code already provides shell, subagents, and context compaction.
 - Planned: Codex through `codex app-server`, whose `turn/steer` fits `ModelSession.Send`.
-- No per-session roles. The model judges what to change; the harness keeps only the owner's handwritten `owner/` files away from the memory tools. Details: architecture.md, "Trust model".
+- No per-session roles. The model judges what to change. Details: architecture.md, "Trust model".
 
 ## Memory
 
 - Markdown in a Git repository. Claude reads and edits files natively, and Git gives every change a diff and a revert. Mem0, Graphiti, cognee, and Letta each add a service for the same job.
-- A small core loaded into the system prompt when each model process opens, the rest on demand. Memory changes take effect on the next process, including on resume. Forgotten instructions in a large prompt were the most common OpenClaw failure.
-- Search is `git grep`. An index is not needed at the current size.
+- The model edits and commits memory with its own tools, so the harness has no memory API.
+- A small core loaded into the system prompt when each model process opens, the rest on demand. Changes to loaded files take effect on the next process, including on resume. Forgotten instructions in a large prompt were the most common OpenClaw failure.
+- The model searches files with its native shell tools. An index is not needed at the current size.
 - Consolidation learns and tidies. It commits facts the owner taught, clear corrections, and lessons that several episodes share, and it keeps its own memory (everything outside `owner/`) short: it deletes finished items and logs, merges and generalizes notes, and moves facts where they belong. Changes to `owner/`, tools, and the harness go to the owner as proposals. OpenClaw's nightly memory job promoted only memories that were searched often, so forgotten knowledge never qualified. Small item-level edits follow ACE (arXiv 2510.04618), which found that whole-document rewrites shrink memory and lose accuracy.
 - Measured improvement on request only. The shipped `procedures/hillclimb.md` guides a train/held-out experiment with the model's own tools, following [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/). The harness has no evaluation code.
 
@@ -39,7 +40,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 | Workload | What it needs |
 |---|---|
 | Owner DMs, team channels open to a user group, with or without mentions | `conversations.rules`, group refresh |
-| Alert channels where bot posts start an investigation, a reaction marks it done | bot senders, reaction events |
+| Alert channels where bot posts start an investigation, a reaction marks it done | top-level bot posts, replies in joined threads, read tools that show reactions on alert posts |
 | Hourly heartbeat over a todo list | heartbeat schedule, `procedures/heartbeat.md` |
 | Daily photo: morning DM preview, evening thread post sent to the channel too | cron with timezone, upload and broadcast tools |
 | Long PR reviews and delegated coding runs | native background tools, `watch` |
