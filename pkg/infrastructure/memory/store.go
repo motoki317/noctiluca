@@ -21,8 +21,9 @@ import (
 const CoreLimit = 8 * 1024
 
 type Config struct {
-	Path   string              `mapstructure:"path"`
-	Limits domain.MemoryLimits `mapstructure:"limits"`
+	Path     string              `mapstructure:"path"`
+	Limits   domain.MemoryLimits `mapstructure:"limits"`
+	Defaults fs.FS               `mapstructure:"-"`
 }
 type store struct {
 	dir       string
@@ -135,7 +136,66 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 	if err := os.MkdirAll(s.snapshots, 0700); err != nil {
 		return nil, err
 	}
+	if config.Defaults != nil {
+		if err := s.seed(ctx, r, config.Defaults); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
+}
+
+func (s *store) Dir() string { return s.dir }
+
+func (s *store) seed(ctx context.Context, root *os.Root, defaults fs.FS) error {
+	return fs.WalkDir(defaults, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !validPath(name) || ownerPath(name) {
+			return errors.New("invalid default memory path")
+		}
+		if _, err := root.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := safePath(root, name); err != nil {
+			return err
+		}
+		if err := root.MkdirAll(path.Dir(name), 0700); err != nil {
+			return err
+		}
+		data, err := fs.ReadFile(defaults, name)
+		if err != nil {
+			return err
+		}
+		indexed, err := s.git(ctx, "ls-files", "--", name)
+		if err != nil {
+			return err
+		}
+		if err := replace(root, name, data); err != nil {
+			return err
+		}
+		rollback := func(cause error) error {
+			removeErr := root.Remove(name)
+			var indexErr error
+			if len(indexed) == 0 {
+				_, indexErr = s.git(context.WithoutCancel(ctx), "update-index", "--force-remove", "--", name)
+			}
+			return errors.Join(cause, removeErr, indexErr)
+		}
+		if _, err := s.git(ctx, "add", "--intent-to-add", "--", name); err != nil {
+			return rollback(err)
+		}
+		if _, err := s.git(ctx, "commit", "--quiet", "--only", "--allow-empty", "--message", "Add default "+name, "--", name); err != nil {
+			return rollback(err)
+		}
+		return nil
+	})
 }
 
 func ownerPath(name string) bool {

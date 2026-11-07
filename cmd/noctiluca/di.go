@@ -61,11 +61,10 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 			result = errors.Join(result, hub.Shutdown(stopCtx))
 		}
 	}()
-	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir, Limits: config.Memory.Limits})
+	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir, Limits: config.Memory.Limits, Defaults: consolidate.Procedures})
 	if err != nil {
 		return nil, err
 	}
-	store = consolidate.WithProcedures(store.(domain.MemoryHistory))
 	episodes := repository.NewEpisodeRepository(db)
 	if err := hub.AddSource("consolidate", []domain.Tool{consolidate.EpisodesTool(episodes, config.Consolidate.NegativeReactions)}); err != nil {
 		return nil, err

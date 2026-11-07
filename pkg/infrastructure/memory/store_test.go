@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/memory"
+	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +30,90 @@ func setup(t *testing.T) (domain.MemoryStore, string) {
 	s, err := memory.New(t.Context(), memory.Config{Path: dir})
 	require.NoError(t, err)
 	return s, dir
+}
+
+func TestSeedDefaultProcedures(t *testing.T) {
+	dir := t.TempDir()
+	s, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	require.NoError(t, err)
+	require.Equal(t, dir, s.Dir())
+	require.Equal(t, "3\n", git(t, dir, "rev-list", "--count", "HEAD"))
+	for _, name := range []string{"procedures/consolidate.md", "procedures/hillclimb.md"} {
+		want, err := consolidate.Procedures.ReadFile(name)
+		require.NoError(t, err)
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+		require.Equal(t, string(want), git(t, dir, "show", "HEAD:"+name))
+		require.Equal(t, "Add default "+name+"\n", git(t, dir, "log", "-1", "--format=%s", "--", name))
+		info, err := os.Stat(filepath.Join(dir, name))
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	}
+	require.Empty(t, git(t, dir, "status", "--porcelain"))
+	head := git(t, dir, "rev-parse", "HEAD")
+	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	require.NoError(t, err)
+	require.Equal(t, head, git(t, dir, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.Remove(filepath.Join(dir, "procedures/hillclimb.md")))
+	_, err = s.Read(t.Context(), "procedures/hillclimb.md")
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	require.NoError(t, err)
+	require.Empty(t, git(t, dir, "status", "--porcelain"))
+}
+
+func TestSeedingPreservesExistingFilesAndIndex(t *testing.T) {
+	_, dir := setup(t)
+	for _, name := range []string{"procedures/consolidate.md", "topics/other.md"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("staged"), 0640))
+		git(t, dir, "add", "--", name)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("unstaged"), 0640))
+	}
+	before, err := os.Stat(filepath.Join(dir, "procedures/consolidate.md"))
+	require.NoError(t, err)
+	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	require.NoError(t, err)
+	require.Equal(t, "2\n", git(t, dir, "rev-list", "--count", "HEAD"))
+	require.Equal(t, "procedures/hillclimb.md\n", git(t, dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))
+	for _, name := range []string{"procedures/consolidate.md", "topics/other.md"} {
+		require.Equal(t, "staged", git(t, dir, "show", ":"+name))
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		require.Equal(t, "unstaged", string(data))
+	}
+	after, err := os.Stat(filepath.Join(dir, "procedures/consolidate.md"))
+	require.NoError(t, err)
+	require.Equal(t, before.ModTime(), after.ModTime())
+	require.Equal(t, before.Mode(), after.Mode())
+}
+
+func TestSeedingCanRestartAfterGitFailure(t *testing.T) {
+	for _, lock := range []string{"index.lock", "HEAD.lock"} {
+		for _, indexed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/indexed=%t", lock, indexed), func(t *testing.T) {
+				_, dir := setup(t)
+				name := "procedures/consolidate.md"
+				if indexed {
+					require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("staged"), 0600))
+					git(t, dir, "add", "--", name)
+					require.NoError(t, os.Remove(filepath.Join(dir, name)))
+				}
+				before := git(t, dir, "ls-files", "--stage")
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", lock), nil, 0600))
+				_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+				require.Error(t, err)
+				require.NoFileExists(t, filepath.Join(dir, name))
+				require.Equal(t, before, git(t, dir, "ls-files", "--stage"))
+				require.Equal(t, "1\n", git(t, dir, "rev-list", "--count", "HEAD"))
+				require.NoError(t, os.Remove(filepath.Join(dir, ".git", lock)))
+				_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+				require.NoError(t, err)
+				require.Empty(t, git(t, dir, "status", "--porcelain"))
+			})
+		}
+	}
 }
 
 func TestWritesCommitsAndIsolation(t *testing.T) {

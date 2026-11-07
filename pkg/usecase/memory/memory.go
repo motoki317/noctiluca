@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 
@@ -14,6 +15,15 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 	return func(ctx context.Context, session domain.ToolSession) (string, error) {
 		var context strings.Builder
 		if memory != nil {
+			fmt.Fprintf(&context, "Memory notes:\n"+
+				"- Read and edit memory in %q with your own file tools.\n"+
+				"- owner/ holds the owner's handwritten files. Never edit, move, or delete them. Propose fixes to the owner.\n"+
+				"- owner/ files and core.md are in this system prompt. Edits take effect in the next model process.\n"+
+				"- Keep core.md under 8 KB.\n"+
+				"- Everything outside owner/, including core.md, is your own memory.\n"+
+				"- Commit each change with a message that says why.\n"+
+				"- Commit only paths you changed because other sessions share this repository.\n"+
+				"- Retry if git reports a lock.\n\n", memory.Dir())
 			names, err := memory.List(ctx, "owner")
 			if err != nil {
 				return "", err

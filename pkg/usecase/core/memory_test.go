@@ -74,6 +74,7 @@ func TestMemoryPromptIncludesNotesAndHook(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, "Use adapter tools")
 	require.Contains(t, out, "hook instructions")
+	require.NotContains(t, out, "Memory notes:")
 }
 
 func TestMemoryHistoryTools(t *testing.T) {
