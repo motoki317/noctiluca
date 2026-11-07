@@ -168,7 +168,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		}
 		if p.delivering != nil {
 			if !now.Before(p.delivering.Deadline) {
-				r.retire(p, "delivery deadline exceeded")
+				r.retire(p, domain.DeliveryDeadlineExceeded)
 				continue
 			}
 			due(p.delivering.Deadline)
@@ -416,7 +416,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		p.delivering = nil
 		if out.err != nil {
 			if p.closing || errors.Is(out.err, context.DeadlineExceeded) {
-				r.retire(p, "delivery deadline exceeded")
+				r.retire(p, domain.DeliveryDeadlineExceeded)
 				return nil
 			}
 			if err := r.fail(ctx, *item, out.err); err != nil {
@@ -426,6 +426,9 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 				r.retire(p, out.err.Error())
 			}
 			return nil
+		}
+		if p.lane == "task" && !out.skipped && !time.Now().Before(item.Deadline) {
+			r.retire(p, domain.DeliveryDeadlineExceeded)
 		}
 		if !out.skipped && p.turn == nil {
 			p.turn = &domain.SessionTurn{Deadline: time.Now().Add(r.timeout(p.lane)), Procedure: item.Payload.Procedure, Continuations: item.Payload.Continuations}

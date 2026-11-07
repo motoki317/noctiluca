@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -21,6 +22,7 @@ type deliveryRig struct {
 	inbox    domain.InboxRepository
 	sessions domain.SessionRepository
 	model    *modelFake
+	hub      *hubFake
 	config   Config
 	runner   *Reconciler
 	cancel   context.CancelFunc
@@ -35,7 +37,8 @@ func newDeliveryRig(t *testing.T, config Config) *deliveryRig {
 }
 func (f *deliveryRig) start(t *testing.T) func() {
 	t.Helper()
-	f.runner = New(f.config, f.inbox, repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), f.model, &hubFake{closed: make(chan domain.SessionKey, 100)})
+	f.hub = &hubFake{closed: make(chan domain.SessionKey, 100)}
+	f.runner = New(f.config, f.inbox, repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), f.model, f.hub)
 	ctx, cancel := context.WithCancel(t.Context())
 	f.cancel = cancel
 	done := make(chan error, 1)
@@ -240,29 +243,107 @@ func TestCompletionWaitsForSuccessfulTurnFinish(t *testing.T) {
 }
 
 func TestTaskDeadlineNotifiesWithoutContinuing(t *testing.T) {
-	notes := make(chan string, 4)
-	f := newDeliveryRig(t, Config{TaskTimeout: 50 * time.Millisecond, NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
-	stop := f.start(t)
-	item := TaskItem("hung", "work", "")
-	id, err := f.inbox.Enqueue(t.Context(), item)
-	require.NoError(t, err)
-	f.runner.Notify()
-	s := take(t, f.model.opened)
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	take(t, s.closed)
-	require.Contains(t, take(t, notes), "Task hung stopped: turn deadline exceeded")
-	require.Eventually(t, func() bool {
+	// Runner scheduling must not consume the deadline used to expire the hung task.
+	synctest.Test(t, func(t *testing.T) {
+		notes := make(chan string, 4)
+		f := newDeliveryRig(t, Config{TaskTimeout: 50 * time.Millisecond, NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
+		stop := f.start(t)
+		item := TaskItem("hung", "work", "")
+		id, err := f.inbox.Enqueue(t.Context(), item)
+		require.NoError(t, err)
+		f.runner.Notify()
+		s := take(t, f.model.opened)
+		take(t, s.inputs)
+		f.status(t, id, "done")
+		take(t, s.closed)
+		require.Contains(t, take(t, notes), "Task hung stopped: turn deadline exceeded")
+		require.Eventually(t, func() bool {
+			active, err := f.inbox.Active(t.Context())
+			return err == nil && len(active) == 0
+		}, time.Second, time.Millisecond)
+		stop()
+		stop = f.start(t)
+		defer stop()
+		require.Never(t, func() bool { return len(f.model.opened) > 0 || len(notes) > 0 }, 120*time.Millisecond, time.Millisecond)
+		var marked int
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND error LIKE '%turn deadline exceeded%'", item.SessionKey).Scan(&marked))
+		require.Equal(t, 1, marked)
+	})
+}
+
+func TestLateTaskDeliveryIsReportedNotContinued(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		notes := make(chan string, 4)
+		f := newDeliveryRig(t, Config{TaskTimeout: 50 * time.Millisecond, NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
+		release := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer unblock()
+		f.model.send = func(context.Context, domain.UserInput) error { <-release; return nil }
+		stop := f.start(t)
+		item := TaskItem("hung", "work", "")
+		id, err := f.inbox.Enqueue(t.Context(), item)
+		require.NoError(t, err)
+		f.runner.Notify()
+		s := take(t, f.model.opened)
+		// Hold Send until retirement so success cannot beat the delivery deadline.
+		require.Equal(t, item.SessionKey, take(t, f.hub.closed))
+		unblock()
+		take(t, s.closed)
+		f.status(t, id, "done")
+		require.Equal(t, "Task hung stopped: delivery deadline exceeded", take(t, notes))
+		stop()
+		f.start(t)
+		synctest.Wait()
 		active, err := f.inbox.Active(t.Context())
-		return err == nil && len(active) == 0
-	}, time.Second, time.Millisecond)
-	stop()
-	stop = f.start(t)
-	defer stop()
-	require.Never(t, func() bool { return len(f.model.opened) > 0 || len(notes) > 0 }, 120*time.Millisecond, time.Millisecond)
-	var marked int
-	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND error LIKE '%turn deadline exceeded%'", item.SessionKey).Scan(&marked))
-	require.Equal(t, 1, marked)
+		require.NoError(t, err)
+		require.Empty(t, active)
+		require.Nil(t, f.turn(t, string(item.SessionKey), false).Turn)
+		require.Empty(t, f.model.opened)
+		require.Empty(t, notes)
+		var inputs, marked int
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE session_key=?", item.SessionKey).Scan(&inputs))
+		require.Equal(t, 1, inputs)
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND error LIKE '%delivery deadline exceeded%'", item.SessionKey).Scan(&marked))
+		require.Equal(t, 1, marked)
+	})
+}
+
+func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
+	for _, remaining := range []time.Duration{-time.Nanosecond, 0, time.Nanosecond} {
+		t.Run(remaining.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeliveryRig(t, Config{})
+				item := TaskItem("late", "work", "")
+				id, err := f.inbox.Enqueue(t.Context(), item)
+				require.NoError(t, err)
+				item.ID = id
+				item.Deadline = time.Now().Add(remaining)
+				claimed, err := f.inbox.Claim(t.Context(), id, item.Deadline)
+				require.NoError(t, err)
+				require.True(t, claimed)
+				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				_, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				p := &process{key: item.SessionKey, lane: item.Lane, info: item.Payload.Context, delivering: &item, cancel: cancel, model: &sessionFake{}}
+				r.live[p.key] = p
+				require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true}))
+				f.status(t, id, "done")
+				saved, err := f.sessions.Get(t.Context(), item.SessionKey)
+				require.NoError(t, err)
+				require.NotNil(t, saved.Turn)
+				require.Equal(t, remaining <= 0, p.closing)
+				if remaining > 0 {
+					return
+				}
+				require.Equal(t, domain.DeliveryDeadlineExceeded, p.reason)
+				require.NoError(t, r.handle(t.Context(), result{process: p, exited: true}))
+				active, err := f.inbox.Active(t.Context())
+				require.NoError(t, err)
+				require.Len(t, active, 1)
+				require.Equal(t, "Task late stopped: delivery deadline exceeded", active[0].Payload.Notice)
+			})
+		})
+	}
 }
 
 func TestInterruptedTaskContinuesOnlyOnce(t *testing.T) {

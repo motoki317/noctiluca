@@ -106,7 +106,7 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	}
 	if info != nil && info.TaskName != "" {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
-		if reason == domain.TurnDeadlineExceeded {
+		if reason == domain.TurnDeadlineExceeded || reason == domain.DeliveryDeadlineExceeded {
 			if err := insertOwnerNotice(ctx, tx, source, fmt.Sprintf("Task %s stopped: %s", info.TaskName, reason)); err != nil {
 				return err
 			}
