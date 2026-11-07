@@ -118,8 +118,7 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 }
 
 func insertOwnerNotice(ctx context.Context, db executor, source, text string) error {
-	notice := domain.InboxItem{SourceKey: source, SessionKey: domain.SessionKey("notice:" + source), Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Notice: text, Context: domain.SessionContext{TaskName: "failure-notice"}}}
-	_, err := insertInbox(ctx, db, notice)
+	_, err := insertInbox(ctx, db, domain.NewOwnerNotice(source, text))
 	return err
 }
 func (r *inboxRepository) Fire(ctx context.Context, schedule domain.Schedule, next time.Time, item *domain.InboxItem) error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
+	"github.com/motoki317/noctiluca/pkg/usecase/core"
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
 )
 
@@ -113,11 +115,34 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 				_, err := owner.CallTool(t.Context(), &mcp.CallToolParams{Name: "wiki_echo", Arguments: map[string]any{}})
 				require.ErrorContains(t, err, "unknown tool")
 			}
+			deliveryHub, err := toolhub.New(toolhub.Config{})
+			require.NoError(t, err)
+			messaging := &noticeMessaging{out: make(chan domain.SentMessage, 1)}
+			c, err := core.New(core.Config{Owner: "owner"}, messaging, noticeModel{}, deliveryHub, repository.NewEventRepository(db), repository.NewSessionRepository(db), nil, repository.NewScheduleRepository(db), repository.NewWatchRepository(db), nil, nil, inbox)
+			require.NoError(t, err)
+			coreDone := make(chan error, 1)
+			go func() { coreDone <- c.Start(t.Context()) }()
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				require.NoError(t, c.Shutdown(ctx))
+				require.NoError(t, <-coreDone)
+			}()
+			select {
+			case sent := <-messaging.out:
+				assert.Equal(t, domain.ConversationRef("dm:owner"), sent.Conversation)
+				assert.Equal(t, items[0].Payload.Notice, sent.Message.Text)
+			case <-time.After(3 * time.Second):
+				var status, lastError string
+				require.NoError(t, db.QueryRow("SELECT status,last_error FROM inbox WHERE id=?", items[0].ID).Scan(&status, &lastError))
+				t.Fatalf("owner notice was not delivered: status=%s last_error=%s", status, lastError)
+			}
+			require.Eventually(t, func() bool {
+				var status string
+				return db.QueryRow("SELECT status FROM inbox WHERE id=?", items[0].ID).Scan(&status) == nil && status == "done"
+			}, time.Second, time.Millisecond)
+			require.NoError(t, c.Shutdown(t.Context()))
 			// Delivery and restart must not create another owner notice for this login.
-			_, err = inbox.Claim(t.Context(), items[0].ID, time.Now().Add(time.Minute))
-			require.NoError(t, err)
-			_, err = inbox.Finish(t.Context(), items[0].ID, "", 1, time.Time{})
-			require.NoError(t, err)
 			stored, err = repo.Get(t.Context(), config.Name)
 			require.NoError(t, err)
 			stored.Expiry = time.Now().Add(-time.Minute)
@@ -136,6 +161,29 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			assert.EqualValues(t, 1, f.registrations.Load(), "runtime must never register")
 		})
 	}
+}
+
+type noticeMessaging struct{ out chan domain.SentMessage }
+
+func (*noticeMessaging) Start(ctx context.Context, _ func(context.Context, domain.InboundEvent) error) error {
+	<-ctx.Done()
+	return nil
+}
+func (*noticeMessaging) Shutdown(context.Context) error { return nil }
+func (*noticeMessaging) Tools() []domain.Tool           { return nil }
+func (*noticeMessaging) ToolNotes() string              { return "" }
+func (*noticeMessaging) DirectMessage(_ context.Context, user string) (domain.ConversationRef, error) {
+	return domain.ConversationRef("dm:" + user), nil
+}
+func (m *noticeMessaging) Send(_ context.Context, to domain.ConversationRef, message domain.OutboundMessage) (string, error) {
+	m.out <- domain.SentMessage{Conversation: to, Message: message}
+	return "notice", nil
+}
+
+type noticeModel struct{}
+
+func (noticeModel) Open(context.Context, domain.ModelSessionConfig) (domain.ModelSession, error) {
+	return nil, errors.New("owner notices must not open a model")
 }
 
 func TestForbiddenWithoutScopeChallengeDoesNotInvalidate(t *testing.T) {
