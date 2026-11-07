@@ -59,6 +59,48 @@ func TestEventHistory(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestLatestMessageTime(t *testing.T) {
+	r := repository.NewEventRepository(openDB(t))
+	got, err := r.LatestMessageTime(t.Context(), "room")
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+	at := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		kind    domain.InboundEventKind
+		deleted bool
+		room    domain.ConversationRef
+		offset  time.Duration
+		want    time.Duration
+	}{
+		{"message", domain.InboundEventMessage, false, "room", 0, 0},
+		{"edit", domain.InboundEventMessageEdited, false, "room", time.Second, time.Second},
+		{"late older message", domain.InboundEventMessage, false, "room", 0, time.Second},
+		{"reaction", domain.InboundEventReaction, false, "room", time.Hour, time.Second},
+		{"deletion", domain.InboundEventMessageEdited, true, "room", 2 * time.Hour, time.Second},
+		{"other conversation", domain.InboundEventMessage, false, "other", 3 * time.Hour, time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, r.SaveInbound(t.Context(), domain.InboundEvent{Kind: tc.kind, Deleted: tc.deleted,
+				Conversation: tc.room, Sender: domain.Sender{Kind: domain.SenderHuman}, ReceivedAt: at.Add(tc.offset)}))
+			got, err := r.LatestMessageTime(t.Context(), "room")
+			require.NoError(t, err)
+			require.Equal(t, at.Add(tc.want), got)
+		})
+	}
+	for _, kind := range []domain.InboundEventKind{domain.InboundEventReaction, domain.InboundEventMessageEdited} {
+		require.NoError(t, r.SaveInbound(t.Context(), domain.InboundEvent{Kind: kind, Deleted: kind == domain.InboundEventMessageEdited,
+			Conversation: "only changes", Sender: domain.Sender{Kind: domain.SenderHuman}, ReceivedAt: at}))
+	}
+	got, err = r.LatestMessageTime(t.Context(), "only changes")
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = r.LatestMessageTime(ctx, "room")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestEventSearch(t *testing.T) {
 	r := repository.NewEventRepository(openDB(t))
 	texts := []string{"abcdef", "東京駅で写真を見る", `100% _ \\ "quoted" OR NOT`, "unrelated"}

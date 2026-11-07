@@ -27,6 +27,7 @@ type EventRepository interface {
 	SaveOutbound(ctx context.Context, message SentMessage) error
 	GetInbound(ctx context.Context, messageRef ConversationRef) (InboundEvent, error)
 	ListInbound(ctx context.Context, conversation ConversationRef, limit int) ([]InboundEvent, error)
+	LatestMessageTime(ctx context.Context, conversation ConversationRef) (time.Time, error)
 	ListOutbound(ctx context.Context, conversation ConversationRef, limit int) ([]SentMessage, error)
 	Search(ctx context.Context, query string, limit int) ([]InboundEvent, error)
 	SaveModel(ctx context.Context, record ModelRecord) error

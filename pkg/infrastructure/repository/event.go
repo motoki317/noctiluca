@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -71,6 +72,17 @@ func (r *eventRepository) ListInbound(ctx context.Context, conversation domain.C
 	}
 	return r.queryInbound(ctx, `SELECT `+inboundColumns+` FROM events e
 		WHERE e.conversation=? ORDER BY e.received_at DESC, e.id DESC LIMIT ?`, conversation, limit)
+}
+
+func (r *eventRepository) LatestMessageTime(ctx context.Context, conversation domain.ConversationRef) (time.Time, error) {
+	var at time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT received_at FROM events
+		WHERE conversation=? AND kind IN ('message','message_edited') AND deleted=0
+		ORDER BY received_at DESC, id DESC LIMIT 1`, conversation).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	return at, err
 }
 
 func (r *eventRepository) Search(ctx context.Context, query string, limit int) ([]domain.InboundEvent, error) {
