@@ -415,15 +415,21 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		item := p.delivering
 		p.delivering = nil
 		if out.err != nil {
-			if p.closing || errors.Is(out.err, context.DeadlineExceeded) {
-				r.retire(p, domain.DeliveryDeadlineExceeded)
+			if p.closing && p.reason != domain.DeliveryDeadlineExceeded {
 				return nil
 			}
-			if err := r.fail(ctx, *item, out.err); err != nil {
+			cause := out.err
+			if p.reason == domain.DeliveryDeadlineExceeded {
+				// Retirement cancels delivery, which can hide the deadline in its error.
+				cause = context.DeadlineExceeded
+			}
+			if err := r.fail(ctx, *item, cause); err != nil {
 				return err
 			}
-			if !errors.Is(out.err, domain.ErrRejected) || p.model == nil {
-				r.retire(p, out.err.Error())
+			if errors.Is(cause, context.DeadlineExceeded) {
+				r.retire(p, domain.DeliveryDeadlineExceeded)
+			} else if !errors.Is(cause, domain.ErrRejected) || p.model == nil {
+				r.retire(p, cause.Error())
 			}
 			return nil
 		}
