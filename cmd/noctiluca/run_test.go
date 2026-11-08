@@ -501,7 +501,9 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 	slackAPI := newRunSlack(t, nil)
 	api := slackAPI.Server
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude}\nheartbeat: {enabled: false}\ntasks: {timeout: 1s}\n"), 0600))
+	// The hung task's model must start on its input within the task timeout before
+	// its turn can hit the timeout, and a loaded runner can take seconds to start the fake CLI.
+	require.NoError(t, os.WriteFile(path, []byte("messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude}\nheartbeat: {enabled: false}\ntasks: {timeout: 3s}\n"), 0600))
 	config, err := loadConfig(path)
 	require.NoError(t, err)
 	app, err := newApplication(t.Context(), config, nil, sdk.OptionAPIURL(api.URL+"/"))
@@ -541,7 +543,7 @@ func TestRunRecoversInboxAndSurvivesModelFailures(t *testing.T) {
 		var finished int
 		err := app.db.QueryRow(`SELECT count(*) FROM inbox WHERE status='done' AND (source_key IN (?,?,?) OR source_key LIKE 'watch:%')`, pending.SourceKey, recovered.SourceKey, next.SourceKey).Scan(&finished)
 		return err == nil && finished == 4
-	}, 3*time.Second, 5*time.Millisecond)
+	}, 15*time.Second, 5*time.Millisecond)
 	for _, key := range []string{failed.SourceKey, hung.SourceKey} {
 		var attempts int
 		require.NoError(t, app.db.QueryRow("SELECT attempts FROM inbox WHERE source_key=?", key).Scan(&attempts))
