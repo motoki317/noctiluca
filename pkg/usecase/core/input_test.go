@@ -22,6 +22,8 @@ func TestReadableInput(t *testing.T) {
 		want    string
 	}{
 		{"first thread", domain.InputContext{}, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nreply → thread | work → thread\n\nadd 了解 at the end"},
+		{"deleted root", domain.InputContext{Root: &domain.InboundEvent{Deleted: true}}, "#general · thread 16:28:01 JST (root deleted) | Alex (owner) | 16:29:01 JST\nreply → thread | work → thread\n\nadd 了解 at the end"},
+		{"seen deleted root", domain.InputContext{ThreadSeen: true, Root: &domain.InboundEvent{Deleted: true}}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nreply → thread | work → thread\n\nadd 了解 at the end"},
 		{"before reply", domain.InputContext{ThreadSeen: true, Running: true, LastReply: at.Add(time.Second)}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nSent at 16:29:01 JST, before your reply at 16:29:02 JST in this thread.\nreply → thread | work → thread\n\nadd 了解 at the end"},
 		{"queued", domain.InputContext{ThreadSeen: true, Running: true}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nSent while your previous turn was running. After its reply, answer only what this message adds.\nreply → thread | work → thread\n\nadd 了解 at the end"},
 	} {
@@ -39,6 +41,28 @@ func TestReadableInput(t *testing.T) {
 	item.Lane, item.Payload.Context.TaskName = "task", "heartbeat"
 	require.Equal(t, "Task heartbeat | wake | 16:29:01 JST\nreply → owner | work → owner\n\nexit code 0: DONE", formatInput(item, domain.InputContext{}, info, "owner", zone).Text)
 	require.Equal(t, strings.Repeat("あ", 80)+"…", excerpt(strings.Repeat("あ", 81)))
+}
+
+func TestReadableMessageChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, notice string
+		deleted            bool
+	}{
+		{"edited", "updated text", "Message edited.", false},
+		{"empty edit", "", "Message edited.", false},
+		{"deleted", "", "Message deleted.", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := domain.InboundEvent{
+				Kind: domain.InboundEventMessageEdited, Deleted: tc.deleted,
+				Conversation: "room", MessageRef: "message", Sender: domain.Sender{ID: "member"},
+				Text: tc.text, ReceivedAt: time.Date(2026, 11, 6, 7, 29, 1, 0, time.UTC),
+			}
+			item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event}}
+			input := formatInput(item, domain.InputContext{}, domain.SourceInfo{}, "owner", time.UTC)
+			require.Equal(t, "room · top level | member | 07:29:01 UTC\n"+tc.notice+"\nreply → room | work → message\n\n"+tc.text, input.Text)
+		})
+	}
 }
 
 func TestWorkTargetSurvivesChatToContinuation(t *testing.T) {
