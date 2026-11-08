@@ -39,19 +39,19 @@ func (r *episodeRepository) Since(ctx context.Context, since, until time.Time) (
 		return nil, errors.New("episode window must end after its start")
 	}
 	rows, err := r.db.QueryContext(ctx, `
- SELECT source, id, session_key, at, kind, sender_id, sender_kind, text, tool_call, tool_error, after_send, deleted, accepted FROM (
+ SELECT source, id, session_key, at, kind, sender_id, sender_kind, text, tool_call, error, after_send, deleted, accepted FROM (
  SELECT 'event' AS source, e.id, e.conversation AS session_key, e.received_at AS at, e.kind,
- e.sender_id, e.sender_kind, e.text, 'null' AS tool_call, 0 AS tool_error,
+ e.sender_id, e.sender_kind, e.text, 'null' AS tool_call, '' AS error,
  COALESCE((SELECT s.sent_at FROM sends s WHERE s.conversation=e.conversation AND s.sent_at<=e.received_at
  ORDER BY s.sent_at DESC, s.id DESC LIMIT 1), '') >
  COALESCE((SELECT p.received_at FROM events p WHERE p.conversation=e.conversation
  AND (p.received_at,p.id)<(e.received_at,e.id) ORDER BY p.received_at DESC,p.id DESC LIMIT 1), '') AS after_send, e.deleted, e.accepted
  FROM events e WHERE e.received_at>=? AND e.received_at<?
  UNION ALL
- SELECT 'send', id, conversation, sent_at, '', '', '', text, 'null', 0, 0, 0, NULL
+ SELECT 'send', id, conversation, sent_at, '', '', '', text, 'null', '', 0, 0, NULL
  FROM sends WHERE sent_at>=? AND sent_at<?
  UNION ALL
- SELECT 'model', id, session_key, recorded_at, kind, '', '', text, tool_call, error!='', 0, 0, NULL
+ SELECT 'model', id, session_key, recorded_at, kind, '', '', text, tool_call, error, 0, 0, NULL
  FROM model_events WHERE recorded_at>=? AND recorded_at<? AND session_key!='task:consolidate'
  ) ORDER BY at, source, id`, since.UTC(), until.UTC(), since.UTC(), until.UTC(), since.UTC(), until.UTC())
 	if err != nil {
@@ -64,7 +64,7 @@ func (r *episodeRepository) Since(ctx context.Context, since, until time.Time) (
 		var source, kind, call string
 		var id int64
 		if err := rows.Scan(&source, &id, &entry.SessionKey, &entry.At, &kind, &entry.Sender.ID,
-			&entry.Sender.Kind, &entry.Text, &call, &entry.ToolError, &entry.AfterSend, &entry.Deleted, &entry.Accepted); err != nil {
+			&entry.Sender.Kind, &entry.Text, &call, &entry.Error, &entry.AfterSend, &entry.Deleted, &entry.Accepted); err != nil {
 			return nil, err
 		}
 		entry.ID = fmt.Sprintf("%s:%d", source, id)
