@@ -92,19 +92,34 @@ func control(t *testing.T, s *session, method string, params any) {
 	require.NoError(t, s.call(ctx, "test/"+method, params, nil))
 }
 
+func requireEvents(t *testing.T, s domain.ModelSession, expected ...domain.ModelEvent) {
+	t.Helper()
+	var events []domain.ModelEvent
+	for range expected {
+		events = append(events, nextEvent(t, s))
+	}
+	require.ElementsMatch(t, expected, events)
+}
+
 func sendAndStart(t *testing.T, s domain.ModelSession, text string) {
 	t.Helper()
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: text}))
-	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
-	require.Equal(t, "turn/start:"+text, nextEvent(t, s).Text)
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: text}))
+	requireEvents(t, s,
+		domain.ModelEvent{Kind: domain.ModelEventTurnStarted},
+		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1},
+		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/start:" + text},
+	)
 }
 
 func TestSteerTracksInputsThroughCompletion(t *testing.T) {
 	s, dir := openInputSession(t, "input-normal")
 	sendAndStart(t, s, "first")
-	for _, text := range []string{"", "second", "second"} {
-		require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: text}))
-		require.Equal(t, "turn/steer:"+text, nextEvent(t, s).Text)
+	for i, text := range []string{"", "second", "second"} {
+		require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: int64(i + 2), Text: text}))
+		requireEvents(t, s,
+			domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: int64(i + 2)},
+			domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/steer:" + text},
+		)
 		require.False(t, s.Idle(), "steering acceptance does not finish the turn")
 	}
 	control(t, s, "complete", nil)
@@ -128,16 +143,20 @@ func TestSteerTracksInputsThroughCompletion(t *testing.T) {
 func TestRefusedSteeringQueuesInOrder(t *testing.T) {
 	s, dir := openInputSession(t, "input-refuse")
 	sendAndStart(t, s, "first")
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "queued"}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "queued"}))
 	require.Equal(t, "turn/steer:queued", nextEvent(t, s).Text)
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "last"}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 3, Text: "last"}))
 	require.False(t, s.Idle())
 	control(t, s, "complete", nil)
 	require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
 	require.False(t, s.Idle(), "completion of the refusing turn does not cover queued input")
-	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
-	require.Equal(t, "turn/start:queued", nextEvent(t, s).Text)
-	require.Equal(t, "turn/steer:last", nextEvent(t, s).Text)
+	requireEvents(t, s,
+		domain.ModelEvent{Kind: domain.ModelEventTurnStarted},
+		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 2},
+		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/start:queued"},
+		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 3},
+		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/steer:last"},
+	)
 	control(t, s, "notify", rpcFrame{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)})
 	require.Empty(t, s.events, "an old completion must not finish the core's new turn")
 	require.False(t, s.Idle(), "an old completion must not clear the new turn")
@@ -159,9 +178,15 @@ func TestCompletionBeforeInputResponse(t *testing.T) {
 	for _, mode := range []string{"input-start-late", "input-steer-late", "input-refuse-steer-late"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _ := openInputSession(t, mode)
-			sendAndStart(t, s, "first")
+			if mode == "input-start-late" {
+				require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
+				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+				require.Equal(t, "turn/start:first", nextEvent(t, s).Text)
+			} else {
+				sendAndStart(t, s, "first")
+			}
 			if mode != "input-start-late" {
-				require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "second"}))
+				require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second"}))
 				require.Equal(t, "turn/steer:second", nextEvent(t, s).Text)
 			}
 			control(t, s, "complete", nil)
@@ -171,12 +196,22 @@ func TestCompletionBeforeInputResponse(t *testing.T) {
 			}
 			control(t, s, "release", nil)
 			if mode == "input-refuse-steer-late" {
-				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
-				require.Equal(t, "turn/start:second", nextEvent(t, s).Text)
+				requireEvents(t, s,
+					domain.ModelEvent{Kind: domain.ModelEventTurnStarted},
+					domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 2},
+					domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/start:second"},
+				)
 				require.False(t, s.Idle())
 				control(t, s, "complete", nil)
 				require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
+			} else {
+				id := int64(2)
+				if mode == "input-start-late" {
+					id = 1
+				}
+				require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}, nextEvent(t, s))
 			}
+			require.Empty(t, s.events)
 			require.Eventually(t, s.Idle, time.Second, time.Millisecond, "late success must not revive a completed turn")
 		})
 	}
@@ -184,11 +219,17 @@ func TestCompletionBeforeInputResponse(t *testing.T) {
 
 func TestInputWhileStartResponseIsPending(t *testing.T) {
 	s, _ := openInputSession(t, "input-start-late")
-	sendAndStart(t, s, "first")
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "second"}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, "turn/start:first", nextEvent(t, s).Text)
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second"}))
 	require.False(t, s.Idle())
 	control(t, s, "release", nil)
-	require.Equal(t, "turn/steer:second", nextEvent(t, s).Text)
+	requireEvents(t, s,
+		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1},
+		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 2},
+		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/steer:second"},
+	)
 	control(t, s, "complete", nil)
 	require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
 	require.Eventually(t, s.Idle, time.Second, time.Millisecond)
@@ -206,8 +247,10 @@ func TestCanceledInputIsNotQueued(t *testing.T) {
 
 func TestCloseWithPendingInputResponse(t *testing.T) {
 	s, dir := openInputSession(t, "input-start-late")
-	sendAndStart(t, s, "first")
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "queued"}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, "turn/start:first", nextEvent(t, s).Text)
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "queued"}))
 	closed := make(chan error, 1)
 	go func() { closed <- s.Close() }()
 	select {
@@ -224,7 +267,7 @@ func TestCloseWithPendingInputResponse(t *testing.T) {
 func TestInvalidSteerResponseClosesSession(t *testing.T) {
 	s, _ := openInputSession(t, "input-invalid")
 	sendAndStart(t, s, "first")
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "second"}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second"}))
 	for {
 		event := nextEvent(t, s)
 		if event.Kind == domain.ModelEventError {
@@ -236,5 +279,19 @@ func TestInvalidSteerResponseClosesSession(t *testing.T) {
 	case <-s.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("session survived a mismatched turn ID")
+	}
+}
+
+func TestTurnStartRefused(t *testing.T) {
+	s, _ := openInputSession(t, "reject")
+	for _, id := range []int64{41, 42} {
+		require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: id, Text: "rejected"}))
+		event := nextEvent(t, s)
+		require.Equal(t, domain.ModelEventInputRefused, event.Kind)
+		require.Equal(t, id, event.InputID)
+		require.ErrorContains(t, event.Err, "turn rejected")
+		require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
+		require.True(t, s.Idle())
+		require.Empty(t, s.events)
 	}
 }

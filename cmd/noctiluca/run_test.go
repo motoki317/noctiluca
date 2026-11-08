@@ -104,6 +104,7 @@ func TestRunCLIHelper(t *testing.T) {
 	for scanner.Scan() {
 		var frame struct {
 			Type    string
+			UUID    string
 			Message struct{ Content string }
 		}
 		require.NoError(t, json.Unmarshal(scanner.Bytes(), &frame))
@@ -115,6 +116,7 @@ func TestRunCLIHelper(t *testing.T) {
 			continue
 		}
 		capture.Input = frame.Message.Content
+		fmt.Printf("{\"type\":\"command_lifecycle\",\"command_uuid\":%q,\"state\":\"started\"}\n", frame.UUID)
 		recovery := os.Getenv("NOCTILUCA_RUN_RECOVERY") != ""
 		if recovery {
 			record, err := os.OpenFile(filepath.Join(os.Getenv("NOCTILUCA_RUN_TEST_DIR"), "recovery.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)

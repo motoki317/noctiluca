@@ -21,6 +21,7 @@ type ModelSessionConfig struct {
 }
 
 type UserInput struct {
+	ID          int64
 	Text        string
 	Attachments []Attachment
 }
@@ -28,6 +29,8 @@ type UserInput struct {
 type ModelEventKind string
 
 const (
+	ModelEventInputStarted   ModelEventKind = "input_started"
+	ModelEventInputRefused   ModelEventKind = "input_refused"
 	ModelEventTurnStarted    ModelEventKind = "turn_started"
 	ModelEventText           ModelEventKind = "text"
 	ModelEventToolCall       ModelEventKind = "tool_call"
@@ -45,6 +48,7 @@ type ToolCall struct {
 
 type ModelEvent struct {
 	Kind     ModelEventKind
+	InputID  int64
 	Text     string
 	ToolCall *ToolCall
 	Err      error
@@ -55,6 +59,10 @@ type ModelAdapter interface {
 }
 
 type ModelSession interface {
+	// For each Send that returns nil, the session emits exactly one
+	// ModelEventInputStarted or ModelEventInputRefused for the input's ID, unless it
+	// closes first. Refusals include Err. Several inputs can await acknowledgement, and
+	// acknowledgements can arrive in any order, before or after their turn's other events.
 	Send(ctx context.Context, input UserInput) error
 	Events() <-chan ModelEvent
 	ResumeToken() string

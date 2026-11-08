@@ -32,12 +32,12 @@ func TestProtocol(t *testing.T) {
 		{`{"type":"stream_event","event":{"type":"message_start"}}`, []domain.ModelEventKind{domain.ModelEventTurnStarted}},
 		{`{"type":"result","subtype":"error_during_execution","is_error":true}`, []domain.ModelEventKind{domain.ModelEventError, domain.ModelEventTurnFinished}},
 		{`{"type":"keep_alive"}`, nil},
-		{`{"type":"command_lifecycle","state":"refused"}`, []domain.ModelEventKind{domain.ModelEventError}},
+		{`{"type":"command_lifecycle","state":"refused"}`, nil},
 	}
 	for _, tc := range cases {
 		f, err := parseFrame([]byte(tc.line))
 		require.NoError(t, err)
-		events := p.events(f)
+		events := p.events(f, nil)
 		var kinds []domain.ModelEventKind
 		for _, event := range events {
 			kinds = append(kinds, event.Kind)
@@ -74,7 +74,7 @@ func TestBackgroundActivity(t *testing.T) {
 	} {
 		f, err := parseFrame([]byte(tc.line))
 		require.NoError(t, err)
-		p.events(f)
+		p.events(f, nil)
 		require.Len(t, p.tasks, tc.pending)
 	}
 }
@@ -83,7 +83,7 @@ func TestRecoverableToolError(t *testing.T) {
 	f, err := parseFrame([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call","is_error":true,"content":"private error body"}]}}`))
 	require.NoError(t, err)
 	var p parser
-	events := p.events(f)
+	events := p.events(f, nil)
 	require.Len(t, events, 1)
 	require.Equal(t, domain.ModelEventToolResult, events[0].Kind)
 	require.Equal(t, "call", events[0].ToolCall.ID)
@@ -94,31 +94,31 @@ func TestRecoverableToolError(t *testing.T) {
 func TestFailedResultDoesNotExposeBody(t *testing.T) {
 	for _, f := range []frame{{Type: "result", IsError: true, Result: "private body"}, {Type: "result", Subtype: "error_during_execution", Result: "private body"}} {
 		var p parser
-		events := p.events(f)
+		events := p.events(f, nil)
 		require.Len(t, events, 2)
 		require.Equal(t, domain.ModelEventTurnFinished, events[1].Kind)
 		require.Empty(t, events[1].Text)
 		require.Contains(t, events[0].Err.Error(), authRemedy)
 	}
 	var p parser
-	require.Equal(t, "answer", p.events(frame{Type: "result", Result: "answer"})[0].Text)
+	require.Equal(t, "answer", p.events(frame{Type: "result", Result: "answer"}, nil)[0].Text)
 }
 
 func TestAutonomousTurnWithoutInput(t *testing.T) {
 	for _, partial := range []bool{false, true} {
 		var p parser
-		p.events(frame{Type: "result", Subtype: "success"})
-		events := p.events(frame{Type: "system", Subtype: "task_notification", TaskID: "background", Status: "completed"})
+		p.events(frame{Type: "result", Subtype: "success"}, nil)
+		events := p.events(frame{Type: "system", Subtype: "task_notification", TaskID: "background", Status: "completed"}, nil)
 		require.Equal(t, domain.ModelEventBackgroundDone, events[0].Kind)
 		if partial {
 			f, err := parseFrame([]byte(`{"type":"stream_event","event":{"type":"message_start"}}`))
 			require.NoError(t, err)
-			events = p.events(f)
+			events = p.events(f, nil)
 			require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
 		}
 		f, err := parseFrame([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"reply","name":"reply","input":{"target":"thread","text":"done"}}]}}`))
 		require.NoError(t, err)
-		events = p.events(f)
+		events = p.events(f, nil)
 		if !partial {
 			require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
 			events = events[1:]
@@ -126,7 +126,7 @@ func TestAutonomousTurnWithoutInput(t *testing.T) {
 		require.Len(t, events, 1)
 		require.Equal(t, domain.ModelEventToolCall, events[0].Kind)
 		require.True(t, p.active)
-		require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result"})[0].Kind)
+		require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result"}, nil)[0].Kind)
 		require.False(t, p.active)
 	}
 }

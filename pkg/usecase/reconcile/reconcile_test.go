@@ -15,6 +15,8 @@ import (
 )
 
 type modelFake struct {
+	manualAck bool
+	idle      bool
 	send      func(context.Context, domain.UserInput) error
 	opened    chan *sessionFake
 	closeWait <-chan struct{}
@@ -28,12 +30,14 @@ func (m *modelFake) Open(ctx context.Context, c domain.ModelSessionConfig) (doma
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	s := &sessionFake{config: c, send: m.send, closeWait: m.closeWait, inputs: make(chan domain.UserInput, 4), events: make(chan domain.ModelEvent, 8), closed: make(chan struct{})}
+	s := &sessionFake{config: c, send: m.send, manualAck: m.manualAck, idle: m.idle, closeWait: m.closeWait, inputs: make(chan domain.UserInput, 4), events: make(chan domain.ModelEvent, 8), closed: make(chan struct{})}
 	m.opened <- s
 	return s, nil
 }
 
 type sessionFake struct {
+	manualAck bool
+	idle      bool
 	send      func(context.Context, domain.UserInput) error
 	config    domain.ModelSessionConfig
 	closeWait <-chan struct{}
@@ -43,7 +47,12 @@ type sessionFake struct {
 	once      sync.Once
 }
 
-func (s *sessionFake) Send(ctx context.Context, in domain.UserInput) error {
+func (s *sessionFake) Send(ctx context.Context, in domain.UserInput) (err error) {
+	defer func() {
+		if err == nil && !s.manualAck {
+			s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: in.ID}
+		}
+	}()
 	if s.send != nil {
 		return s.send(ctx, in)
 	}
@@ -59,7 +68,7 @@ func (s *sessionFake) Send(ctx context.Context, in domain.UserInput) error {
 }
 func (s *sessionFake) Events() <-chan domain.ModelEvent { return s.events }
 func (s *sessionFake) ResumeToken() string              { return "resume-token" }
-func (s *sessionFake) Idle() bool                       { return false }
+func (s *sessionFake) Idle() bool                       { return s.idle }
 func (s *sessionFake) Close() error {
 	s.once.Do(func() {
 		close(s.closed)

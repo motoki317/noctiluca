@@ -50,9 +50,11 @@ type process struct {
 	inputs     chan domain.InboxItem
 	model      domain.ModelSession
 	delivering *domain.InboxItem
+	unstarted  map[int64]domain.InboxItem
 	turn       *domain.SessionTurn
 	closing    bool
 	reason     string
+	retiredAt  time.Time
 	last       time.Time
 }
 
@@ -159,6 +161,16 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			r.retire(p, "conversation no longer accepted")
 			continue
 		}
+		for _, item := range p.unstarted {
+			if !now.Before(item.Deadline) {
+				r.retire(p, domain.DeliveryDeadlineExceeded)
+				break
+			}
+			due(item.Deadline)
+		}
+		if p.closing {
+			continue
+		}
 		if p.turn != nil {
 			if !now.Before(p.turn.Deadline) {
 				r.retire(p, domain.TurnDeadlineExceeded)
@@ -172,7 +184,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 				continue
 			}
 			due(p.delivering.Deadline)
-		} else if p.turn == nil && p.model != nil {
+		} else if p.turn == nil && len(p.unstarted) == 0 && p.model != nil {
 			at := p.last.Add(r.config.IdleTimeout)
 			if !now.Before(at) {
 				if p.model.Idle() {
@@ -223,17 +235,22 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	}
 	taskBusy := false
 	for _, p := range r.live {
-		if p.lane == "task" && (p.delivering != nil || p.turn != nil || p.closing) {
+		if p.lane == "task" && (p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil || p.closing) {
 			taskBusy = true
 		}
 	}
 	blocked := map[domain.SessionKey]bool{}
 	for _, item := range items {
+		p := r.live[item.SessionKey]
+		if p != nil {
+			if _, sent := p.unstarted[item.ID]; sent {
+				continue
+			}
+		}
 		if blocked[item.SessionKey] {
 			continue
 		}
 		blocked[item.SessionKey] = true
-		p := r.live[item.SessionKey]
 		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing)) || (item.Lane == "task" && taskBusy) {
 			continue
 		}
@@ -316,6 +333,18 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				slog.WarnContext(ctx, "Model close failed", "session", p.key, "error", err)
 			}
 		}
+		for events != nil {
+			select {
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				emit(result{event: &event})
+			default:
+				events = nil
+			}
+		}
 		emit(result{exited: true})
 	}()
 	for {
@@ -365,6 +394,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				}
 			}
 			if err == nil {
+				input.ID = item.ID
 				err = model.Send(sendCtx, input)
 			}
 			cancel()
@@ -394,6 +424,17 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		return nil
 	}
 	if out.exited {
+		// The pump forwards buffered events before this exit, so a row that started before
+		// the close is already done and no longer unstarted.
+		if p.reason == domain.DeliveryDeadlineExceeded {
+			for _, item := range p.unstarted {
+				if !p.retiredAt.Before(item.Deadline) {
+					if err := r.fail(ctx, item, context.DeadlineExceeded); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		reason := p.reason
 		if reason == "" {
 			reason = "model process exited"
@@ -415,7 +456,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		item := p.delivering
 		p.delivering = nil
 		if out.err != nil {
-			if p.closing && p.reason != domain.DeliveryDeadlineExceeded {
+			if p.closing && (p.reason != domain.DeliveryDeadlineExceeded || p.retiredAt.Before(item.Deadline)) {
 				return nil
 			}
 			cause := out.err
@@ -437,7 +478,14 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			r.retire(p, domain.DeliveryDeadlineExceeded)
 		}
 		if !out.skipped && p.turn == nil {
-			p.turn = &domain.SessionTurn{Deadline: time.Now().Add(r.timeout(p.lane)), Procedure: item.Payload.Procedure, Continuations: item.Payload.Continuations}
+			p.turn = &domain.SessionTurn{InputID: item.ID, Deadline: time.Now().Add(r.timeout(p.lane)), Procedure: item.Payload.Procedure, Continuations: item.Payload.Continuations}
+		}
+		if !out.skipped {
+			if p.unstarted == nil {
+				p.unstarted = make(map[int64]domain.InboxItem)
+			}
+			p.unstarted[item.ID] = *item
+			return r.save(ctx, p)
 		}
 		if err := r.inbox.Delivered(ctx, item.ID, r.state(p)); err != nil {
 			return err
@@ -447,6 +495,28 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			r.retire(p, "empty input")
 		}
 		return nil
+	}
+	if out.event != nil && (out.event.Kind == domain.ModelEventInputStarted || out.event.Kind == domain.ModelEventInputRefused) {
+		item, found := p.unstarted[out.event.InputID]
+		if !found {
+			return nil
+		}
+		delete(p.unstarted, item.ID)
+		if out.event.Kind == domain.ModelEventInputRefused {
+			if err := r.fail(ctx, item, out.event.Err); err != nil {
+				return err
+			}
+			if p.turn != nil {
+				if p.turn.InputID == item.ID && len(p.unstarted) == 0 {
+					p.turn = nil
+				} else {
+					p.turn.Failed = true
+				}
+			}
+			return r.save(ctx, p)
+		}
+		p.last = time.Now()
+		return r.inbox.Delivered(ctx, item.ID, r.state(p))
 	}
 	if p.closing {
 		return nil
@@ -500,6 +570,7 @@ func (r *Reconciler) retire(p *process, reason string) {
 	p.closing = true
 	r.mu.Unlock()
 	p.reason = reason
+	p.retiredAt = time.Now()
 	r.hub.CloseSession(p.key)
 	p.cancel()
 }

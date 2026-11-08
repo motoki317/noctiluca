@@ -164,6 +164,12 @@ func TestCLIHelper(t *testing.T) {
 			}
 			emit(`{"type":"control_response","response":{"request_id":"initialize","subtype":"success"}}`)
 			emit(`{"type":"system","subtype":"init","session_id":"test-session"}`)
+			if mode == "autonomous" {
+				emit(`{"type":"system","subtype":"task_notification","task_id":"task","status":"completed"}`)
+				emit(`{"type":"command_lifecycle","command_uuid":"autonomous","state":"started"}`)
+				emit(`{"type":"command_lifecycle","command_uuid":"autonomous","state":"started"}`)
+				emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"checkpoint"}}}`)
+			}
 			if mode == "blocked" || mode == "descendant" {
 				for {
 					_ = syscall.Pause()
@@ -171,12 +177,44 @@ func TestCLIHelper(t *testing.T) {
 			}
 		case "user":
 			count++
-			if mode == "idle" {
-				var id string
-				_ = json.Unmarshal(f["uuid"], &id)
-				lifecycle := func(id, state string) {
-					emit(fmt.Sprintf(`{"type":"command_lifecycle","command_uuid":%q,"state":%q}`, id, state))
+			var id string
+			_ = json.Unmarshal(f["uuid"], &id)
+			lifecycle := func(id, state string) {
+				emit(fmt.Sprintf(`{"type":"command_lifecycle","command_uuid":%q,"state":%q}`, id, state))
+			}
+			if mode == "lifecycle" {
+				lifecycle(id, "queued")
+				switch count {
+				case 1:
+					held = id
+					lifecycle(id, "started")
+				case 2:
+					queued = id
+				case 3:
+					emit(`{"type":"result","subtype":"success"}`)
+					lifecycle(held, "completed")
+					for _, state := range []string{"queued", "started", "refused", "discarded", "cancelled", "completed"} {
+						lifecycle("unknown", state)
+					}
+					lifecycle(id, "started")
+					lifecycle(id, "started")
+					lifecycle(queued, "started")
+					emit(fmt.Sprintf(`{"type":"result","subtype":"success","user_message_uuids":[%q,%q]}`, queued, id))
+					for _, input := range []string{held, queued, id} {
+						lifecycle(input, "completed")
+						lifecycle(input, "started")
+						lifecycle(input, "cancelled")
+					}
+				default:
+					var message struct{ Content string }
+					_ = json.Unmarshal(f["message"], &message)
+					lifecycle(id, message.Content)
+					lifecycle(id, message.Content)
 				}
+				emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"checkpoint"}}}`)
+				continue
+			}
+			if mode == "idle" {
 				switch count {
 				case 1:
 					held = id
@@ -198,7 +236,9 @@ func TestCLIHelper(t *testing.T) {
 					emit(`{"type":"result","subtype":"success"}`)
 					lifecycle(id, "completed")
 				case 5:
+					lifecycle(id, "started")
 					emit(`{"type":"system","subtype":"task_notification","task_id":"task","status":"completed"}`)
+					emit(`{"type":"result","subtype":"success"}`)
 					lifecycle(id, "completed")
 				}
 				emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"checkpoint"}}}`)
@@ -225,7 +265,7 @@ func TestCLIHelper(t *testing.T) {
 			if mode == "steer" && count == 2 {
 				emit(`{"type":"result","subtype":"success"}`)
 			}
-			emit(`{"type":"command_lifecycle","state":"started"}`)
+			lifecycle(id, "started")
 			emit(`{"type":"user","isReplay":true,"message":{"role":"user","content":"replayed input"}}`)
 			// Exercise a UTF-8 frame split across writes.
 			fmt.Print(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"`)
@@ -256,6 +296,65 @@ func TestSessionIdle(t *testing.T) {
 		for nextEvent(t, s).Text != "checkpoint" {
 		}
 		require.Equal(t, idle, s.Idle())
+	}
+}
+
+func TestAutonomousLifecycleStartsTurn(t *testing.T) {
+	path, dir := fakeCLI(t, "autonomous")
+	s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.Equal(t, domain.ModelEventBackgroundDone, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnStarted}, nextEvent(t, s))
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "checkpoint"}, nextEvent(t, s))
+	require.False(t, s.Idle())
+}
+
+func TestInputLifecycle(t *testing.T) {
+	path, dir := fakeCLI(t, "lifecycle")
+	s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	checkpoint := func() []domain.ModelEvent {
+		var events []domain.ModelEvent
+		for {
+			event := nextEvent(t, s)
+			if event.Text == "checkpoint" {
+				return events
+			}
+			events = append(events, event)
+		}
+	}
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
+	require.Equal(t, []domain.ModelEvent{
+		{Kind: domain.ModelEventInputStarted, InputID: 1},
+		{Kind: domain.ModelEventTurnStarted},
+	}, checkpoint())
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "same"}))
+	require.Empty(t, checkpoint())
+	require.False(t, s.Idle())
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 3, Text: "same"}))
+	require.Equal(t, []domain.ModelEvent{
+		{Kind: domain.ModelEventTurnFinished},
+		{Kind: domain.ModelEventTurnStarted},
+		{Kind: domain.ModelEventInputStarted, InputID: 3},
+		{Kind: domain.ModelEventTurnStarted},
+		{Kind: domain.ModelEventInputStarted, InputID: 2},
+		{Kind: domain.ModelEventTurnFinished},
+		{Kind: domain.ModelEventTurnStarted},
+		{Kind: domain.ModelEventTurnStarted},
+		{Kind: domain.ModelEventTurnStarted},
+	}, checkpoint())
+	require.True(t, s.Idle())
+	for i, state := range []string{"refused", "discarded", "cancelled"} {
+		id := int64(i + 4)
+		require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: id, Text: state}))
+		events := checkpoint()
+		require.Len(t, events, 1)
+		require.Equal(t, domain.ModelEventInputRefused, events[0].Kind)
+		require.Equal(t, id, events[0].InputID)
+		require.EqualError(t, events[0].Err, "claude input "+state)
+		require.True(t, s.Idle())
 	}
 }
 
@@ -353,12 +452,13 @@ func TestSessionSteerResumeAndConfig(t *testing.T) {
 	for _, flag := range []string{"--resume " + savedSessionID, "--model haiku", "--setting-sources user,project,local", "--permission-mode default", "--strict-mcp-config", "--allowedTools mcp__noctiluca__*"} {
 		require.Contains(t, joined, flag)
 	}
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "first"}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1}, nextEvent(t, s))
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
 	require.Equal(t, "日本語", nextEvent(t, s).Text)
 	require.Equal(t, "test-session", s.ResumeToken())
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "second", Attachments: []domain.Attachment{{Ref: "file-ref", Name: "photo"}}}))
-	for _, kind := range []domain.ModelEventKind{domain.ModelEventTurnFinished, domain.ModelEventTurnStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished, domain.ModelEventBackgroundDone} {
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second", Attachments: []domain.Attachment{{Ref: "file-ref", Name: "photo"}}}))
+	for _, kind := range []domain.ModelEventKind{domain.ModelEventTurnFinished, domain.ModelEventInputStarted, domain.ModelEventTurnStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished, domain.ModelEventBackgroundDone} {
 		require.Equal(t, kind, nextEvent(t, s).Kind)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "input-2.json"))
@@ -638,7 +738,7 @@ func TestConcurrentSend(t *testing.T) {
 		wg.Go(func() { errs <- s.Send(t.Context(), domain.UserInput{Text: "concurrent"}) })
 	}
 	for i := 0; i < 20; i++ {
-		for _, kind := range []domain.ModelEventKind{domain.ModelEventTurnStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished} {
+		for _, kind := range []domain.ModelEventKind{domain.ModelEventInputStarted, domain.ModelEventTurnStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished} {
 			require.Equal(t, kind, nextEvent(t, s).Kind)
 		}
 	}

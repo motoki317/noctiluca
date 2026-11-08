@@ -61,6 +61,7 @@ func (f *fakeModel) Open(_ context.Context, config domain.ModelSessionConfig) (d
 }
 
 type fakeSession struct {
+	mu     sync.Mutex
 	config domain.ModelSessionConfig
 	inputs chan domain.UserInput
 	events chan domain.ModelEvent
@@ -74,7 +75,15 @@ func (s *fakeSession) Send(ctx context.Context, in domain.UserInput) error {
 	if s.send != nil {
 		return s.send(ctx, in)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.closed:
+		return errors.New("model session closed")
+	default:
+	}
 	s.idle.Store(false)
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: in.ID}
 	s.inputs <- in
 	return nil
 }
@@ -82,6 +91,8 @@ func (s *fakeSession) Events() <-chan domain.ModelEvent { return s.events }
 func (s *fakeSession) ResumeToken() string              { return "resume-" + string(s.config.Key) }
 func (s *fakeSession) Idle() bool                       { return s.idle.Load() }
 func (s *fakeSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.once.Do(func() { close(s.events); close(s.closed) })
 	return nil
 }
