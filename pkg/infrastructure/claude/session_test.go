@@ -613,13 +613,15 @@ func TestSessionCancellation(t *testing.T) {
 			}
 			if mode == "descendant" {
 				pid := readInvocation(t, dir).ChildPID
-				// A killed orphan can remain a zombie until the host's reaper collects it.
-				data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-				if err == nil {
-					require.Contains(t, string(data), ") Z ")
-				} else {
-					require.True(t, os.IsNotExist(err))
-				}
+				// A killed process closes its stdout before it becomes a zombie, so Close can
+				// return while the orphan is still exiting. The host's reaper may also leave it a zombie.
+				require.Eventually(t, func() bool {
+					data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+					if err != nil {
+						return os.IsNotExist(err)
+					}
+					return strings.Contains(string(data), ") Z ")
+				}, 2*time.Second, 10*time.Millisecond)
 			}
 		})
 	}
