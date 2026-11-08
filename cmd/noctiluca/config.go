@@ -73,6 +73,9 @@ type messagingConfig struct {
 		UserToken            secretRef      `mapstructure:"user_token"`
 		GroupRefreshInterval *time.Duration `mapstructure:"group_refresh_interval"`
 	} `mapstructure:"slack"`
+	Discord struct {
+		Token secretRef `mapstructure:"token"`
+	} `mapstructure:"discord"`
 	Conversations struct {
 		DirectMessages *acceptConfig `mapstructure:"direct_messages"`
 		Rules          []struct {
@@ -83,10 +86,19 @@ type messagingConfig struct {
 }
 
 func (c messagingConfig) groupRefreshInterval() time.Duration {
-	if c.Slack.GroupRefreshInterval == nil {
+	if c.Type != "slack" || c.Slack.GroupRefreshInterval == nil {
 		return time.Hour
 	}
 	return *c.Slack.GroupRefreshInterval
+}
+
+func (c *messagingConfig) tokenRefs() []*secretRef {
+	return []*secretRef{&c.Slack.AppToken, &c.Slack.BotToken, &c.Slack.UserToken, &c.Discord.Token}
+}
+
+type messagingTokens struct {
+	Slack        slack.Config
+	DiscordToken string
 }
 
 type Config struct {
@@ -171,6 +183,15 @@ func loadConfig(path string) (Config, error) {
 		return Config{}, errors.New("model.reasoning_effort requires model.type codex")
 	}
 	v.SetDefault("model.reasoning_effort", "")
+	entries, _ := v.Get("messaging").([]any)
+	for i, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		for _, platform := range []string{"slack", "discord"} {
+			if _, present := entry[platform]; present && entry["type"] != platform {
+				return Config{}, fmt.Errorf("invalid config: messaging entry %d has %s settings but a different type", i+1, platform)
+			}
+		}
+	}
 	var config Config
 	if err := v.UnmarshalExact(&config); err != nil {
 		return Config{}, errors.New("invalid config: check field names and value types")
@@ -196,10 +217,9 @@ func loadConfig(path string) (Config, error) {
 		config.Model.Workdir = filepath.Join(filepath.Dir(config.Database.Path), "work")
 	}
 	for i := range config.Messaging {
-		slack := &config.Messaging[i].Slack
-		slack.AppToken.File = absolute(slack.AppToken.File)
-		slack.BotToken.File = absolute(slack.BotToken.File)
-		slack.UserToken.File = absolute(slack.UserToken.File)
+		for _, ref := range config.Messaging[i].tokenRefs() {
+			ref.File = absolute(ref.File)
+		}
 	}
 	if strings.ContainsRune(config.Model.Executable, filepath.Separator) {
 		config.Model.Executable = absolute(config.Model.Executable)
@@ -210,7 +230,7 @@ func loadConfig(path string) (Config, error) {
 	return config, mcpclient.Validate(config.MCPServers)
 }
 
-func (c Config) validateRun() ([]slack.Config, int, error) {
+func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if len(c.Messaging) == 0 {
 		return nil, 0, errors.New("messaging requires at least one entry")
 	}
@@ -220,14 +240,8 @@ func (c Config) validateRun() ([]slack.Config, int, error) {
 			return nil, 0, errors.New("messaging names must be unique and match ^[a-z][a-z0-9_]*$")
 		}
 		names[instance.Name] = true
-		if instance.Type != "slack" {
-			return nil, 0, fmt.Errorf("messaging.%s.type must be slack", instance.Name)
-		}
 		if strings.TrimSpace(instance.Owner) == "" {
 			return nil, 0, fmt.Errorf("messaging.%s.owner is required", instance.Name)
-		}
-		if instance.groupRefreshInterval() <= 0 {
-			return nil, 0, fmt.Errorf("messaging.%s.slack.group_refresh_interval must be positive", instance.Name)
 		}
 	}
 	if c.Memory.Dir == "" || c.Database.Path == "" || c.Model.Executable == "" {
@@ -257,7 +271,7 @@ func (c Config) validateRun() ([]slack.Config, int, error) {
 			return nil, 0, errors.New("heartbeat and consolidate are reserved cron names")
 		}
 	}
-	tokens := make([]slack.Config, len(c.Messaging))
+	tokens := make([]messagingTokens, len(c.Messaging))
 	for i, instance := range c.Messaging {
 		seen := map[string]bool{}
 		for _, rule := range instance.Conversations.Rules {
@@ -266,19 +280,32 @@ func (c Config) validateRun() ([]slack.Config, int, error) {
 			}
 			seen[rule.ID] = true
 		}
-		for _, field := range []struct {
+		type tokenField struct {
 			name     string
 			source   secretRef
 			target   *string
 			required bool
-		}{
-			{"app_token", instance.Slack.AppToken, &tokens[i].AppToken, true},
-			{"bot_token", instance.Slack.BotToken, &tokens[i].BotToken, true},
-			{"user_token", instance.Slack.UserToken, &tokens[i].UserToken, false},
-		} {
+		}
+		var fields []tokenField
+		switch instance.Type {
+		case "slack":
+			if instance.groupRefreshInterval() <= 0 {
+				return nil, 0, fmt.Errorf("messaging.%s.slack.group_refresh_interval must be positive", instance.Name)
+			}
+			fields = []tokenField{
+				{"app_token", instance.Slack.AppToken, &tokens[i].Slack.AppToken, true},
+				{"bot_token", instance.Slack.BotToken, &tokens[i].Slack.BotToken, true},
+				{"user_token", instance.Slack.UserToken, &tokens[i].Slack.UserToken, false},
+			}
+		case "discord":
+			fields = []tokenField{{"token", instance.Discord.Token, &tokens[i].DiscordToken, true}}
+		default:
+			return nil, 0, fmt.Errorf("messaging.%s.type must be slack or discord", instance.Name)
+		}
+		for _, field := range fields {
 			value, err := field.source.read(field.required)
 			if err != nil {
-				return nil, 0, fmt.Errorf("messaging.%s.slack.%s: %w", instance.Name, field.name, err)
+				return nil, 0, fmt.Errorf("messaging.%s.%s.%s: %w", instance.Name, instance.Type, field.name, err)
 			}
 			*field.target = value
 		}
@@ -316,7 +343,9 @@ func (c Config) validateWorkdir() error {
 	}
 	paths := []string{c.path, c.Database.Path, c.Memory.Dir}
 	for _, instance := range c.Messaging {
-		paths = append(paths, instance.Slack.AppToken.File, instance.Slack.BotToken.File, instance.Slack.UserToken.File)
+		for _, ref := range instance.tokenRefs() {
+			paths = append(paths, ref.File)
+		}
 	}
 	for _, path := range paths {
 		if path == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -35,6 +36,12 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	tokens, port, err := config.validateRun()
 	if err != nil {
 		return nil, err
+	}
+	for _, instance := range config.Messaging {
+		switch instance.Type {
+		case "discord":
+			return nil, fmt.Errorf("messaging.%s: %s adapter is not implemented yet", instance.Name, instance.Type)
+		}
 	}
 	if err := os.MkdirAll(config.Model.Workdir, 0700); err != nil {
 		return nil, err
@@ -73,7 +80,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	events := repository.NewEventRepository(db)
 	messaging := make([]core.Messaging, 0, len(config.Messaging))
 	for i, instance := range config.Messaging {
-		adapter, err := slack.New(instance.Name, tokens[i], events, slackOptions...)
+		adapter, err := slack.New(instance.Name, tokens[i].Slack, events, slackOptions...)
 		if err != nil {
 			return nil, err
 		}
