@@ -21,6 +21,7 @@ import (
 	"github.com/motoki317/noctiluca/pkg/infrastructure/memory"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/slack"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/traq"
 	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/motoki317/noctiluca/pkg/usecase/core"
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
@@ -87,6 +88,12 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 				groups = groups || len(rule.Groups) > 0
 			}
 			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, Channels: channels, NeedGroups: groups}, events)
+		case "traq":
+			channels := make([]string, 0, len(instance.Conversations.Rules))
+			for _, rule := range instance.Conversations.Rules {
+				channels = append(channels, rule.ID)
+			}
+			adapter, err = traq.New(instance.Name, traq.Config{Origin: instance.TraQ.Origin, AccessToken: tokens[i].TraQAccessToken, Owner: instance.Owner, Channels: channels}, events)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("messaging.%s: %w", instance.Name, err)

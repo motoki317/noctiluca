@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,8 +104,8 @@ func TestLegacyMessagingConfigRejected(t *testing.T) {
 }
 
 func TestMismatchedMessagingSettingsRejected(t *testing.T) {
-	for _, kind := range []string{"slack", "discord"} {
-		for _, block := range []string{"slack", "discord"} {
+	for _, kind := range []string{"slack", "discord", "traq"} {
+		for _, block := range []string{"slack", "discord", "traq"} {
 			for _, value := range []string{"{}", "null", "{token: sensitive-token}"} {
 				if kind == block {
 					continue
@@ -122,7 +123,7 @@ func TestMismatchedMessagingSettingsRejected(t *testing.T) {
 func TestEveryInstanceTokenFileProtected(t *testing.T) {
 	for _, tc := range []struct{ platform, field, settings string }{
 		{"slack", "app_token", ""}, {"slack", "bot_token", ""}, {"slack", "user_token", ""},
-		{"discord", "token", ""},
+		{"discord", "token", ""}, {"traq", "access_token", "origin: https://chat.example.org, "},
 	} {
 		t.Run(tc.platform+"."+tc.field, func(t *testing.T) {
 			c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
@@ -165,10 +166,22 @@ func TestMixedMessagingTypesConfig(t *testing.T) {
           groups: ['100000000000000004']
           allow_bots: true
           require_mention: true
-`, source))
+  - name: team
+    type: traq
+    owner: '00000000-0000-4000-8000-000000000001'
+    traq:
+      origin: https://chat.example.org
+      access_token: {%s: TRAQ_TOKEN}
+    conversations:
+      direct_messages: {users: []}
+      rules:
+        - id: '00000000-0000-4000-8000-000000000003'
+          users: ['00000000-0000-4000-8000-000000000001']
+          groups: ['00000000-0000-4000-8000-000000000004']
+`, source, source))
 			t.Setenv("TEST_APP_TOKEN", "slack-app-secret")
 			t.Setenv("TEST_BOT_TOKEN", "slack-bot-secret")
-			for name, value := range map[string]string{"DISCORD_TOKEN": "discord-secret"} {
+			for name, value := range map[string]string{"DISCORD_TOKEN": "discord-secret", "TRAQ_TOKEN": "traq-secret"} {
 				if source == "env" {
 					t.Setenv(name, value)
 				} else {
@@ -181,9 +194,10 @@ func TestMixedMessagingTypesConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []messagingTokens{
 				{Slack: slack.Config{AppToken: "slack-app-secret", BotToken: "slack-bot-secret"}},
-				{DiscordToken: "discord-secret"},
+				{DiscordToken: "discord-secret"}, {TraQAccessToken: "traq-secret"},
 			}, tokens)
-			for i, id := range []string{"100000000000000003"} {
+			require.Equal(t, "https://chat.example.org", c.Messaging[2].TraQ.Origin)
+			for i, id := range []string{"100000000000000003", "00000000-0000-4000-8000-000000000003"} {
 				entry := c.Messaging[i+1]
 				require.Equal(t, time.Hour, entry.groupRefreshInterval())
 				require.Len(t, entry.Conversations.Rules, 1)
@@ -195,8 +209,11 @@ func TestMixedMessagingTypesConfig(t *testing.T) {
 				require.Equal(t, i == 0, rule.RequireMention)
 			}
 			require.Equal(t, []string{"100000000000000002"}, c.Messaging[1].Conversations.DirectMessages.Users)
+			require.NotNil(t, c.Messaging[2].Conversations.DirectMessages)
+			require.Empty(t, c.Messaging[2].Conversations.DirectMessages.Users)
 			if source == "file" {
 				require.Equal(t, filepath.Join(filepath.Dir(path), "DISCORD_TOKEN"), c.Messaging[1].Discord.Token.File)
+				require.Equal(t, filepath.Join(filepath.Dir(path), "TRAQ_TOKEN"), c.Messaging[2].TraQ.AccessToken.File)
 			}
 		})
 	}
@@ -204,7 +221,7 @@ func TestMixedMessagingTypesConfig(t *testing.T) {
 
 func TestNewMessagingTypesValidation(t *testing.T) {
 	for _, platform := range []struct{ name, field, settings string }{
-		{"discord", "token", ""},
+		{"discord", "token", ""}, {"traq", "access_token", "origin: https://chat.example.org, "},
 	} {
 		t.Run(platform.name, func(t *testing.T) {
 			t.Setenv("TEST_NEW_TOKEN", "sensitive-token")
@@ -223,6 +240,9 @@ func TestNewMessagingTypesValidation(t *testing.T) {
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					owner := tc.owner
+					if platform.name == "traq" && owner == "owner" {
+						owner = "00000000-0000-4000-8000-000000000001"
+					}
 					c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
   - name: chat
     type: %s
@@ -243,6 +263,92 @@ func TestNewMessagingTypesValidation(t *testing.T) {
 			require.ErrorContains(t, err, "invalid config")
 			require.NotContains(t, err.Error(), "sensitive-token")
 		})
+	}
+}
+
+func TestTraQOriginValidation(t *testing.T) {
+	t.Setenv("TEST_TRAQ_TOKEN", "traq-secret")
+	for _, tc := range []struct {
+		origin string
+		valid  bool
+	}{
+		{"https://chat.example.org", true}, {"https://chat.example.org/", true},
+		{"http://127.0.0.1:8080", true}, {"http://[::1]:8080", true},
+		{"", false}, {"chat.example.org", false}, {"//chat.example.org", false}, {"https://", false},
+		{"https://:8080", false}, {"https://chat.example.org:invalid", false}, {"ftp://chat.example.org", false},
+		{"https://user:password@chat.example.org", false}, {"https://chat.example.org/api/v3", false},
+		{"https://chat.example.org?token=sensitive-token", false}, {"https://chat.example.org?", false},
+		{"https://chat.example.org#fragment", false}, {"https://chat.example.org/%zz", false},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
+  - name: team
+    type: traq
+    owner: '00000000-0000-4000-8000-000000000001'
+    traq: {origin: %q, access_token: {env: TEST_TRAQ_TOKEN}}
+`, tc.origin)))
+			require.NoError(t, err)
+			_, _, err = c.validateRun()
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "messaging.team.traq.origin")
+				require.NotContains(t, err.Error(), "sensitive-token")
+				require.NotContains(t, err.Error(), "password")
+			}
+		})
+	}
+}
+
+func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
+	t.Setenv("TEST_TRAQ_TOKEN", "fake-token")
+	const valid = "00000000-0000-4000-8000-000000abcdef"
+	for _, field := range []string{"owner", "conversations.rules[0].id", "conversations.rules[0].users", "conversations.rules[0].groups", "conversations.direct_messages.users", "conversations.direct_messages.groups"} {
+		for _, value := range []string{valid, strings.ToUpper(valid), strings.Replace(valid, "abcdef", "Abcdef", 1), "username", "invalid_id", "00000000-0000-4000-8000-00000000000g", "00000000000040008000000000000001", "{" + valid + "}", "urn:uuid:" + valid} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
+  - name: team
+    type: traq
+    owner: '%[1]s'
+    traq: {origin: https://chat.example.org, access_token: {env: TEST_TRAQ_TOKEN}}
+    conversations:
+      rules: [{id: '%[1]s', users: ['%[1]s'], groups: ['%[1]s']}]
+      direct_messages: {users: ['%[1]s'], groups: ['%[1]s']}
+`, valid)))
+				require.NoError(t, err)
+				entry := &c.Messaging[0]
+				switch field {
+				case "owner":
+					entry.Owner = value
+				case "conversations.rules[0].id":
+					entry.Conversations.Rules[0].ID = value
+				case "conversations.rules[0].users":
+					entry.Conversations.Rules[0].Users = []string{value}
+				case "conversations.rules[0].groups":
+					entry.Conversations.Rules[0].Groups = []string{value}
+				case "conversations.direct_messages.users":
+					entry.Conversations.DirectMessages.Users = []string{value}
+				case "conversations.direct_messages.groups":
+					entry.Conversations.DirectMessages.Groups = []string{value}
+				}
+				if value == valid {
+					_, _, err = c.validateRun()
+					require.NoError(t, err)
+				} else {
+					_, err = newApplication(t.Context(), c, nil)
+					require.Error(t, err)
+					if field == "conversations.rules[0].id" && strings.Contains(value, ":") {
+						require.ErrorContains(t, err, "unique channel IDs")
+					} else {
+						require.ErrorContains(t, err, "messaging.team."+field)
+						require.ErrorContains(t, err, "UUIDs in lowercase canonical form")
+					}
+				}
+				require.NoFileExists(t, c.Database.Path)
+				require.NoDirExists(t, c.Memory.Dir)
+				require.NoDirExists(t, c.Model.Workdir)
+			})
+		}
 	}
 }
 
