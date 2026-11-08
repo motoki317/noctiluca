@@ -2,7 +2,7 @@
 
 # noctiluca
 
-A minimal, self-hosted agent harness. One process connects one agent to one or more chat accounts (any mix of Slack and Discord) and a model CLI (Claude Code or Codex), keeps its work in SQLite and its memory in Git. An optional nightly job reviews its mistakes and fixes its memory.
+A minimal, self-hosted agent harness. One process connects one agent to one or more chat accounts (any mix of Slack, Discord, and traQ) and a model CLI (Claude Code or Codex), keeps its work in SQLite and its memory in Git. An optional nightly job reviews its mistakes and fixes its memory.
 
 ```mermaid
 flowchart LR
