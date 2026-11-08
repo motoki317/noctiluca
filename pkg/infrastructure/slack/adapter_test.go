@@ -212,7 +212,7 @@ func TestDeletedMessageKeepsSenderAndThread(t *testing.T) {
 	require.Equal(t, domain.InboundEventMessageEdited, event.Kind)
 	require.Equal(t, "UMEMBER", event.Sender.ID)
 	require.Equal(t, Conversation("slack", "CTEST", "1.000001"), event.Conversation)
-	require.Equal(t, "[message deleted]", event.Text)
+	require.Empty(t, event.Text)
 }
 
 func TestOwnerDirectMessageUsesBot(t *testing.T) {

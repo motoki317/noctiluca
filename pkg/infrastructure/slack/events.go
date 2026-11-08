@@ -76,7 +76,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			event.ReceivedAt = at
 		}
 		if deleted {
-			event.Text = "[message deleted]"
+			event.Text = ""
 			event.MentionsMe = false
 		}
 		for _, f := range m.Files {

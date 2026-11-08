@@ -91,7 +91,7 @@ func TestInboundNotifications(t *testing.T) {
 				require.Empty(t, logs.String())
 			}
 			if event.Deleted {
-				require.Equal(t, "[message deleted]", event.Text)
+				require.Empty(t, event.Text)
 				require.False(t, event.MentionsMe)
 			}
 		})

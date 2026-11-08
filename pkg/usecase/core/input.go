@@ -86,8 +86,12 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 		if !info.ThreadAt.IsZero() {
 			thread += " " + info.ThreadAt.In(location).Format("15:04:05 MST")
 		}
-		if !history.ThreadSeen && info.ThreadText != "" {
-			thread += fmt.Sprintf(" %q", excerpt(info.ThreadText))
+		if !history.ThreadSeen {
+			if history.Root != nil && history.Root.Deleted {
+				thread += " (root deleted)"
+			} else if info.ThreadText != "" {
+				thread += fmt.Sprintf(" %q", excerpt(info.ThreadText))
+			}
 		}
 	}
 	if item.Lane == "task" {
@@ -102,7 +106,11 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 	}
 	header := fmt.Sprintf("%s | %s | %s\n", where, sender, at.In(location).Format("15:04:05 MST"))
 	if kind == domain.InboundEventMessageEdited {
-		header += "Message edited or deleted.\n"
+		if item.Payload.Event.Deleted {
+			header += "Message deleted.\n"
+		} else {
+			header += "Message edited.\n"
+		}
 	}
 	if kind == domain.InboundEventReaction {
 		header += "Reaction.\n"
