@@ -186,13 +186,18 @@ func TestBackfillSkipsFailedChannels(t *testing.T) {
 	require.ErrorIs(t, a.backfill(t.Context(), func(context.Context, domain.InboundEvent) error { return stop }), stop)
 }
 
-func TestBackfillMessageFailureIncludesMessageID(t *testing.T) {
+func TestBackfillSkipsFailedMessage(t *testing.T) {
 	logs := captureWarnings(t)
+	at := time.Now().Add(-time.Hour).UTC()
+	earlier, failed, later := message(599, 400), message(600, 300), message(601, 400)
+	earlier.CreatedAt, failed.CreatedAt, later.CreatedAt = at, at.Add(time.Minute), at.Add(2*time.Minute)
+	edited := at.Add(3 * time.Minute)
+	failed.EditedTimestamp, later.EditedTimestamp = &edited, &edited
 	a := testAdapter(t, Config{Channels: []string{"400"}}, func(w http.ResponseWriter, r *http.Request) bool {
 		switch r.URL.Path {
 		case "/channels/400/messages":
 			// A malformed page must still identify the message that failed conversion.
-			writeJSON(t, w, []sdk.Message{message(600, 300)})
+			writeJSON(t, w, []sdk.Message{later, failed, earlier})
 			return true
 		case "/channels/300":
 			w.WriteHeader(http.StatusForbidden)
@@ -201,10 +206,12 @@ func TestBackfillMessageFailureIncludesMessageID(t *testing.T) {
 		}
 		return false
 	})
-	require.NoError(t, a.backfill(t.Context(), func(context.Context, domain.InboundEvent) error {
-		t.Fatal("consume after failed message lookup")
+	var keys []string
+	require.NoError(t, a.backfill(t.Context(), func(_ context.Context, event domain.InboundEvent) error {
+		keys = append(keys, event.SourceKey)
 		return nil
 	}))
+	assert.Equal(t, []string{"chat:m:599", "chat:m:601", "chat:e:601:" + edited.Format(time.RFC3339Nano)}, keys)
 	var entry map[string]any
 	require.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
 	assert.Equal(t, "GetChannel", entry["operation"])

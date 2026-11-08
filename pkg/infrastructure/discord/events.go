@@ -349,7 +349,7 @@ func (a *adapter) backfillChannel(ctx context.Context, ref domain.ConversationRe
 				e, err := a.message(ctx, m, edited)
 				if err != nil {
 					a.warnLookup(ctx, m.ChannelID, m.ID, err)
-					return nil, nil
+					break
 				}
 				if e != nil {
 					events = append(events, *e)
