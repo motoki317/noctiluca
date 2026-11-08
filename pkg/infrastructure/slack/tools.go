@@ -78,12 +78,29 @@ func (a *adapter) Tools() []domain.Tool {
 }
 
 type messageView struct {
-	User      string              `json:"user,omitempty"`
-	Text      string              `json:"text"`
-	Timestamp string              `json:"ts"`
-	Thread    string              `json:"thread_ts,omitempty"`
-	Files     []domain.Attachment `json:"files,omitempty"`
-	Reactions []reactionView      `json:"reactions,omitempty"`
+	User        string              `json:"user,omitempty"`
+	Text        string              `json:"text"`
+	Timestamp   string              `json:"ts"`
+	Thread      string              `json:"thread_ts,omitempty"`
+	Files       []domain.Attachment `json:"files,omitempty"`
+	Reactions   []reactionView      `json:"reactions,omitempty"`
+	Attachments []attachmentView    `json:"attachments,omitempty"`
+}
+
+type attachmentView struct {
+	Title    string `json:"title,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
+}
+
+func attachmentsView(attachments []sdk.Attachment) []attachmentView {
+	var result []attachmentView
+	for _, a := range attachments {
+		if a.Title != "" || a.Text != "" || a.Fallback != "" {
+			result = append(result, attachmentView{Title: a.Title, Text: a.Text, Fallback: a.Fallback})
+		}
+	}
+	return result
 }
 
 type reactionView struct {
@@ -95,6 +112,7 @@ func messagesView(messages []sdk.Message) []messageView {
 	result := make([]messageView, 0, len(messages))
 	for _, m := range messages {
 		v := messageView{User: m.User, Text: m.Text, Timestamp: m.Timestamp, Thread: m.ThreadTimestamp}
+		v.Attachments = attachmentsView(m.Attachments)
 		for _, f := range m.Files {
 			v.Files = append(v.Files, domain.Attachment{Ref: f.ID, Name: f.Name, MIMEType: f.Mimetype})
 		}
@@ -148,9 +166,13 @@ func (a *adapter) search(ctx context.Context, in toolInput) (any, error) {
 	if err != nil {
 		return nil, slackError("search Slack messages failed", err)
 	}
-	matches := make([]map[string]string, 0, len(result.Matches))
+	matches := make([]map[string]any, 0, len(result.Matches))
 	for _, m := range result.Matches {
-		matches = append(matches, map[string]string{"channel": m.Channel.ID, "user": m.User, "text": m.Text, "ts": m.Timestamp, "permalink": m.Permalink})
+		match := map[string]any{"channel": m.Channel.ID, "user": m.User, "text": m.Text, "ts": m.Timestamp, "permalink": m.Permalink}
+		if attachments := attachmentsView(m.Attachments); len(attachments) > 0 {
+			match["attachments"] = attachments
+		}
+		matches = append(matches, match)
 	}
 	return map[string]any{"matches": matches, "total": result.Total, "page": in.Page}, nil
 }
