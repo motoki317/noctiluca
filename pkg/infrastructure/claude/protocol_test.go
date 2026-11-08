@@ -80,15 +80,32 @@ func TestBackgroundActivity(t *testing.T) {
 }
 
 func TestRecoverableToolError(t *testing.T) {
-	f, err := parseFrame([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call","is_error":true,"content":"private error body"}]}}`))
-	require.NoError(t, err)
-	var p parser
-	events := p.events(f, nil)
-	require.Len(t, events, 1)
-	require.Equal(t, domain.ModelEventToolResult, events[0].Kind)
-	require.Equal(t, "call", events[0].ToolCall.ID)
-	require.EqualError(t, events[0].Err, "model tool failed")
-	require.Empty(t, events[0].Text)
+	for _, tc := range []struct {
+		name, content, want string
+	}{
+		{"string", `" \nExit code 1\nfile not found\n\t "`, "Exit code 1\nfile not found"},
+		{"text blocks", `[{"type":"text","text":"\nExit code 1"},{"type":"text","text":"file not found\n"}]`, "Exit code 1\nfile not found"},
+		{"mixed blocks", `[{"type":"image","text":"ignored"},{"type":"text","text":"read failed"},{"type":"text","text":""},{"type":"text","text":"permission denied"}]`, "read failed\n\npermission denied"},
+		{"empty string", `""`, "model tool failed"},
+		{"blank string", `" \t\r\n "`, "model tool failed"},
+		{"empty blocks", `[]`, "model tool failed"},
+		{"blank text block", `[{"type":"text","text":" \n\t "}]`, "model tool failed"},
+		{"non-text block", `[{"type":"image","text":"ignored"}]`, "model tool failed"},
+		{"null", `null`, "model tool failed"},
+		{"unsupported content", `{"text":"ignored"}`, "model tool failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parseFrame([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call","is_error":true,"content":` + tc.content + `}]}}`))
+			require.NoError(t, err)
+			var p parser
+			events := p.events(f, nil)
+			require.Len(t, events, 1)
+			require.Equal(t, domain.ModelEventToolResult, events[0].Kind)
+			require.Equal(t, "call", events[0].ToolCall.ID)
+			require.EqualError(t, events[0].Err, tc.want)
+			require.Empty(t, events[0].Text)
+		})
+	}
 }
 
 func TestFailedResultDoesNotExposeBody(t *testing.T) {

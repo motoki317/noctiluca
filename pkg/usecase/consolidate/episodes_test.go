@@ -66,7 +66,7 @@ func TestMineErrors(t *testing.T) {
 		wantSignals []string
 	}{
 		{
-			name: "distinct first lines in appearance order",
+			name: "distinct summaries in appearance order",
 			kind: domain.ModelEventToolResult,
 			errors: []string{
 				" \tread   failed \r\nfile not found",
@@ -74,7 +74,28 @@ func TestMineErrors(t *testing.T) {
 				" \tread   failed \r\nfile not found",
 				"read failed\nanother file not found",
 			},
-			want:        []string{"read failed", "write failed"},
+			want:        []string{"read failed … file not found", "write failed … permission denied", "read failed … another file not found"},
+			wantSignals: []string{"tool_error"},
+		},
+		{
+			name:        "exit code and reason",
+			kind:        domain.ModelEventToolResult,
+			errors:      []string{"Exit code 1\n…\nreason"},
+			want:        []string{"Exit code 1 … reason"},
+			wantSignals: []string{"tool_error"},
+		},
+		{
+			name:        "one line",
+			kind:        domain.ModelEventToolResult,
+			errors:      []string{"file not found"},
+			want:        []string{"file not found"},
+			wantSignals: []string{"tool_error"},
+		},
+		{
+			name:        "same first and last non-empty lines",
+			kind:        domain.ModelEventToolResult,
+			errors:      []string{" \t\nread failed \r\nmore details\n\tread failed\n \t\r\n"},
+			want:        []string{"read failed"},
 			wantSignals: []string{"tool_error"},
 		},
 		{
@@ -82,6 +103,13 @@ func TestMineErrors(t *testing.T) {
 			kind:        domain.ModelEventToolResult,
 			errors:      []string{strings.Repeat("日", 200), strings.Repeat("日", 201), strings.Repeat("日", 300)},
 			want:        []string{strings.Repeat("日", 200), strings.Repeat("日", 200) + "…"},
+			wantSignals: []string{"tool_error"},
+		},
+		{
+			name:        "cap after joining lines",
+			kind:        domain.ModelEventToolResult,
+			errors:      []string{strings.Repeat("日", 190) + "\n" + strings.Repeat("界", 20)},
+			want:        []string{strings.Repeat("日", 190) + " … " + strings.Repeat("界", 7) + "…"},
 			wantSignals: []string{"tool_error"},
 		},
 		{
@@ -96,22 +124,22 @@ func TestMineErrors(t *testing.T) {
 			wantSignals: []string{"tool_error"},
 		},
 		{
-			name: "blank first lines",
+			name: "blank first and last lines",
 			kind: domain.ModelEventToolResult,
 			errors: []string{
-				" \t\nfile not found\nmore details",
-				"\r\n \t\r\n permission  denied \r\nmore details",
+				" \t\nfile not found\nmore details\n \t\n",
+				"\r\n \t\r\n permission  denied \r\nmore   details\r\n\t\r\n",
 				"\nfile not found\nother details",
 				" \t",
 			},
-			want:        []string{"file not found", "permission denied"},
+			want:        []string{"file not found … more details", "permission denied … more details", "file not found … other details"},
 			wantSignals: []string{"tool_error"},
 		},
 		{
 			name:        "model error text",
 			kind:        domain.ModelEventError,
 			errors:      []string{"turn failed\nconnection lost"},
-			want:        []string{"turn failed"},
+			want:        []string{"turn failed … connection lost"},
 			wantSignals: []string{"tool_error"},
 		},
 	} {
