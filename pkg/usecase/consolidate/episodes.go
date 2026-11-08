@@ -22,6 +22,7 @@ type Episode struct {
 	Input       string            `json:"input,omitempty"`
 	Reply       string            `json:"reply,omitempty"`
 	Tools       []string          `json:"tools,omitempty"`
+	Errors      []string          `json:"errors,omitempty"`
 	Signals     []string          `json:"signals,omitempty"`
 }
 
@@ -96,6 +97,10 @@ func mine(entries []domain.EpisodeEntry, negative []string) []Episode {
 		for _, signal := range signals {
 			episode.Signals = add(episode.Signals, signal)
 		}
+		line, _, _ := strings.Cut(strings.TrimSpace(entry.Error), "\n")
+		if text := excerpt(line); text != "" {
+			episode.Errors = add(episode.Errors, text)
+		}
 		if entry.ToolCall != nil && entry.ModelKind == domain.ModelEventToolCall && !episode.Ambiguous {
 			episode.Tools = add(episode.Tools, entry.ToolCall.Name)
 			data := []byte(canonical(entry.ToolCall.Input))
@@ -133,7 +138,7 @@ func failureSignals(e domain.EpisodeEntry, negative []string) []string {
 			}
 		}
 	}
-	if e.ToolError || e.ModelKind == domain.ModelEventError {
+	if e.Error != "" || e.ModelKind == domain.ModelEventError {
 		signals = append(signals, "tool_error")
 	}
 	return signals

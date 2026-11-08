@@ -17,7 +17,7 @@ type EpisodeEntry struct {
 	ModelKind   ModelEventKind
 	Text        string
 	ToolCall    *ToolCall
-	ToolError   bool
+	Error       string
 	Sent        bool
 	AfterSend   bool
 }

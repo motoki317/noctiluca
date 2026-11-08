@@ -30,7 +30,7 @@ func TestEpisodesWindowAndCheckpoint(t *testing.T) {
 		require.NoError(t, events.SaveInbound(t.Context(), domain.InboundEvent{Kind: domain.InboundEventMessage, Accepted: &accepted, Conversation: "room", Sender: domain.Sender{ID: "owner", Kind: domain.SenderHuman}, Text: text, ReceivedAt: at.Add(time.Duration(i) * time.Second)}))
 	}
 	require.NoError(t, events.SaveModel(t.Context(), domain.ModelRecord{SessionKey: "room", RecordedAt: at.Add(2 * time.Second), Event: domain.ModelEvent{Kind: domain.ModelEventToolCall, ToolCall: &domain.ToolCall{Name: "read", Input: json.RawMessage(`{}`)}}}))
-	require.NoError(t, events.SaveModel(t.Context(), domain.ModelRecord{SessionKey: "room", RecordedAt: at.Add(3 * time.Second), Event: domain.ModelEvent{Kind: domain.ModelEventToolResult, Err: errors.New("failed")}}))
+	require.NoError(t, events.SaveModel(t.Context(), domain.ModelRecord{SessionKey: "room", RecordedAt: at.Add(3 * time.Second), Event: domain.ModelEvent{Kind: domain.ModelEventToolResult, Err: errors.New("read failed\nfile not found")}}))
 	require.NoError(t, events.SaveInbound(t.Context(), domain.InboundEvent{Kind: domain.InboundEventMessageEdited, Deleted: true, Conversation: "room", Sender: domain.Sender{ID: "owner", Kind: domain.SenderHuman}, Text: "[message deleted]", ReceivedAt: at.Add(4 * time.Second)}))
 	require.NoError(t, events.SaveModel(t.Context(), domain.ModelRecord{SessionKey: "task:consolidate", RecordedAt: at.Add(4500 * time.Millisecond), Event: domain.ModelEvent{Kind: domain.ModelEventText, Text: "Ordinary task history"}}))
 	entries, err := repo.Since(t.Context(), at, at.Add(5*time.Second))
@@ -43,7 +43,10 @@ func TestEpisodesWindowAndCheckpoint(t *testing.T) {
 	require.NotNil(t, entries[0].Accepted)
 	require.True(t, *entries[0].Accepted)
 	require.False(t, entries[1].AfterSend)
-	require.True(t, entries[3].ToolError)
+	require.Equal(t, "read failed\nfile not found", entries[3].Error)
+	for _, i := range []int{0, 1, 2, 4} {
+		require.Empty(t, entries[i].Error)
+	}
 	require.True(t, entries[4].Deleted)
 	require.NoError(t, repo.SaveLastRun(t.Context(), at))
 	require.NoError(t, repo.SaveLastRun(t.Context(), at.Add(-time.Hour)))
@@ -60,6 +63,7 @@ func TestEpisodesWindowAndCheckpoint(t *testing.T) {
 	require.Len(t, batch.Items, 2)
 	require.Contains(t, batch.Items[0].Signals, "user_correction")
 	require.Contains(t, batch.Items[1].Signals, "tool_error")
+	require.Equal(t, []string{"read failed"}, batch.Items[1].Errors)
 	require.Contains(t, batch.Items[1].Signals, "user_deleted")
 	bounded, err := repo.Since(t.Context(), at, at.Add(time.Second))
 	require.NoError(t, err)
