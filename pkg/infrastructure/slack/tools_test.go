@@ -90,6 +90,67 @@ func TestReadToolsReactions(t *testing.T) {
 	}
 }
 
+func TestReadToolsAttachments(t *testing.T) {
+	for _, tool := range []struct {
+		name string
+		path string
+		key  string
+		args map[string]string
+	}{
+		{name: "slack_read_thread", path: "/conversations.replies", key: "messages", args: map[string]string{"channel": "CTEST", "thread_ts": "123.000001"}},
+		{name: "slack_read_history", path: "/conversations.history", key: "messages", args: map[string]string{"channel": "CTEST"}},
+		{name: "slack_search", path: "/search.messages", key: "matches", args: map[string]string{"query": "alert"}},
+	} {
+		t.Run(tool.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name        string
+				attachments string
+				want        string
+			}{
+				{name: "absent"},
+				{name: "empty list", attachments: `[]`},
+				{name: "empty content", attachments: `[{},{"title":"","text":"","fallback":""},{"color":"danger"}]`},
+				{name: "full", attachments: `[{"title":"Service alert","text":"Service unavailable","fallback":"Service failed","color":"danger"}]`, want: `[{"title":"Service alert","text":"Service unavailable","fallback":"Service failed"}]`},
+				{name: "title only", attachments: `[{"title":"Service alert"}]`, want: `[{"title":"Service alert"}]`},
+				{name: "text only", attachments: `[{"text":"Service unavailable"}]`, want: `[{"text":"Service unavailable"}]`},
+				{name: "fallback only", attachments: `[{"fallback":"Service failed"}]`, want: `[{"fallback":"Service failed"}]`},
+				{name: "mixed", attachments: `[{},{"title":"First alert"},{"color":"danger"},{"text":"Second alert"},{"title":"First alert"}]`, want: `[{"title":"First alert"},{"text":"Second alert"},{"title":"First alert"}]`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					message := map[string]any{"text": "", "ts": "123.000001"}
+					if tc.attachments != "" {
+						message["attachments"] = json.RawMessage(tc.attachments)
+					}
+					a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+						require.Equal(t, tool.path, r.URL.Path)
+						var messages any = []any{message}
+						if tool.key == "matches" {
+							messages = map[string]any{"total": 1, "matches": messages}
+						}
+						require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"ok": true, "messages": messages}))
+					}, true)
+					result := invoke(t, a, tool.name, tool.args)
+					var response map[string]json.RawMessage
+					require.NoError(t, json.Unmarshal(result, &response))
+					var messages []json.RawMessage
+					require.NoError(t, json.Unmarshal(response[tool.key], &messages))
+					require.Len(t, messages, 1)
+					want := map[string]any{"text": "", "ts": "123.000001"}
+					if tool.key == "matches" {
+						want["channel"], want["user"], want["permalink"] = "", "", ""
+					}
+					if tc.want != "" {
+						want["attachments"] = json.RawMessage(tc.want)
+					}
+					expected, err := json.Marshal(want)
+					require.NoError(t, err)
+					require.JSONEq(t, string(expected), string(messages[0]))
+				})
+			}
+		})
+	}
+}
+
 func TestDownloadRawBytes(t *testing.T) {
 	body := []byte{0, 255, 0x89, 'P', 'N', 'G', '\r', '\n'}
 	fail := false
