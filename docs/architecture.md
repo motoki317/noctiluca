@@ -41,6 +41,7 @@ sequenceDiagram
   A-->>S: ack (only after the commit)
   R->>D: claim ready row
   R->>M: Send (starts a turn, or joins or queues behind the running one)
+  M-->>R: input_started (for this row's input ID)
   R->>D: row done
   M->>H: reply(target, text)
   H->>C: reply
@@ -50,6 +51,8 @@ sequenceDiagram
 ```
 
 Only tools post. The model's final text is never sent, so a silent turn posts nothing.
+
+A row counts as delivered when the model reports that it started on the row's input, not when `Send` returns. A conversation sends each input as it arrives, without waiting for earlier inputs to start.
 
 ## Sessions
 
@@ -62,7 +65,7 @@ Only tools post. The model's final text is never sent, so a silent turn posts no
 
 Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at` note, or a `watch` outcome.
 
-- A row is retried, with backoff, only until `Send` hands it to the model. Then it is marked done and not sent again. A crash between `Send` and that commit can repeat one delivery.
+- A row that fails to send, or that the model refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
 - After three failed attempts a row is dead, and the owner gets one DM about that row.
 - Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
 - Conversation sessions run concurrently. Scheduled tasks run one at a time.
@@ -95,7 +98,7 @@ type ModelAdapter interface {
 
 type ModelSession interface {
 	Send(ctx context.Context, in UserInput) error // also during a turn: the adapter adds it to the running turn or queues it
-	Events() <-chan ModelEvent                    // turn_started, text, tool_call, tool_result, background_done, turn_finished, error
+	Events() <-chan ModelEvent                    // input_started, input_refused, turn_started, text, tool_call, tool_result, background_done, turn_finished, error
 	ResumeToken() string
 	Idle() bool
 	Close() error

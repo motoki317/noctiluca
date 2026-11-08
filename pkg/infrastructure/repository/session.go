@@ -99,12 +99,21 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	if turn == nil {
 		return tx.Commit()
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET turn_json='null' WHERE key=?`, key); err != nil {
+		return err
+	}
+	started := true
+	if turn.InputID != 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE id=? AND status='done')`, turn.InputID).Scan(&started); err != nil {
+			return err
+		}
+	}
 	now := time.Now()
 	note := "previous turn was interrupted: " + reason
 	if err := saveModel(ctx, tx, domain.ModelRecord{SessionKey: key, RecordedAt: now, Event: domain.ModelEvent{Kind: domain.ModelEventError, Text: note, Err: errors.New(note)}}); err != nil {
 		return err
 	}
-	if info != nil && info.TaskName != "" {
+	if started && info != nil && info.TaskName != "" {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
 		if reason == domain.TurnDeadlineExceeded || reason == domain.DeliveryDeadlineExceeded {
 			if err := insertOwnerNotice(ctx, tx, source, fmt.Sprintf("Task %s stopped: %s", info.TaskName, reason)); err != nil {
@@ -116,9 +125,6 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 				return err
 			}
 		}
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET turn_json='null' WHERE key=?`, key); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err

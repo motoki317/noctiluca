@@ -46,6 +46,7 @@ type ModelRecord struct {
 }
 
 type SessionTurn struct {
+	InputID       int64 `json:",omitempty"`
 	Continuations int
 	Deadline      time.Time
 	Procedure     string

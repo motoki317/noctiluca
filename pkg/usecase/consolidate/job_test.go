@@ -21,7 +21,7 @@ type scriptModel struct {
 }
 
 func (m scriptModel) Open(_ context.Context, config domain.ModelSessionConfig) (domain.ModelSession, error) {
-	return &scriptSession{config: config, script: m.script, events: make(chan domain.ModelEvent, 1)}, nil
+	return &scriptSession{config: config, script: m.script, events: make(chan domain.ModelEvent, 2)}, nil
 }
 
 type scriptSession struct {
@@ -34,6 +34,7 @@ func (s *scriptSession) Send(ctx context.Context, input domain.UserInput) error 
 	if err := s.script(ctx, s.config, input); err != nil {
 		return err
 	}
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: input.ID}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	return nil
 }

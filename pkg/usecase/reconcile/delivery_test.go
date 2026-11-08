@@ -330,6 +330,7 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 				p := &process{key: item.SessionKey, lane: item.Lane, info: item.Payload.Context, delivering: &item, cancel: cancel, model: &sessionFake{}}
 				r.live[p.key] = p
 				require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true}))
+				require.NoError(t, r.handle(t.Context(), result{process: p, event: &domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}}))
 				f.status(t, id, "done")
 				saved, err := f.sessions.Get(t.Context(), item.SessionKey)
 				require.NoError(t, err)

@@ -60,9 +60,9 @@ type ModelAdapter interface {
 
 type ModelSession interface {
 	// For each Send that returns nil, the session emits exactly one
-	// ModelEventInputStarted or ModelEventInputRefused, unless it closes first.
-	// Events carry the input's ID in InputID. Refusals include Err.
-	// Several inputs can await acknowledgement, and events can arrive in any order.
+	// ModelEventInputStarted or ModelEventInputRefused for the input's ID, unless it
+	// closes first. Refusals include Err. Several inputs can await acknowledgement, and
+	// acknowledgements can arrive in any order, before or after their turn's other events.
 	Send(ctx context.Context, input UserInput) error
 	Events() <-chan ModelEvent
 	ResumeToken() string
