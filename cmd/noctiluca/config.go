@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/motoki317/noctiluca/pkg/usecase/reconcile"
 	"github.com/spf13/viper"
@@ -20,6 +21,7 @@ import (
 	"github.com/motoki317/noctiluca/pkg/infrastructure/mcpclient"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/slack"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/traq"
 )
 
 type secretRef struct {
@@ -76,6 +78,10 @@ type messagingConfig struct {
 	Discord struct {
 		Token secretRef `mapstructure:"token"`
 	} `mapstructure:"discord"`
+	TraQ struct {
+		Origin      string    `mapstructure:"origin"`
+		AccessToken secretRef `mapstructure:"access_token"`
+	} `mapstructure:"traq"`
 	Conversations struct {
 		DirectMessages *acceptConfig `mapstructure:"direct_messages"`
 		Rules          []struct {
@@ -93,12 +99,13 @@ func (c messagingConfig) groupRefreshInterval() time.Duration {
 }
 
 func (c *messagingConfig) tokenRefs() []*secretRef {
-	return []*secretRef{&c.Slack.AppToken, &c.Slack.BotToken, &c.Slack.UserToken, &c.Discord.Token}
+	return []*secretRef{&c.Slack.AppToken, &c.Slack.BotToken, &c.Slack.UserToken, &c.Discord.Token, &c.TraQ.AccessToken}
 }
 
 type messagingTokens struct {
-	Slack        slack.Config
-	DiscordToken string
+	Slack           slack.Config
+	DiscordToken    string
+	TraQAccessToken string
 }
 
 type Config struct {
@@ -186,7 +193,7 @@ func loadConfig(path string) (Config, error) {
 	entries, _ := v.Get("messaging").([]any)
 	for i, raw := range entries {
 		entry, _ := raw.(map[string]any)
-		for _, platform := range []string{"slack", "discord"} {
+		for _, platform := range []string{"slack", "discord", "traq"} {
 			if _, present := entry[platform]; present && entry["type"] != platform {
 				return Config{}, fmt.Errorf("invalid config: messaging entry %d has %s settings but a different type", i+1, platform)
 			}
@@ -299,8 +306,16 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 			}
 		case "discord":
 			fields = []tokenField{{"token", instance.Discord.Token, &tokens[i].DiscordToken, true}}
+		case "traq":
+			if err := traq.ValidateOrigin(instance.TraQ.Origin); err != nil {
+				return nil, 0, fmt.Errorf("messaging.%s.traq.origin %w", instance.Name, err)
+			}
+			if err := instance.validateTraQIDs(); err != nil {
+				return nil, 0, err
+			}
+			fields = []tokenField{{"access_token", instance.TraQ.AccessToken, &tokens[i].TraQAccessToken, true}}
 		default:
-			return nil, 0, fmt.Errorf("messaging.%s.type must be slack or discord", instance.Name)
+			return nil, 0, fmt.Errorf("messaging.%s.type must be slack, discord, or traq", instance.Name)
 		}
 		for _, field := range fields {
 			value, err := field.source.read(field.required)
@@ -311,6 +326,29 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 		}
 	}
 	return tokens, number, nil
+}
+
+func (c messagingConfig) validateTraQIDs() error {
+	fields := map[string][]string{"owner": {c.Owner}}
+	for i, rule := range c.Conversations.Rules {
+		prefix := fmt.Sprintf("conversations.rules[%d].", i)
+		fields[prefix+"id"] = []string{rule.ID}
+		fields[prefix+"users"] = rule.Users
+		fields[prefix+"groups"] = rule.Groups
+	}
+	if direct := c.Conversations.DirectMessages; direct != nil {
+		fields["conversations.direct_messages.users"] = direct.Users
+		fields["conversations.direct_messages.groups"] = direct.Groups
+	}
+	for field, ids := range fields {
+		for _, id := range ids {
+			parsed, err := uuid.Parse(id)
+			if err != nil || parsed.String() != id {
+				return fmt.Errorf("messaging.%s.%s must contain UUIDs in lowercase canonical form", c.Name, field)
+			}
+		}
+	}
+	return nil
 }
 
 // Resolve existing ancestors so a symlink cannot hide a protected directory.
