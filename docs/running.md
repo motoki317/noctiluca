@@ -14,13 +14,15 @@ Neither build needs cgo. Release archives for Linux and macOS are on the [Releas
 
 - Git, and one model CLI logged in with a subscription: Claude CLI 2.1.316 or newer, or Codex CLI 0.163.0 or newer after `codex login` with a ChatGPT account.
 - For each Slack entry, a Slack app with Socket Mode, subscribed to channel and DM message events and `reaction_added`. It needs an app token (`connections:write`) and a bot token. An optional user token (`channels:history`, `channels:read`, `search:read`, `files:read`) lets the agent read any public channel that the token's user joined and search the workspace. Posts always use the bot token.
+- For each Discord entry, a Discord application with a bot. In the Developer Portal, turn on the Message Content intent, and the Server Members intent if any rule or `direct_messages` lists `groups`. Invite the bot with the `bot` scope and these permissions: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Attach Files, and Embed Links.
+- Connect each Discord bot token once, from one entry in one process. Discord sends each event to every connection of the token, so a second connection answers every message again.
 
 ## Configure
 
 Start from [config.example.yaml](../config.example.yaml). Each token is `{env: NAME}` or `{file: path}`. Relative paths resolve against the config file.
 
-- `messaging`: one entry per chat account, in a list. Each entry has a `name` (lowercase letters, digits, and `_`, starting with a letter), a `type` (`slack`), the type's settings (Slack: tokens and `group_refresh_interval`), the account's `owner` user ID, and `conversations`. Owner notices go to the owner of the first entry. The name prefixes the entry's tool names and the conversation refs stored in the database, so renaming an entry detaches its existing sessions and history.
-- `conversations.rules` in an entry: one rule per channel ID, with allowed users and user groups, `allow_bots`, and `require_mention`. DMs accept only that entry's owner unless `direct_messages` says otherwise. Unlisted channels start no turns.
+- `messaging`: one entry per chat account, in a list. Each entry has a `name` (lowercase letters, digits, and `_`, starting with a letter), a `type` (`slack` or `discord`), the type's settings under a key named after the type (`slack`: tokens and `group_refresh_interval`; `discord`: `token`), the account's `owner` user ID, and `conversations`. Owner notices go to the owner of the first entry. The name prefixes the entry's tool names and the conversation refs stored in the database, so renaming an entry detaches its existing sessions and history.
+- `conversations.rules` in an entry: one rule per channel ID, with allowed users and groups (Slack user groups or Discord role IDs), `allow_bots`, and `require_mention` (both false by default). DMs accept only that entry's owner unless `direct_messages` says otherwise. Unlisted channels start no turns.
 - `model`: `type` is `claude` (default) or `codex`, and `executable` defaults to the type's name. Changing `type` starts each conversation in a fresh session, because neither CLI can resume the other's sessions. An empty `name` uses the CLI's default model. `reasoning_effort` is Codex only. `workdir` is where the model runs. Keep config, database, tokens, and memory outside it. Config validation rejects overlaps.
 - `memory.dir`: the memory repository. noctiluca initializes it as a Git repository if missing.
 - `heartbeat`, `cron`, `consolidate`: background tasks. Consolidation is off until `consolidate.enabled: true`.
@@ -44,15 +46,22 @@ At startup, noctiluca writes and commits missing defaults for `procedures/consol
 
 ## Conversation events
 
-Before channel rules apply, the Slack adapter selects these events:
+Before channel rules apply, each adapter selects these events:
 
 - Top-level messages, including edits and deletions.
-- Thread messages that mention the agent or belong to a thread where it posted the root or a reply. Edits, deletions, and thread broadcasts follow the same rule.
+- Thread messages that mention the agent or belong to a thread it takes part in. On Slack, that is a thread where it posted the root or a reply. On Discord, it is a thread it owns, joined, or started from its own message. Edits, deletions, and Slack thread broadcasts follow the same rule.
 - Reactions on messages the agent posted.
 
-The configured sender, bot, and mention restrictions still apply to these events. In DMs, every message and reaction reaches the configured `direct_messages` rules.
+In DMs, every message and reaction reaches the `direct_messages` rule.
 
-The adapter checks thread participation through Slack, including posts from before noctiluca started. If that lookup fails, it logs a warning and forwards the event to the channel rules.
+The Slack and Discord adapters check thread participation through the platform, including posts from before noctiluca started. If that lookup fails, they log a warning and forward the event to the channel rules.
+
+The agent posts quick answers where the request was made. It posts work, such as command results, reviews, drafts, and background completions, in reply to a channel request: on Slack, in the request's thread.
+
+Platform differences:
+
+- On Discord, work on a top-level channel request starts a thread from the request message.
+- Slack redelivers events that noctiluca did not acknowledge. Discord does not. On each connect, its adapter reads new and edited messages in each rule channel and the entry owner's DM back to the last stored event, up to 200 messages or 24 hours. Thread replies, deletions, and reactions made while noctiluca was down are not recovered.
 
 ## Run
 
