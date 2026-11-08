@@ -1,6 +1,6 @@
 # Architecture
 
-One noctiluca process runs one agent. The core knows no platform or model names: each messaging adapter translates one chat account (Slack today), and a model adapter translates a model CLI (the Claude CLI today).
+One noctiluca process runs one agent. The core knows no platform or model names: each messaging adapter translates one chat account (Slack today), and a model adapter translates a model CLI (the Claude CLI or the Codex CLI).
 
 ```mermaid
 flowchart LR
@@ -32,7 +32,7 @@ sequenceDiagram
   participant C as core
   participant D as SQLite
   participant R as reconciler
-  participant M as claude CLI
+  participant M as model CLI
   participant H as tool hub
   S->>A: message event
   A->>C: InboundEvent
@@ -40,7 +40,7 @@ sequenceDiagram
   C-->>A: committed
   A-->>S: ack (only after the commit)
   R->>D: claim ready row
-  R->>M: Send (starts a turn, or queues behind the running one)
+  R->>M: Send (starts a turn, or joins or queues behind the running one)
   R->>D: row done
   M->>H: reply(target, text)
   H->>C: reply
@@ -55,7 +55,7 @@ Only tools post. The model's final text is never sent, so a silent turn posts no
 
 - A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, consolidation) runs in its own session.
 - Chat and watch/wake inputs name the place, sender, and local time, with ordering context and copyable `reply` and `work` targets. `reply` always takes an explicit target.
-- A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: Claude's own `run_in_background` Bash or Agent, or the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
+- A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
 
 ## Work and failure
@@ -94,7 +94,7 @@ type ModelAdapter interface {
 }
 
 type ModelSession interface {
-	Send(ctx context.Context, in UserInput) error // also during a turn: the Claude CLI queues it as the next turn
+	Send(ctx context.Context, in UserInput) error // also during a turn: the adapter adds it to the running turn or queues it
 	Events() <-chan ModelEvent                    // turn_started, text, tool_call, tool_result, background_done, turn_finished, error
 	ResumeToken() string
 	Idle() bool
@@ -113,7 +113,7 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 
 ## Trust model
 
-Each `messaging` entry's `conversations` rules decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and Claude's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
+Each `messaging` entry's `conversations` rules decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and the model CLI's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
 
 Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/claude"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/codex"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/mcpclient"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/memory"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
@@ -93,6 +94,9 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	}
 
 	model := claude.New(config.Model.Executable, config.Model.Name)
+	if config.Model.Type == "codex" {
+		model = codex.New(config.Model.Executable, config.Model.Name, config.Model.ReasoningEffort)
+	}
 	jobs := append([]domain.Schedule(nil), config.Cron...)
 	if config.Heartbeat.Enabled {
 		jobs = append(jobs, domain.Schedule{Name: "heartbeat", Cron: "@every " + config.Heartbeat.Interval.String(), TZ: "UTC", Workdir: config.Model.Workdir})

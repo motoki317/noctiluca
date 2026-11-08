@@ -93,11 +93,13 @@ type Config struct {
 	Consolidate consolidate.Config `mapstructure:"consolidate"`
 	Messaging   []messagingConfig  `mapstructure:"messaging"`
 	Model       struct {
-		Workdir     string        `mapstructure:"workdir"`
-		TurnTimeout time.Duration `mapstructure:"turn_timeout"`
-		Executable  string        `mapstructure:"executable"`
-		Name        string        `mapstructure:"name"`
-		IdleTimeout time.Duration `mapstructure:"idle_timeout"`
+		Type            string        `mapstructure:"type"`
+		Workdir         string        `mapstructure:"workdir"`
+		TurnTimeout     time.Duration `mapstructure:"turn_timeout"`
+		Executable      string        `mapstructure:"executable"`
+		Name            string        `mapstructure:"name"`
+		ReasoningEffort string        `mapstructure:"reasoning_effort"`
+		IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
 	} `mapstructure:"model"`
 	Memory struct {
 		Dir string `mapstructure:"dir"`
@@ -127,7 +129,7 @@ func loadConfig(path string) (Config, error) {
 	v.SetConfigType("yaml")
 	for key, value := range map[string]any{
 		"log.level": "INFO", "database.path": "noctiluca.db", "memory.dir": "memory",
-		"model.workdir": "", "model.turn_timeout": "2h", "model.executable": "claude", "model.name": "", "model.idle_timeout": "1h",
+		"model.type": "claude", "model.workdir": "", "model.turn_timeout": "2h", "model.name": "", "model.idle_timeout": "1h",
 		"toolhub.listen": "127.0.0.1:0", "heartbeat.enabled": true, "heartbeat.interval": "1h",
 		"tasks.timeout":       "30m",
 		"consolidate.enabled": false, "consolidate.cron": "0 4 * * *", "consolidate.tz": "UTC",
@@ -151,6 +153,12 @@ func loadConfig(path string) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
+	switch modelType := v.GetString("model.type"); modelType {
+	case "claude", "codex":
+		v.SetDefault("model.executable", modelType)
+	default:
+		return Config{}, errors.New("model.type must be claude or codex")
+	}
 	// Viper omits empty maps and null values from strict decoding.
 	keys := v.AllKeys()
 	for _, key := range []string{"owner", "slack", "conversations"} {
@@ -158,6 +166,11 @@ func loadConfig(path string) (Config, error) {
 			return Config{}, errors.New("invalid config: move owner, slack, and conversations into messaging entries")
 		}
 	}
+	_, effortEnv := os.LookupEnv("NOCTILUCA_MODEL_REASONING_EFFORT")
+	if v.GetString("model.type") != "codex" && (v.InConfig("model.reasoning_effort") || slices.Contains(keys, "model.reasoning_effort") || effortEnv) {
+		return Config{}, errors.New("model.reasoning_effort requires model.type codex")
+	}
+	v.SetDefault("model.reasoning_effort", "")
 	var config Config
 	if err := v.UnmarshalExact(&config); err != nil {
 		return Config{}, errors.New("invalid config: check field names and value types")

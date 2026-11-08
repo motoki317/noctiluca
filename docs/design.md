@@ -24,7 +24,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 ## Model adapter
 
 - The official `claude` CLI on the owner's subscription, one process per session, over stream-json. Claude Code already provides shell, subagents, and context compaction.
-- Planned: Codex through `codex app-server`, whose `turn/steer` fits `ModelSession.Send`.
+- Codex through `codex app-server`, one process per session. `turn/steer` adds input to the running turn. Codex keeps a thread's first developer instructions on resume, so a changed system prompt is added to the resumed thread as a developer message. Earlier instructions stay in the thread's history, including ones since deleted from memory.
 - No per-session roles. The model judges what to change. Details: architecture.md, "Trust model".
 
 ## Memory
