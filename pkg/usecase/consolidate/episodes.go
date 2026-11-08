@@ -97,8 +97,14 @@ func mine(entries []domain.EpisodeEntry, negative []string) []Episode {
 		for _, signal := range signals {
 			episode.Signals = add(episode.Signals, signal)
 		}
-		line, _, _ := strings.Cut(strings.TrimSpace(entry.Error), "\n")
-		if text := excerpt(line); text != "" {
+		message := strings.TrimSpace(entry.Error)
+		first, _, _ := strings.Cut(message, "\n")
+		first = strings.TrimSpace(first)
+		last := strings.TrimSpace(message[strings.LastIndex(message, "\n")+1:])
+		if first != last {
+			first += " … " + last
+		}
+		if text := excerpt(first); text != "" {
 			episode.Errors = add(episode.Errors, text)
 		}
 		if entry.ToolCall != nil && entry.ModelKind == domain.ModelEventToolCall && !episode.Ambiguous {

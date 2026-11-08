@@ -60,6 +60,7 @@ type contentBlock struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
+	Content   json.RawMessage `json:"content"`
 }
 
 func (f frame) failedResult() bool {
@@ -125,7 +126,7 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 	case "user":
 		for _, c := range f.Content {
 			if c.Type == "tool_result" && c.IsError {
-				events = append(events, domain.ModelEvent{Kind: domain.ModelEventToolResult, ToolCall: &domain.ToolCall{ID: c.ToolUseID}, Err: errors.New("model tool failed")})
+				events = append(events, domain.ModelEvent{Kind: domain.ModelEventToolResult, ToolCall: &domain.ToolCall{ID: c.ToolUseID}, Err: toolResultError(c.Content)})
 			}
 		}
 	case "assistant":
@@ -170,6 +171,30 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 		p.active = false
 	}
 	return events
+}
+
+func toolResultError(content json.RawMessage) error {
+	var text string
+	if json.Unmarshal(content, &text) != nil {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(content, &blocks) == nil {
+			var parts []string
+			for _, block := range blocks {
+				if block.Type == "text" {
+					parts = append(parts, block.Text)
+				}
+			}
+			text = strings.Join(parts, "\n")
+		}
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "model tool failed"
+	}
+	return errors.New(text)
 }
 
 func terminalCommand(state string) bool {
