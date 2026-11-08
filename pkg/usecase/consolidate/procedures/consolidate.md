@@ -27,4 +27,4 @@ Do not rewrite a whole document in one edit: whole rewrites lose detail.
 Send changes to `owner/`, to tools, and to the harness to the owner as proposals. Do not implement them here.
 For a requested behavior experiment, read `procedures/hillclimb.md` in a separate owner-requested turn.
 
-Call `reply` with `target: "owner"` and a short summary: what you learned, what you tidied (with sizes before and after), and your proposals. Then end the turn.
+If you have proposals that you have not sent before, call `reply` with `target: "owner"` and send only those. Record each sent proposal in memory as an open item, and keep it until the owner decides or it no longer applies. Do not send an open proposal again. With no new proposal, post nothing. Then end the turn.
