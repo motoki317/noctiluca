@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -49,12 +50,39 @@ func (r *eventRepository) SaveOutbound(ctx context.Context, message domain.SentM
 const inboundColumns = `e.kind, e.conversation, e.parent, e.sender_id, e.sender_display_name,
 	e.sender_kind, e.text, e.attachments, e.mentions_me, e.received_at, e.deleted, e.accepted, e.message_ref, e.direct`
 
+func (r *eventRepository) GetInbound(ctx context.Context, messageRef domain.ConversationRef) (domain.InboundEvent, error) {
+	if messageRef == "" {
+		return domain.InboundEvent{}, domain.ErrNotFound
+	}
+	events, err := r.queryInbound(ctx, `SELECT `+inboundColumns+` FROM events e
+		WHERE e.message_ref=? AND e.kind IN ('message','message_edited')
+		ORDER BY e.received_at DESC, e.id DESC LIMIT 1`, messageRef)
+	if err != nil {
+		return domain.InboundEvent{}, err
+	}
+	if len(events) == 0 {
+		return domain.InboundEvent{}, domain.ErrNotFound
+	}
+	return events[0], nil
+}
+
 func (r *eventRepository) ListInbound(ctx context.Context, conversation domain.ConversationRef, limit int) ([]domain.InboundEvent, error) {
 	if limit <= 0 {
 		return nil, errors.New("limit must be positive")
 	}
 	return r.queryInbound(ctx, `SELECT `+inboundColumns+` FROM events e
 		WHERE e.conversation=? ORDER BY e.received_at DESC, e.id DESC LIMIT ?`, conversation, limit)
+}
+
+func (r *eventRepository) LatestMessageTime(ctx context.Context, conversation domain.ConversationRef) (time.Time, error) {
+	var at time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT received_at FROM events
+		WHERE conversation=? AND kind IN ('message','message_edited') AND deleted=0
+		ORDER BY received_at DESC, id DESC LIMIT 1`, conversation).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	return at, err
 }
 
 func (r *eventRepository) Search(ctx context.Context, query string, limit int) ([]domain.InboundEvent, error) {

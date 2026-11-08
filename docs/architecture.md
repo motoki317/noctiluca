@@ -1,6 +1,6 @@
 # Architecture
 
-One noctiluca process runs one agent. The core knows no platform or model names: each messaging adapter translates one chat account (Slack today), and a model adapter translates a model CLI (the Claude CLI or the Codex CLI).
+One noctiluca process runs one agent. The core knows no platform or model names: each messaging adapter translates one chat account (Slack or Discord), and a model adapter translates a model CLI (the Claude CLI or the Codex CLI).
 
 ```mermaid
 flowchart LR

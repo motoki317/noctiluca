@@ -17,6 +17,16 @@ messaging:
           groups: [S_USER_GROUP_ID]
           allow_bots: false
           require_mention: true
+  # - name: discord
+  #   type: discord
+  #   owner: DISCORD_OWNER_USER_ID
+  #   discord:
+  #     token: {env: DISCORD_BOT_TOKEN}
+  #   conversations:
+  #     rules:
+  #       - id: DISCORD_CHANNEL_ID
+  #         users: [DISCORD_OWNER_USER_ID]
+  #         require_mention: true
 
 model:
   type: claude  # or codex; executable defaults to the type name

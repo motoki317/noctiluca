@@ -59,6 +59,48 @@ func TestEventHistory(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestLatestMessageTime(t *testing.T) {
+	r := repository.NewEventRepository(openDB(t))
+	got, err := r.LatestMessageTime(t.Context(), "room")
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+	at := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		kind    domain.InboundEventKind
+		deleted bool
+		room    domain.ConversationRef
+		offset  time.Duration
+		want    time.Duration
+	}{
+		{"message", domain.InboundEventMessage, false, "room", 0, 0},
+		{"edit", domain.InboundEventMessageEdited, false, "room", time.Second, time.Second},
+		{"late older message", domain.InboundEventMessage, false, "room", 0, time.Second},
+		{"reaction", domain.InboundEventReaction, false, "room", time.Hour, time.Second},
+		{"deletion", domain.InboundEventMessageEdited, true, "room", 2 * time.Hour, time.Second},
+		{"other conversation", domain.InboundEventMessage, false, "other", 3 * time.Hour, time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, r.SaveInbound(t.Context(), domain.InboundEvent{Kind: tc.kind, Deleted: tc.deleted,
+				Conversation: tc.room, Sender: domain.Sender{Kind: domain.SenderHuman}, ReceivedAt: at.Add(tc.offset)}))
+			got, err := r.LatestMessageTime(t.Context(), "room")
+			require.NoError(t, err)
+			require.Equal(t, at.Add(tc.want), got)
+		})
+	}
+	for _, kind := range []domain.InboundEventKind{domain.InboundEventReaction, domain.InboundEventMessageEdited} {
+		require.NoError(t, r.SaveInbound(t.Context(), domain.InboundEvent{Kind: kind, Deleted: kind == domain.InboundEventMessageEdited,
+			Conversation: "only changes", Sender: domain.Sender{Kind: domain.SenderHuman}, ReceivedAt: at}))
+	}
+	got, err = r.LatestMessageTime(t.Context(), "only changes")
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = r.LatestMessageTime(ctx, "room")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestEventSearch(t *testing.T) {
 	r := repository.NewEventRepository(openDB(t))
 	texts := []string{"abcdef", "東京駅で写真を見る", `100% _ \\ "quoted" OR NOT`, "unrelated"}
@@ -92,6 +134,50 @@ func TestEventSearch(t *testing.T) {
 	}
 	_, err := r.Search(t.Context(), "abc", -1)
 	require.Error(t, err)
+}
+
+func TestGetInboundByMessageRef(t *testing.T) {
+	r := repository.NewEventRepository(openDB(t))
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	accepted := false
+	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "chat:room:thread", Parent: "chat:room:",
+		MessageRef: "chat:room:message", Sender: domain.Sender{ID: "author", DisplayName: "Author", Kind: domain.SenderHuman},
+		Text: "original", ReceivedAt: at, Direct: true, MentionsMe: true, Accepted: &accepted,
+		Attachments: []domain.Attachment{{Ref: "file", Name: "photo.png", MIMEType: "image/png"}}}
+	require.NoError(t, r.SaveInbound(t.Context(), event))
+	got, err := r.GetInbound(t.Context(), event.MessageRef)
+	require.NoError(t, err)
+	require.Equal(t, event, got)
+
+	event.Kind, event.Text, event.ReceivedAt = domain.InboundEventMessageEdited, "edited", at.Add(time.Second)
+	require.NoError(t, r.SaveInbound(t.Context(), event))
+	event.Text = "last edit at the same timestamp"
+	require.NoError(t, r.SaveInbound(t.Context(), event))
+	older := event
+	older.ReceivedAt, older.Text = at, "older edit received late"
+	require.NoError(t, r.SaveInbound(t.Context(), older))
+	reaction := event
+	reaction.Kind, reaction.Sender.ID, reaction.ReceivedAt = domain.InboundEventReaction, "reactor", at.Add(time.Hour)
+	require.NoError(t, r.SaveInbound(t.Context(), reaction))
+	other := reaction
+	other.Kind, other.MessageRef = domain.InboundEventMessage, "other:room:message"
+	require.NoError(t, r.SaveInbound(t.Context(), other))
+	got, err = r.GetInbound(t.Context(), event.MessageRef)
+	require.NoError(t, err)
+	require.Equal(t, event, got)
+
+	reaction.MessageRef = "chat:room:reaction_only"
+	require.NoError(t, r.SaveInbound(t.Context(), reaction))
+	other.MessageRef = ""
+	require.NoError(t, r.SaveInbound(t.Context(), other))
+	for _, ref := range []domain.ConversationRef{"", "missing", reaction.MessageRef, "chat:room:message' OR 1=1 --"} {
+		_, err := r.GetInbound(t.Context(), ref)
+		require.ErrorIs(t, err, domain.ErrNotFound, ref)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = r.GetInbound(ctx, event.MessageRef)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestConcurrentWrites(t *testing.T) {
