@@ -34,8 +34,9 @@ func (s *session) sendInputs() {
 				break
 			}
 			t := s.current
+			input := s.inputs[0]
 			method := "turn/steer"
-			params := map[string]any{"threadId": s.threadID, "input": []map[string]string{{"type": "text", "text": s.inputs[0]}}}
+			params := map[string]any{"threadId": s.threadID, "input": []map[string]string{{"type": "text", "text": input.Text}}}
 			if t == nil {
 				t = &runningTurn{ready: make(chan struct{})}
 				s.current = t
@@ -77,12 +78,18 @@ func (s *session) sendInputs() {
 			}
 			s.mu.Unlock()
 			if err != nil {
-				s.emit(domain.ModelEvent{Kind: domain.ModelEventError, Err: err})
+				event := domain.ModelEvent{Kind: domain.ModelEventError, Err: err}
+				if method == "turn/start" {
+					event.Kind, event.InputID = domain.ModelEventInputRefused, input.ID
+				}
+				s.emit(event)
 				s.emit(domain.ModelEvent{Kind: domain.ModelEventTurnFinished})
 				if !errors.As(err, &rpcErr) {
 					s.cancel()
 					return
 				}
+			} else {
+				s.emit(domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: input.ID})
 			}
 		}
 	}

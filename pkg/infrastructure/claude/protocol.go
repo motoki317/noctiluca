@@ -15,21 +15,19 @@ import (
 const authRemedy = "check `claude auth status`; run `claude /login` if the login expired"
 
 type frame struct {
-	Result           string   `json:"result"`
-	Errors           []string `json:"errors"`
-	Type             string   `json:"type"`
-	Subtype          string   `json:"subtype"`
-	SessionID        string   `json:"session_id"`
-	ParentToolUseID  string   `json:"parent_tool_use_id"`
-	State            string   `json:"state"`
-	CommandUUID      string   `json:"command_uuid"`
-	UserMessageUUID  string   `json:"user_message_uuid"`
-	UserMessageUUIDs []string `json:"user_message_uuids"`
-	Status           string   `json:"status"`
-	Summary          string   `json:"summary"`
-	TaskID           string   `json:"task_id"`
-	IsBackgrounded   bool     `json:"is_backgrounded"`
-	Tasks            []struct {
+	Result          string   `json:"result"`
+	Errors          []string `json:"errors"`
+	Type            string   `json:"type"`
+	Subtype         string   `json:"subtype"`
+	SessionID       string   `json:"session_id"`
+	ParentToolUseID string   `json:"parent_tool_use_id"`
+	State           string   `json:"state"`
+	CommandUUID     string   `json:"command_uuid"`
+	Status          string   `json:"status"`
+	Summary         string   `json:"summary"`
+	TaskID          string   `json:"task_id"`
+	IsBackgrounded  bool     `json:"is_backgrounded"`
+	Tasks           []struct {
 		TaskID string `json:"task_id"`
 	} `json:"tasks"`
 	IsError   bool   `json:"is_error"`
@@ -88,7 +86,7 @@ type parser struct {
 	tasks   map[string]struct{}
 }
 
-func (p *parser) events(f frame) []domain.ModelEvent {
+func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 	var events []domain.ModelEvent
 	start := func() {
 		if !p.active {
@@ -98,15 +96,21 @@ func (p *parser) events(f frame) []domain.ModelEvent {
 	}
 	switch f.Type {
 	case "command_lifecycle":
+		inputID, found := pending[f.CommandUUID]
 		if f.State == "started" {
+			if found {
+				delete(pending, f.CommandUUID)
+				events = append(events, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: inputID})
+			}
 			p.command = f.CommandUUID
 			start()
 		}
 		if terminalCommand(f.State) && f.CommandUUID == p.command {
 			p.active = false
 		}
-		if f.State == "refused" || f.State == "discarded" || f.State == "cancelled" {
-			events = append(events, domain.ModelEvent{Kind: domain.ModelEventError, Err: fmt.Errorf("claude input %s", f.State)})
+		if found && (f.State == "refused" || f.State == "discarded" || f.State == "cancelled") {
+			delete(pending, f.CommandUUID)
+			events = append(events, domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: inputID, Err: fmt.Errorf("claude input %s", f.State)})
 		}
 	case "stream_event":
 		if f.ParentToolUseID != "" {

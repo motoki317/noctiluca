@@ -43,7 +43,7 @@ type session struct {
 	threadID     string
 	promptHash   string
 	current      *runningTurn
-	inputs       []string
+	inputs       []domain.UserInput
 	commands     map[string]*runningCommand
 }
 
@@ -381,7 +381,7 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 	if s.ctx.Err() != nil {
 		return errors.New("codex session is closed")
 	}
-	s.inputs = append(s.inputs, text)
+	s.inputs = append(s.inputs, domain.UserInput{ID: input.ID, Text: text})
 	s.wakeInputs()
 	return nil
 }

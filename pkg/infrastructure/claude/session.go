@@ -47,7 +47,7 @@ type session struct {
 	ready        chan error
 	mu           sync.RWMutex
 	token        string
-	pending      map[string]struct{}
+	pending      map[string]int64
 	active       bool
 	background   int
 	closeErr     error
@@ -189,18 +189,9 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 				break
 			}
 		}
-		events := p.events(f)
 		s.mu.Lock()
+		events := p.events(f, s.pending)
 		s.active, s.background = p.active, len(p.tasks)
-		if f.Type == "result" {
-			delete(s.pending, f.UserMessageUUID)
-			for _, id := range f.UserMessageUUIDs {
-				delete(s.pending, id)
-			}
-		}
-		if f.Type == "command_lifecycle" && terminalCommand(f.State) {
-			delete(s.pending, f.CommandUUID)
-		}
 		s.mu.Unlock()
 		for _, event := range events {
 			s.emit(event)
@@ -286,9 +277,9 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 	}
 	s.mu.Lock()
 	if s.pending == nil {
-		s.pending = make(map[string]struct{})
+		s.pending = make(map[string]int64)
 	}
-	s.pending[id] = struct{}{}
+	s.pending[id] = input.ID
 	s.mu.Unlock()
 	if err := s.write(ctx, value); err != nil {
 		s.mu.Lock()

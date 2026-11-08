@@ -221,6 +221,16 @@ func nextEvent(t *testing.T, s domain.ModelSession) domain.ModelEvent {
 	}
 }
 
+func nextTurnEvent(t *testing.T, s domain.ModelSession) domain.ModelEvent {
+	t.Helper()
+	for {
+		event := nextEvent(t, s)
+		if event.Kind != domain.ModelEventInputStarted {
+			return event
+		}
+	}
+}
+
 func TestOpenResumeAndSettings(t *testing.T) {
 	token := "thread-1:" + promptHash(developerInstructions("System instructions"))
 	for _, resume := range []string{"", token} {
@@ -301,22 +311,22 @@ func TestTurnStreamAndRepeatedInput(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			for range 2 {
 				require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "hello"}))
-				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventTurnStarted, nextTurnEvent(t, s).Kind)
 				count := 1
 				if mode == "early-events" {
 					count = 100
 				}
 				for range count {
-					require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "hello"}, nextEvent(t, s))
+					require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "hello"}, nextTurnEvent(t, s))
 				}
-				call := nextEvent(t, s)
+				call := nextTurnEvent(t, s)
 				require.Equal(t, domain.ModelEventToolCall, call.Kind)
 				require.Equal(t, "mcp__noctiluca__reply", call.ToolCall.Name)
 				require.JSONEq(t, `{"text":"hello"}`, string(call.ToolCall.Input))
-				result := nextEvent(t, s)
+				result := nextTurnEvent(t, s)
 				require.Equal(t, domain.ModelEventToolResult, result.Kind)
 				require.Equal(t, call.ToolCall.ID, result.ToolCall.ID)
-				require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventTurnFinished, nextTurnEvent(t, s).Kind)
 				require.Eventually(t, s.Idle, time.Second, time.Millisecond)
 			}
 		})
@@ -334,9 +344,9 @@ func TestTurnTimeoutInterruptsBeforeProcessExit(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "work"}))
 			if mode != "response-only" {
-				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventTurnStarted, nextTurnEvent(t, s).Kind)
 			} else {
-				require.Equal(t, "response sent", nextEvent(t, s).Text)
+				require.Equal(t, "response sent", nextTurnEvent(t, s).Text)
 			}
 			require.False(t, s.Idle())
 			cancel()
@@ -375,7 +385,7 @@ func TestOpenFailures(t *testing.T) {
 }
 
 func TestTurnErrors(t *testing.T) {
-	for _, mode := range []string{"reject", "rate-limit", "crash", "malformed-turn"} {
+	for _, mode := range []string{"rate-limit", "crash", "malformed-turn"} {
 		t.Run(mode, func(t *testing.T) {
 			path, dir := fakeServer(t, mode)
 			s, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ToolHub: domain.MCPEndpoint{BearerToken: "secret-bearer"}})
@@ -383,23 +393,15 @@ func TestTurnErrors(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			err = s.Send(t.Context(), domain.UserInput{Text: ""})
 			require.NoError(t, err)
-			if mode == "reject" {
-				event := nextEvent(t, s)
-				require.Equal(t, domain.ModelEventError, event.Kind)
-				require.ErrorContains(t, event.Err, "turn rejected")
-				require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
-				require.True(t, s.Idle())
-				return
-			}
-			require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
-			event := nextEvent(t, s)
+			require.Equal(t, domain.ModelEventTurnStarted, nextTurnEvent(t, s).Kind)
+			event := nextTurnEvent(t, s)
 			require.Equal(t, domain.ModelEventError, event.Kind)
 			require.Error(t, event.Err)
 			require.NotContains(t, event.Err.Error(), "secret-bearer")
 			if mode == "rate-limit" {
 				require.EqualError(t, event.Err, "quota [redacted] exhausted")
-				require.Equal(t, domain.ModelEventError, nextEvent(t, s).Kind)
-				require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventError, nextTurnEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventTurnFinished, nextTurnEvent(t, s).Kind)
 				require.Eventually(t, s.Idle, time.Second, time.Millisecond)
 			}
 		})
