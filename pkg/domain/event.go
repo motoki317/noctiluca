@@ -1,8 +1,23 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type ConversationRef string
+
+func NewConversationRef(name, channel, target string) ConversationRef {
+	return ConversationRef(name + ":" + channel + ":" + target)
+}
+
+func ParseConversationRef(ref ConversationRef) (name, channel, target string, ok bool) {
+	parts := strings.Split(string(ref), ":")
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
+}
 
 type InboundEventKind string
 

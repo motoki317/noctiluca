@@ -149,15 +149,15 @@ func (a *adapter) UserGroups(ctx context.Context, ids []string) (map[string][]st
 }
 
 func Conversation(name, channel, thread string) domain.ConversationRef {
-	return domain.ConversationRef(name + ":" + channel + ":" + thread)
+	return domain.NewConversationRef(name, channel, thread)
 }
 
 func (a *adapter) destination(ref domain.ConversationRef) (string, string, error) {
-	parts := strings.Split(string(ref), ":")
-	if len(parts) != 3 || parts[0] != a.name || parts[1] == "" || strings.ContainsAny(parts[1], " \t\n\r") {
+	name, channel, thread, ok := domain.ParseConversationRef(ref)
+	if !ok || name != a.name || channel == "" || strings.ContainsAny(channel, " \t\n\r") {
 		return "", "", errors.New("invalid Slack conversation reference")
 	}
-	return parts[1], parts[2], nil
+	return channel, thread, nil
 }
 
 func (a *adapter) Send(ctx context.Context, ref domain.ConversationRef, message domain.OutboundMessage) (string, error) {
