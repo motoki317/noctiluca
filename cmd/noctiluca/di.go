@@ -79,7 +79,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		}
 		rules := make(map[domain.ConversationRef]domain.AcceptRule, len(instance.Conversations.Rules))
 		for _, r := range instance.Conversations.Rules {
-			rules[slack.Conversation(instance.Name, r.ID, "")] = r.rule()
+			rules[domain.NewConversationRef(instance.Name, r.ID, "")] = r.rule()
 		}
 		direct := domain.AcceptRule{Users: []string{instance.Owner}}
 		if instance.Conversations.DirectMessages != nil {
