@@ -56,10 +56,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 	}
 	if event := item.Payload.Event; event != nil {
 		conversation, direct = channel(*event), event.Direct
-		reply, work = event.Conversation, event.MessageRef
-		if event.Parent != "" || direct {
-			work = reply
-		}
+		reply, work = event.Conversation, event.WorkTarget()
 		at, sender = event.ReceivedAt, event.Sender.DisplayName
 		if sender == "" {
 			sender = event.Sender.ID
