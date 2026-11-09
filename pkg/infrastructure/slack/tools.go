@@ -38,7 +38,9 @@ type toolInput struct {
 func (a *adapter) ToolNotes() string {
 	return "A ref ending in a colon is top level: do not append a timestamp. " +
 		fmt.Sprintf("Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context. Slack tools take bare channel IDs. "+
-			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true.", a.name)
+			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true. "+
+			"When you decide to reply in a thread, call %[1]s_set_status on it before your other tools. "+
+			"Your post there clears the status, so call it again when work continues after a post. Skip it for top-level replies.", a.name)
 }
 
 func (a *adapter) Tools() []domain.Tool {
@@ -74,7 +76,7 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
 		tool("upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
 		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
-		tool("set_status", "Call once before slow work when you decide to reply in a thread, not for top-level replies. Slack prefixes status with the app name: for example \"is looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": str}, []string{"channel", "thread_ts", "status"}, a.setStatus),
+		tool("set_status", "Show \"<app name> <status>\" with a loading animation in a thread, for example status \"is looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": str}, []string{"channel", "thread_ts", "status"}, a.setStatus),
 		tool("send", "Post Markdown text using the same target rules as reply: keep existing threads, top level for chat and DM work, message thread for channel work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }

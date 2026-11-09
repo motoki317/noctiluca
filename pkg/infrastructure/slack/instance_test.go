@@ -76,7 +76,9 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 			}
 			legacyNotes := "A ref ending in a colon is top level: do not append a timestamp. " +
 				"Use slack_read_thread, slack_read_history, and slack_search for context. Slack tools take bare channel IDs. " +
-				"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true."
+				"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true. " +
+				"When you decide to reply in a thread, call slack_set_status on it before your other tools. " +
+				"Your post there clears the status, so call it again when work continues after a post. Skip it for top-level replies."
 			require.Equal(t, strings.ReplaceAll(legacyNotes, "slack_", name+"_"), a.ToolNotes())
 		})
 	}
