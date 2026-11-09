@@ -118,8 +118,13 @@ func TestDeliveredConversationNeverReplays(t *testing.T) {
 					stop()
 					f.start(t)
 				}
+				continued := terminal == "exit" || terminal == "restart"
+				if continued {
+					s = take(t, f.model.opened)
+					require.Contains(t, take(t, s.inputs).Text, "previous turn was interrupted")
+				}
 				next := f.enqueue(t, "room", "new input")
-				if terminal != "failed-result" {
+				if terminal == "deadline" {
 					s = take(t, f.model.opened)
 				}
 				require.Equal(t, "new input", take(t, s.inputs).Text)
@@ -128,7 +133,11 @@ func TestDeliveredConversationNeverReplays(t *testing.T) {
 				require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
 				require.Zero(t, attempts)
 				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%' OR source_key LIKE 'interrupted:%'").Scan(&notes))
-				require.Zero(t, notes)
+				if continued {
+					require.Equal(t, 1, notes)
+				} else {
+					require.Zero(t, notes)
+				}
 			})
 		})
 	}
@@ -350,32 +359,75 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 	}
 }
 
-func TestInterruptedTaskContinuesOnlyOnce(t *testing.T) {
-	f := newDeliveryRig(t, Config{})
-	f.start(t)
-	item := TaskItem("interrupted", "work", "")
+func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
+	for _, lane := range []string{"conv", "task"} {
+		t.Run(lane, func(t *testing.T) {
+			f := newDeliveryRig(t, Config{})
+			f.start(t)
+			item := TaskItem("interrupted", "work", "")
+			if lane == "conv" {
+				item.SessionKey, item.Lane = "room", "conv"
+				item.Payload.Context = domain.SessionContext{Conversation: "room"}
+				item.Payload.Target = "thread"
+			}
+			id, err := f.inbox.Enqueue(t.Context(), item)
+			require.NoError(t, err)
+			f.runner.Notify()
+			s := take(t, f.model.opened)
+			take(t, s.inputs)
+			f.status(t, id, "done")
+			close(s.events)
+			s = take(t, f.model.opened)
+			require.Contains(t, take(t, s.inputs).Text, "previous turn was interrupted")
+			require.Equal(t, "resume-token", s.config.ResumeToken)
+			require.Eventually(t, func() bool {
+				saved, err := f.sessions.Get(t.Context(), item.SessionKey)
+				return err == nil && saved.Turn != nil && saved.Turn.Continuations == 1
+			}, time.Second, time.Millisecond)
+			close(s.events)
+			require.Eventually(t, func() bool {
+				var n int
+				return f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND kind='error'", item.SessionKey).Scan(&n) == nil && n == 2
+			}, time.Second, time.Millisecond)
+			active, err := f.inbox.Active(t.Context())
+			require.NoError(t, err)
+			require.Empty(t, active)
+			require.Empty(t, f.model.opened)
+		})
+	}
+}
+
+func TestConversationFollowupRequiresAcceptRuleBeforeOpen(t *testing.T) {
+	var prepared atomic.Int32
+	f := newDeliveryRig(t, Config{
+		Accept: func(info domain.SessionContext) bool { return info.Conversation != "removed" },
+		Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
+			prepared.Add(1)
+			return item.Payload.Input, nil
+		},
+	})
+	info := domain.SessionContext{Conversation: "removed"}
+	item := domain.InboxItem{SourceKey: "original", SessionKey: "removed", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Target: "thread"}}
 	id, err := f.inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
-	f.runner.Notify()
-	s := take(t, f.model.opened)
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	close(s.events)
-	s = take(t, f.model.opened)
-	require.Contains(t, take(t, s.inputs).Text, "previous turn was interrupted")
-	require.Eventually(t, func() bool {
-		saved, err := f.sessions.Get(t.Context(), item.SessionKey)
-		return err == nil && saved.Turn != nil && saved.Turn.Continuations == 1
-	}, time.Second, time.Millisecond)
-	close(s.events)
-	require.Eventually(t, func() bool {
-		var n int
-		return f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND kind='error'", item.SessionKey).Scan(&n) == nil && n == 2
-	}, time.Second, time.Millisecond)
+	_, err = f.inbox.Claim(t.Context(), id, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, f.inbox.Delivered(t.Context(), id, domain.Session{Key: item.SessionKey, Context: &info, Turn: &domain.SessionTurn{InputID: id, Deadline: time.Now().Add(time.Hour)}}))
+	require.NoError(t, f.sessions.Recover(t.Context()))
 	active, err := f.inbox.Active(t.Context())
 	require.NoError(t, err)
-	require.Empty(t, active)
+	require.Len(t, active, 1)
+	followup := active[0]
+	require.Nil(t, followup.Payload.Event)
+	f.start(t)
+	f.status(t, followup.ID, "dead")
 	require.Empty(t, f.model.opened)
+	require.Zero(t, prepared.Load())
+	var attempts int
+	var reason string
+	require.NoError(t, f.db.QueryRow("SELECT attempts,last_error FROM inbox WHERE id=?", followup.ID).Scan(&attempts, &reason))
+	require.Zero(t, attempts)
+	require.Equal(t, "session no longer has an accept rule", reason)
 }
 
 func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
@@ -504,7 +556,7 @@ func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
 }
 
 func TestDeliveryFailureUsesClosingReason(t *testing.T) {
-	for _, reason := range []string{"", domain.DeliveryDeadlineExceeded, "shutdown", "session configuration changed", "conversation no longer accepted", domain.TurnDeadlineExceeded} {
+	for _, reason := range []string{"", domain.DeliveryDeadlineExceeded, "shutdown", "session configuration changed", domain.ConversationNoLongerAccepted, domain.TurnDeadlineExceeded} {
 		for _, cause := range []error{context.Canceled, errors.Join(errors.New("send failed"), context.DeadlineExceeded)} {
 			t.Run(reason+"/"+cause.Error(), func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
@@ -556,7 +608,12 @@ func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 			f := newDeliveryRig(t, Config{})
 			var sends atomic.Int32
 			send := func() error { sends.Add(1); f.cancel(); return nil }
-			f.model.send = func(context.Context, domain.UserInput) error { return send() }
+			f.model.send = func(_ context.Context, input domain.UserInput) error {
+				if input.Text == "once" {
+					return send()
+				}
+				return nil
+			}
 			f.config.NotifyOwner = func(context.Context, string) error { return send() }
 			stop := f.start(t)
 			item := domain.InboxItem{SourceKey: "sent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "once"}, Context: domain.SessionContext{}}}

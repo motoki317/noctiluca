@@ -117,8 +117,8 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	require.True(t, f.hub.active("test:direct"))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	require.Eventually(t, func() bool {
-		items, err := f.core.(*core).inbox.Active(t.Context())
-		return err == nil && len(items) == 0
+		records, err := f.events.ListModel(t.Context(), "test:direct", 1)
+		return err == nil && len(records) == 1 && records[0].Event.Kind == domain.ModelEventTurnFinished
 	}, time.Second, time.Millisecond)
 	require.NoError(t, f.core.(*core).applyGroups(f.core.(*core).messaging.instances[0], map[string][]string{"team": {"owner", "member"}}))
 	e.Sender.ID = "member"
@@ -132,11 +132,12 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	item.SourceKey = "wake-test"
 	item.ReadyAt = time.Now()
 	item.Payload.Input.Text = "wake after close"
+	resumed := take(t, f.model.opened)
+	require.Equal(t, "resume-test:direct", resumed.config.ResumeToken)
+	require.Contains(t, take(t, resumed.inputs).Text, "previous turn was interrupted: model process exited")
 	_, err = f.core.(*core).inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
 	f.core.(*core).reconciler.Notify()
-	resumed := take(t, f.model.opened)
-	require.Equal(t, "resume-test:direct", resumed.config.ResumeToken)
 	require.Contains(t, take(t, resumed.inputs).Text, "wake after close")
 	require.True(t, f.hub.active("test:direct"))
 	resumed.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}

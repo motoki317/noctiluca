@@ -68,6 +68,7 @@ Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at`
 - A row that fails to send, or that the model refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
 - After three failed attempts a row is dead, and the owner gets one DM about that row.
 - Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
+- A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input at that input's own reply or work target. A turn cut at its timeout does not continue. Tasks notify the owner.
 - Conversation sessions run concurrently. Scheduled tasks run one at a time.
 - A failed row never stops the process. Only a failure of SQLite or of the tool-hub listener does.
 
