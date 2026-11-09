@@ -103,24 +103,43 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 		return err
 	}
 	started := true
+	var rawInput string
 	if turn.InputID != 0 {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE id=? AND status='done')`, turn.InputID).Scan(&started); err != nil {
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status,payload FROM inbox WHERE id=?`, turn.InputID).Scan(&status, &rawInput); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		started = status == "done"
 	}
 	now := time.Now()
 	note := "previous turn was interrupted: " + reason
 	if err := saveModel(ctx, tx, domain.ModelRecord{SessionKey: key, RecordedAt: now, Event: domain.ModelEvent{Kind: domain.ModelEventError, Text: note, Err: errors.New(note)}}); err != nil {
 		return err
 	}
-	if started && info != nil && info.TaskName != "" {
+	if started && info != nil {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
 		if reason == domain.TurnDeadlineExceeded || reason == domain.DeliveryDeadlineExceeded {
-			if err := insertOwnerNotice(ctx, tx, source, fmt.Sprintf("Task %s stopped: %s", info.TaskName, reason)); err != nil {
-				return err
+			if info.TaskName != "" {
+				if err := insertOwnerNotice(ctx, tx, source, fmt.Sprintf("Task %s stopped: %s", info.TaskName, reason)); err != nil {
+					return err
+				}
 			}
-		} else if turn.Continuations < 1 {
+		} else if turn.Continuations < 1 && (info.TaskName != "" || reason != domain.ConversationNoLongerAccepted) {
 			item := domain.InboxItem{SourceKey: source, SessionKey: key, Lane: "task", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Context: *info, Input: domain.UserInput{Text: note}}}
+			if info.TaskName == "" {
+				item.Lane = "conv"
+				item.Payload.Input.Text += "\nThe interrupted turn may cover several inputs: finish each unfinished part at its input's reply or work target from history."
+				var input domain.InboxPayload
+				if json.Unmarshal([]byte(rawInput), &input) == nil {
+					item.Payload.Target = input.Target
+					if input.Event != nil {
+						item.Payload.Target = input.Event.WorkTarget()
+					}
+				}
+				if item.Payload.Target == "" {
+					item.Payload.Target = info.Conversation
+				}
+			}
 			if _, err := insertInbox(ctx, tx, item); err != nil {
 				return err
 			}

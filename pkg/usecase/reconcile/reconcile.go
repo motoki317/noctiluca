@@ -158,7 +158,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			continue
 		}
 		if r.config.Accept != nil && !r.config.Accept(p.info) {
-			r.retire(p, "conversation no longer accepted")
+			r.retire(p, domain.ConversationNoLongerAccepted)
 			continue
 		}
 		for _, item := range p.unstarted {

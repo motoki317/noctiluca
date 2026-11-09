@@ -93,6 +93,13 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 					require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
 					require.Zero(t, attempts)
 				}
+				if reason != "deadline" {
+					note := take(t, s.inputs)
+					require.Greater(t, note.ID, third)
+					require.Contains(t, note.Text, "previous turn was interrupted")
+					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: note.ID}
+					f.status(t, note.ID, "done")
+				}
 				require.Empty(t, s.inputs)
 			})
 		})

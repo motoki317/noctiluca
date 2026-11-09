@@ -13,6 +13,7 @@ var ErrPersistence = errors.New("persistence unavailable")
 
 const TurnDeadlineExceeded = "turn deadline exceeded"
 const DeliveryDeadlineExceeded = "delivery deadline exceeded"
+const ConversationNoLongerAccepted = "conversation no longer accepted"
 
 type SentMessage struct {
 	ID           string
