@@ -305,6 +305,9 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 				{"user_token", instance.Slack.UserToken, &tokens[i].Slack.UserToken, false},
 			}
 		case "discord":
+			if err := instance.validateDiscordIDs(); err != nil {
+				return nil, 0, err
+			}
 			fields = []tokenField{{"token", instance.Discord.Token, &tokens[i].DiscordToken, true}}
 		case "traq":
 			if err := traq.ValidateOrigin(instance.TraQ.Origin); err != nil {
@@ -326,6 +329,16 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 		}
 	}
 	return tokens, number, nil
+}
+
+func (c messagingConfig) validateDiscordIDs() error {
+	for i, rule := range c.Conversations.Rules {
+		id, err := strconv.ParseUint(rule.ID, 10, 64)
+		if err != nil || id == 0 || strconv.FormatUint(id, 10) != rule.ID {
+			return fmt.Errorf("messaging.%s.conversations.rules[%d].id must be a Discord numeric ID", c.Name, i)
+		}
+	}
+	return nil
 }
 
 func (c messagingConfig) validateTraQIDs() error {

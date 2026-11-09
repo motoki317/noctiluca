@@ -73,6 +73,17 @@ func message(id, channel snowflake.ID) sdk.Message {
 	return sdk.Message{ID: id, ChannelID: channel, Author: sdk.User{ID: 200, Username: "reader"}, Content: "hello", CreatedAt: time.Now().UTC()}
 }
 
+func seedConversations(t *testing.T, a *adapter, channels ...string) {
+	t.Helper()
+	for _, channel := range channels {
+		accepted := true
+		require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
+			Kind: domain.InboundEventMessage, Conversation: Conversation(a.name, channel, ""), Accepted: &accepted,
+			Sender: domain.Sender{ID: "200", Kind: domain.SenderHuman}, Text: "stored message", ReceivedAt: time.Now().Add(-25 * time.Hour),
+		}))
+	}
+}
+
 func TestMessagesAndThreadParticipation(t *testing.T) {
 	for _, mode := range []string{"top", "dm", "mention", "member", "owner", "starter", "reply", "thread starter", "stranger", "own"} {
 		t.Run(mode, func(t *testing.T) {
@@ -196,7 +207,7 @@ func TestEditsDeletesAndReactions(t *testing.T) {
 func TestBackfillCursorCapsAndKeys(t *testing.T) {
 	now := time.Now().UTC()
 	var pages int
-	a := testAdapter(t, Config{Channels: []string{"400", "400"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/channels/400/messages" {
 			return false
 		}
@@ -216,6 +227,7 @@ func TestBackfillCursorCapsAndKeys(t *testing.T) {
 		writeJSON(t, w, ms)
 		return true
 	})
+	seedConversations(t, a, "400", "400")
 	var got []domain.InboundEvent
 	consume := func(_ context.Context, e domain.InboundEvent) error { got = append(got, e); return nil }
 	require.NoError(t, a.backfill(t.Context(), consume))
@@ -462,7 +474,7 @@ func TestLiveAndBackfillCollapseInInbox(t *testing.T) {
 	m := message(600, 400)
 	edit := m.CreatedAt.Add(time.Second)
 	m.EditedTimestamp = &edit
-	a := testAdapter(t, Config{Channels: []string{"400"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		switch r.URL.Path {
 		case "/channels/400/messages":
 			writeJSON(t, w, []sdk.Message{m})
@@ -479,8 +491,11 @@ func TestLiveAndBackfillCollapseInInbox(t *testing.T) {
 	a.history = repository.NewEventRepository(db)
 	inbox := repository.NewInboxRepository(db)
 	consume := func(ctx context.Context, e domain.InboundEvent) error {
+		accepted := true
+		e.Accepted = &accepted
 		return inbox.Receive(ctx, e, domain.InboxItem{SourceKey: e.SourceKey, SessionKey: "chat:400:", Lane: "conv", ReadyAt: e.ReceivedAt, Payload: domain.InboxPayload{Event: &e}})
 	}
+	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageCreate{Message: m}, consume))
 	require.NoError(t, a.backfill(t.Context(), consume))
 	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageCreate{Message: m}, consume))
 	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageUpdate{Message: m}, consume))

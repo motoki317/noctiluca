@@ -255,19 +255,20 @@ func (a *adapter) reaction(ctx context.Context, e gateway.EventMessageReactionAd
 }
 
 func (a *adapter) backfill(ctx context.Context, consume func(context.Context, domain.InboundEvent) error) error {
-	refs := make([]domain.ConversationRef, 0, len(a.config.Channels)+1)
-	for _, id := range a.config.Channels {
-		refs = append(refs, Conversation(a.name, id, ""))
+	conversations, err := a.history.ListConversations(ctx, a.name)
+	if err != nil {
+		a.warnLookup(ctx, 0, 0, &lookupError{"ListConversations", err})
 	}
 	owner, _ := parseID(a.config.Owner) // Validated by newAdapter.
 	dm, err := a.api.CreateDMChannel(owner, rest.WithCtx(ctx))
 	if err != nil {
 		a.warnLookup(ctx, 0, 0, &lookupError{"CreateDMChannel", err})
 	} else {
-		refs = append(refs, Conversation(a.name, dm.ID().String(), ""))
+		conversations = append([]domain.Conversation{{Ref: Conversation(a.name, dm.ID().String(), ""), Direct: true}}, conversations...)
 	}
 	seen := make(map[domain.ConversationRef]bool)
-	for _, ref := range refs {
+	for _, conversation := range conversations {
+		ref := conversation.Ref
 		if seen[ref] {
 			continue
 		}

@@ -19,7 +19,7 @@ import (
 func TestLocationCacheSharedByLiveAndBackfill(t *testing.T) {
 	var mu sync.Mutex
 	calls := map[string]int{}
-	a := testAdapter(t, Config{Channels: []string{"400", "401"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		mu.Lock()
 		calls[r.URL.Path]++
 		mu.Unlock()
@@ -31,6 +31,7 @@ func TestLocationCacheSharedByLiveAndBackfill(t *testing.T) {
 		}
 		return false
 	})
+	seedConversations(t, a, "400", "401")
 	var got []domain.InboundEvent
 	consume := func(_ context.Context, event domain.InboundEvent) error { got = append(got, event); return nil }
 	require.NoError(t, a.backfill(t.Context(), consume))

@@ -133,6 +133,10 @@ func TestGatewayRetryWaitCancels(t *testing.T) {
 
 type retryHistory struct{ domain.EventRepository }
 
+func (*retryHistory) ListConversations(context.Context, string) ([]domain.Conversation, error) {
+	return nil, nil
+}
+
 func (*retryHistory) GetInbound(context.Context, domain.ConversationRef) (domain.InboundEvent, error) {
 	return domain.InboundEvent{Conversation: "chat:400:", MessageRef: "chat:400:600"}, nil
 }

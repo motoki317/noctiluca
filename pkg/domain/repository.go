@@ -22,12 +22,18 @@ type SentMessage struct {
 	SentAt       time.Time
 }
 
+type Conversation struct {
+	Ref    ConversationRef
+	Direct bool
+}
+
 type EventRepository interface {
 	InputContext(context.Context, SessionKey, ConversationRef, time.Time) (InputContext, error)
 	SaveInbound(ctx context.Context, event InboundEvent) error
 	SaveOutbound(ctx context.Context, message SentMessage) error
 	GetInbound(ctx context.Context, messageRef ConversationRef) (InboundEvent, error)
 	ListInbound(ctx context.Context, conversation ConversationRef, limit int) ([]InboundEvent, error)
+	ListConversations(ctx context.Context, name string) ([]Conversation, error)
 	LatestMessageTime(ctx context.Context, conversation ConversationRef) (time.Time, error)
 	ListOutbound(ctx context.Context, conversation ConversationRef, limit int) ([]SentMessage, error)
 	Search(ctx context.Context, query string, limit int) ([]InboundEvent, error)

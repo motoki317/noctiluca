@@ -19,32 +19,36 @@ type backfillTarget struct {
 }
 
 func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
-	channels := append([]string(nil), a.config.Channels...)
-	ownerChannel := ""
+	conversations, err := a.history.ListConversations(ctx, a.name)
+	if err != nil {
+		a.warnLookup(ctx, "list traQ backfill conversations", err)
+	}
 	if a.config.Owner != "" {
 		ref, err := a.DirectMessage(ctx, a.config.Owner)
 		if err != nil {
 			a.warnLookup(ctx, "resolve traQ direct message", err, "user_id", a.config.Owner)
 		} else {
-			ownerChannel, _, _ = a.destination(ref)
-			channels = append(channels, ownerChannel)
+			conversations = append([]domain.Conversation{{Ref: ref, Direct: true}}, conversations...)
 		}
 	}
 	now := time.Now()
-	targets := make([]backfillTarget, 0, len(channels))
-	seen := make(map[string]bool)
-	for _, channel := range channels {
+	targets := make([]backfillTarget, 0, len(conversations))
+	seen := make(map[domain.ConversationRef]bool)
+	for _, conversation := range conversations {
+		ref := conversation.Ref
 		if ctx.Err() != nil {
 			break
 		}
-		if seen[channel] {
+		if seen[ref] {
 			continue
 		}
-		seen[channel] = true
-		if channel != ownerChannel {
-			a.direct.Store(channel, "")
+		seen[ref] = true
+		channel, _, err := a.destination(ref)
+		if err != nil {
+			a.warnLookup(ctx, "resolve traQ backfill conversation", err)
+			continue
 		}
-		last, err := a.history.LatestMessageTime(ctx, Conversation(a.name, channel, ""))
+		last, err := a.history.LatestMessageTime(ctx, ref)
 		if err != nil {
 			a.warnLookup(ctx, "read traQ backfill cursor", err, "channel_id", channel)
 			continue
@@ -53,7 +57,7 @@ func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
 		if last.After(since) {
 			since = last
 		}
-		targets = append(targets, backfillTarget{channel: channel, direct: channel == ownerChannel, since: since, until: now})
+		targets = append(targets, backfillTarget{channel: channel, direct: conversation.Direct, since: since, until: now})
 	}
 	return targets
 }
@@ -62,6 +66,18 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 	for _, target := range targets {
 		if ctx.Err() != nil {
 			return errReconnect
+		}
+		joined := target.direct
+		if !target.direct {
+			bots, response, err := a.api.ChannelAPI.GetChannelBots(ctx, target.channel).Execute()
+			if err != nil {
+				if ctx.Err() != nil {
+					return errReconnect
+				}
+				a.warnLookup(ctx, "read traQ channel bots", apiError("read traQ channel bots", response, err), "channel_id", target.channel)
+			} else {
+				joined = slices.ContainsFunc(bots, func(bot sdk.BotUser) bool { return bot.BotUserId == a.self })
+			}
 		}
 		messages, response, err := a.api.MessageAPI.GetMessages(ctx, target.channel).Since(target.since).Until(target.until).Inclusive(true).Limit(200).Order("desc").Execute()
 		if err != nil {
@@ -88,6 +104,10 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 			if message.UserId == a.self || !validID(message.UserId) || !validID(message.Id) || message.ChannelId != target.channel || message.CreatedAt.Before(target.since) || message.CreatedAt.After(target.until) {
 				continue
 			}
+			mentions := a.mentions(message.Content, nil)
+			if !joined && !mentions {
+				continue
+			}
 			user, err := a.lookupUser(ctx, message.UserId)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -96,7 +116,7 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 				a.warnLookup(ctx, "read traQ user", err, "channel_id", target.channel, "message_id", message.Id, "user_id", message.UserId)
 				continue
 			}
-			event := domain.InboundEvent{SourceKey: a.name + ":m:" + message.Id, Kind: domain.InboundEventMessage, Conversation: Conversation(a.name, target.channel, ""), MessageRef: Conversation(a.name, target.channel, message.Id), Direct: target.direct, Sender: user, Text: message.Content, MentionsMe: a.mentions(message.Content, nil), ReceivedAt: message.CreatedAt}
+			event := domain.InboundEvent{SourceKey: a.name + ":m:" + message.Id, Kind: domain.InboundEventMessage, Conversation: Conversation(a.name, target.channel, ""), MessageRef: Conversation(a.name, target.channel, message.Id), Direct: target.direct, Sender: user, Text: message.Content, MentionsMe: mentions, ReceivedAt: message.CreatedAt}
 			if ctx.Err() != nil {
 				return errReconnect
 			}

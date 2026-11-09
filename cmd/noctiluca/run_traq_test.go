@@ -18,6 +18,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	sdk "github.com/traPtitech/go-traq"
+
+	"github.com/motoki317/noctiluca/pkg/domain"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 )
 
 func TestRunTraQCLIHelper(t *testing.T) {
@@ -112,6 +115,8 @@ func TestRunTraQAssemblyRepliesAndBackfill(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v3/users/me":
 			write(sdk.MyUserDetail{Id: "bot"})
+		case "/api/v3/channels/" + channelID + "/bots":
+			write([]sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 		case "/api/v3/users/" + ownerID:
 			write(sdk.UserDetail{Id: ownerID, DisplayName: "Owner"})
 		case "/api/v3/users/" + ownerID + "/dm-channel":
@@ -173,6 +178,11 @@ consolidate: {enabled: false}
 	require.NoError(t, err)
 	app, err := newApplication(t.Context(), config, nil)
 	require.NoError(t, err)
+	storedAccepted := true
+	require.NoError(t, repository.NewEventRepository(app.db).SaveInbound(t.Context(), domain.InboundEvent{
+		Kind: domain.InboundEventMessage, Conversation: domain.NewConversationRef("team", channelID, ""), Accepted: &storedAccepted,
+		Sender: domain.Sender{ID: ownerID, Kind: domain.SenderHuman}, Text: "stored message", ReceivedAt: at.Add(-time.Hour),
+	}))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- app.Start(ctx) }()
@@ -218,5 +228,5 @@ consolidate: {enabled: false}
 	}, time.Second, 10*time.Millisecond)
 	var accepted int
 	require.NoError(t, app.db.QueryRow("SELECT count(*) FROM events WHERE accepted=1").Scan(&accepted))
-	require.Equal(t, 2, accepted)
+	require.Equal(t, 3, accepted)
 }
