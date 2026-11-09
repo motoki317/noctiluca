@@ -61,3 +61,10 @@ type InboundEvent struct {
 	MentionsMe   bool
 	ReceivedAt   time.Time
 }
+
+func (e InboundEvent) WorkTarget() ConversationRef {
+	if e.Parent != "" || e.Direct {
+		return e.Conversation
+	}
+	return e.MessageRef
+}
