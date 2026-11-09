@@ -17,6 +17,9 @@
 //     turn so the reconciler marks the session busy and applies the turn deadline.
 //   - `--resume <session_id>` restores the conversation in a new process.
 //
+// CLI 2.1.316 and 2.1.321 never defer tools with _meta {"anthropic/alwaysLoad": true}, so their schemas survive compaction.
+// A server-level alwaysLoad: false in --mcp-config overrides the tool metadata.
+//
 // The adapter never passes --bare and keeps user, project, and local settings: bare mode skips
 // the subscription login and ~/.claude. It removes API-key and base-URL variables from the child
 // environment so turns bill to the subscription. Versions below 2.1.316 are refused; a major or

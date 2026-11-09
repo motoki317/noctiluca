@@ -219,7 +219,7 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 		if err != nil {
 			return errors.New("MCP tool schema is invalid")
 		}
-		tools = append(tools, domain.Tool{Name: name, Description: tool.Description, InputSchema: schema, ReadOnly: tool.Annotations != nil && tool.Annotations.ReadOnlyHint, TextResult: true, Handler: func(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+		tools = append(tools, domain.Tool{Name: name, Description: tool.Description, InputSchema: schema, ReadOnly: tool.Annotations != nil && tool.Annotations.ReadOnlyHint, OnDemand: true, TextResult: true, Handler: func(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 			if err := r.tokens.err(); err != nil {
 				return nil, err
 			}

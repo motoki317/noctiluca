@@ -25,6 +25,9 @@ import (
 // MinimumVersion is the oldest CLI whose stream protocol was measured.
 const MinimumVersion = "2.1.316"
 
+// AlwaysOfferedToolMeta keeps built-in tool schemas available after CLI compaction.
+var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
+
 type adapter struct{ executable, model string }
 
 // New uses the CLI's configured model when model is empty.

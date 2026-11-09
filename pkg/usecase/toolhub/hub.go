@@ -17,7 +17,8 @@ import (
 )
 
 type Config struct {
-	Port int
+	Port              int
+	AlwaysOfferedMeta map[string]any
 }
 
 type grant struct {
@@ -30,15 +31,16 @@ type grant struct {
 type grantKey struct{}
 
 type hub struct {
-	mu              sync.Mutex
-	server          *mcp.Server
-	http            *http.Server
-	listener        net.Listener
-	sources         map[string]struct{}
-	tools           map[string]string
-	sessions        map[domain.SessionKey]*grant
-	tokens          map[string]*grant
-	started, closed bool
+	mu                sync.Mutex
+	server            *mcp.Server
+	alwaysOfferedMeta map[string]any
+	http              *http.Server
+	listener          net.Listener
+	sources           map[string]struct{}
+	tools             map[string]string
+	sessions          map[domain.SessionKey]*grant
+	tokens            map[string]*grant
+	started, closed   bool
 }
 
 // New binds the loopback listener so OpenSession can return the actual port before Start.
@@ -47,7 +49,7 @@ func New(config Config) (domain.ToolHub, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen for tool hub: %w", err)
 	}
-	h := &hub{listener: listener, server: mcp.NewServer(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, nil), sources: make(map[string]struct{}), tools: make(map[string]string), sessions: make(map[domain.SessionKey]*grant), tokens: make(map[string]*grant)}
+	h := &hub{listener: listener, server: mcp.NewServer(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, nil), alwaysOfferedMeta: config.AlwaysOfferedMeta, sources: make(map[string]struct{}), tools: make(map[string]string), sessions: make(map[domain.SessionKey]*grant), tokens: make(map[string]*grant)}
 	// The bearer identifies the model session. Transport connections need no separate lifetime.
 	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return h.server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, PropagateRequestCancellation: true})
 	h.http = &http.Server{Handler: h.authorize(http.NewCrossOriginProtection().Handler(transport)), ReadHeaderTimeout: 10 * time.Second}

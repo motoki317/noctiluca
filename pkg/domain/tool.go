@@ -8,6 +8,7 @@ import (
 
 type Tool struct {
 	ReadOnly    bool
+	OnDemand    bool
 	Name        string
 	Description string
 	InputSchema json.RawMessage

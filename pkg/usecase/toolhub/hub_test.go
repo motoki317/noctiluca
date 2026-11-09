@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func startHub(t *testing.T) domain.ToolHub {
+func startHub(t *testing.T, config toolhub.Config) domain.ToolHub {
 	t.Helper()
-	h, err := toolhub.New(toolhub.Config{})
+	h, err := toolhub.New(config)
 	require.NoError(t, err)
 	done := make(chan error, 1)
 	go func() { done <- h.Start(context.Background()) }()
@@ -68,7 +68,7 @@ func call(t *testing.T, c *mcp.ClientSession, name string, args any) *mcp.CallTo
 }
 
 func TestSourcesAndSessionContext(t *testing.T) {
-	h := startHub(t)
+	h := startHub(t, toolhub.Config{})
 	identity := echo("identity")
 	identity.Handler = func(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
 		session, ok := domain.ToolSessionFromContext(ctx)
@@ -116,7 +116,7 @@ func TestSourcesAndSessionContext(t *testing.T) {
 }
 
 func TestSessionLifetime(t *testing.T) {
-	h := startHub(t)
+	h := startHub(t, toolhub.Config{})
 	require.NoError(t, h.AddSource("core", []domain.Tool{echo("echo")}))
 	endpoint, err := h.OpenSession("session")
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func requestStatus(t *testing.T, endpoint domain.MCPEndpoint, authorization stri
 }
 
 func TestInvalidTokensAndRegistry(t *testing.T) {
-	h := startHub(t)
+	h := startHub(t, toolhub.Config{})
 	endpoint, err := h.OpenSession("session")
 	require.NoError(t, err)
 	for _, auth := range []string{"", "Bearer wrong", "Basic " + endpoint.BearerToken, "Bearer " + endpoint.BearerToken + " extra"} {
@@ -202,7 +202,7 @@ func TestInvalidTokensAndRegistry(t *testing.T) {
 }
 
 func TestCloseCancelsActiveCall(t *testing.T) {
-	h := startHub(t)
+	h := startHub(t, toolhub.Config{})
 	entered := make(chan struct{})
 	canceled := make(chan struct{})
 	waiting := echo("wait")
@@ -233,7 +233,7 @@ func TestCloseCancelsActiveCall(t *testing.T) {
 }
 
 func TestConcurrentSessions(t *testing.T) {
-	h := startHub(t)
+	h := startHub(t, toolhub.Config{})
 	require.NoError(t, h.AddSource("core", []domain.Tool{echo("echo")}))
 	var wg sync.WaitGroup
 	for i := range 12 {

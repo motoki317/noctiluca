@@ -141,6 +141,7 @@ func TestRunCLIHelper(t *testing.T) {
 		names := map[string]bool{}
 		for _, tool := range listed.Tools {
 			names[tool.Name] = true
+			require.Equal(t, mcp.Meta{"anthropic/alwaysLoad": true}, tool.Meta, tool.Name)
 			require.False(t, strings.HasPrefix(tool.Name, "memory_"), tool.Name)
 		}
 		for _, name := range []string{"reply", "watch", "wake_at", "schedule_add", "slack_read_history"} {
