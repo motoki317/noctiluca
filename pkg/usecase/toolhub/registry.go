@@ -74,7 +74,11 @@ func (h *hub) setSource(name string, tools []domain.Tool, replace bool) error {
 		}
 	}
 	for _, p := range prepared {
-		h.server.AddTool(&mcp.Tool{Name: p.tool.Name, Description: p.tool.Description, InputSchema: p.tool.InputSchema, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: p.tool.ReadOnly}}, p.call)
+		tool := &mcp.Tool{Name: p.tool.Name, Description: p.tool.Description, InputSchema: p.tool.InputSchema, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: p.tool.ReadOnly}}
+		if !p.tool.OnDemand {
+			tool.Meta = h.alwaysOfferedMeta
+		}
+		h.server.AddTool(tool, p.call)
 		h.tools[p.tool.Name] = name
 	}
 	h.sources[name] = struct{}{}

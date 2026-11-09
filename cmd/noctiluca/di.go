@@ -54,7 +54,15 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 			result = errors.Join(result, db.Close())
 		}
 	}()
-	hub, err := toolhub.New(toolhub.Config{Port: port})
+	hubConfig := toolhub.Config{Port: port}
+	var model domain.ModelAdapter
+	if config.Model.Type == "codex" {
+		model = codex.New(config.Model.Executable, config.Model.Name, config.Model.ReasoningEffort)
+	} else {
+		model = claude.New(config.Model.Executable, config.Model.Name)
+		hubConfig.AlwaysOfferedMeta = claude.AlwaysOfferedToolMeta
+	}
+	hub, err := toolhub.New(hubConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -121,10 +129,6 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		return nil, err
 	}
 
-	model := claude.New(config.Model.Executable, config.Model.Name)
-	if config.Model.Type == "codex" {
-		model = codex.New(config.Model.Executable, config.Model.Name, config.Model.ReasoningEffort)
-	}
 	jobs := append([]domain.Schedule(nil), config.Cron...)
 	if config.Heartbeat.Enabled {
 		jobs = append(jobs, domain.Schedule{Name: "heartbeat", Cron: "@every " + config.Heartbeat.Interval.String(), TZ: "UTC", Workdir: config.Model.Workdir})

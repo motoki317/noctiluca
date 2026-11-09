@@ -65,6 +65,12 @@ func TestCodexRunHelper(t *testing.T) {
 			session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint.URL,
 				HTTPClient: &http.Client{Transport: bearerTransport(endpoint.Headers["Authorization"])}}, nil)
 			require.NoError(t, err)
+			listed, err := session.ListTools(ctx, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, listed.Tools)
+			for _, tool := range listed.Tools {
+				require.Nil(t, tool.Meta, tool.Name)
+			}
 			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "reply", Arguments: map[string]any{"target": target, "text": "PONG"}})
 			require.NoError(t, err)
 			require.False(t, result.IsError)

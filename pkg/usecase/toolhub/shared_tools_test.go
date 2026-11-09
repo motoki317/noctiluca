@@ -8,11 +8,12 @@ import (
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/motoki317/noctiluca/pkg/usecase/reconcile"
+	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
 	"github.com/stretchr/testify/require"
 )
 
 func TestEverySessionCanManageSchedulesAndReadEpisodes(t *testing.T) {
-	h := startHub(t)
+	h := startHub(t, toolhub.Config{})
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "test.db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })

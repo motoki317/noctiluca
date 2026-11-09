@@ -56,7 +56,7 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}, Tools: []string{"echo", "new"}}
 	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
-	hub, err := toolhub.New(toolhub.Config{})
+	hub, err := toolhub.New(toolhub.Config{AlwaysOfferedMeta: map[string]any{"test/alwaysOffered": true}})
 	require.NoError(t, err)
 	hubDone := make(chan error, 1)
 	go func() { hubDone <- hub.Start(context.Background()) }()
@@ -77,6 +77,7 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed.Tools, 1)
 	assert.Equal(t, "tracker_echo", listed.Tools[0].Name)
+	assert.Nil(t, listed.Tools[0].Meta)
 	call := func(session *mcp.ClientSession, text string) *mcp.CallToolResult {
 		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "tracker_echo", Arguments: map[string]any{"text": text}})
 		require.NoError(t, err)
@@ -98,7 +99,7 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	require.NoError(t, initial.Close())
 	require.Eventually(t, func() bool {
 		listed, err := second.ListTools(t.Context(), nil)
-		return err == nil && len(listed.Tools) == 1 && listed.Tools[0].Name == "tracker_new" && f.initializations.Load() == 3
+		return err == nil && len(listed.Tools) == 1 && listed.Tools[0].Name == "tracker_new" && listed.Tools[0].Meta == nil && f.initializations.Load() == 3
 	}, 2*time.Second, 10*time.Millisecond)
 	result, err = second.CallTool(t.Context(), &mcp.CallToolParams{Name: "tracker_new", Arguments: map[string]any{"text": "reconnected"}})
 	require.NoError(t, err)
