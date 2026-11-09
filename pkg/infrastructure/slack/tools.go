@@ -23,6 +23,7 @@ type toolInput struct {
 	Thread    string `json:"thread_ts"`
 	Timestamp string `json:"timestamp"`
 	Text      string `json:"text"`
+	Status    string `json:"status"`
 	Broadcast bool   `json:"broadcast"`
 	Query     string `json:"query"`
 	Cursor    string `json:"cursor"`
@@ -73,6 +74,7 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
 		tool("upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
 		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
+		tool("set_status", "Call once before slow work when you decide to reply in a thread, not for top-level replies. Slack prefixes status with the app name: for example \"is looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": str}, []string{"channel", "thread_ts", "status"}, a.setStatus),
 		tool("send", "Post Markdown text using the same target rules as reply: keep existing threads, top level for chat and DM work, message thread for channel work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
@@ -297,6 +299,13 @@ func (a *adapter) broadcastImage(ctx context.Context, in toolInput, fileID, file
 func (a *adapter) react(ctx context.Context, in toolInput) (any, error) {
 	if err := a.bot.AddReactionContext(ctx, strings.Trim(in.Emoji, ":"), sdk.ItemRef{Channel: in.Channel, Timestamp: in.Timestamp}); err != nil {
 		return nil, slackError("add Slack reaction failed", err)
+	}
+	return map[string]bool{"ok": true}, nil
+}
+
+func (a *adapter) setStatus(ctx context.Context, in toolInput) (any, error) {
+	if err := a.bot.SetAssistantThreadsStatusContext(ctx, sdk.AssistantThreadsSetStatusParameters{ChannelID: in.Channel, ThreadTS: in.Thread, Status: in.Status}); err != nil {
+		return nil, slackError("set Slack thread status failed", err)
 	}
 	return map[string]bool{"ok": true}, nil
 }
