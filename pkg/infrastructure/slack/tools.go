@@ -39,8 +39,8 @@ func (a *adapter) ToolNotes() string {
 	return "A ref ending in a colon is top level: do not append a timestamp. " +
 		fmt.Sprintf("Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context. Slack tools take bare channel IDs. "+
 			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true. "+
-			"When you decide to reply in a thread, call %[1]s_set_status on it before your other tools. "+
-			"Your post there clears the status, so call it again when work continues after a post. Skip it for top-level replies.", a.name)
+			"When you decide to post in a thread, call %[1]s_set_status on it before your other tools. The work target of a top-level channel message is its thread. "+
+			"Your post there clears the status, so call it again when work continues after a post. Skip it when the target you post to ends in a colon.", a.name)
 }
 
 func (a *adapter) Tools() []domain.Tool {
