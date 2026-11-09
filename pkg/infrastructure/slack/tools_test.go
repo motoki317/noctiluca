@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -55,7 +57,7 @@ func TestReadTools(t *testing.T) {
 			t.Errorf("unexpected API %s", r.URL.Path)
 		}
 	}, true)
-	require.Len(t, a.Tools(), 7)
+	require.Len(t, a.Tools(), 8)
 	result := invoke(t, a, "slack_read_thread", map[string]any{"channel": "CTEST", "thread_ts": "123.000001", "cursor": "next"})
 	require.Contains(t, string(result), `"next_cursor":"later"`)
 	require.Contains(t, string(result), `"text":"thread"`)
@@ -284,6 +286,70 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 			require.NoError(t, a.record(ctx, "already-posted", Conversation(name, "CTEST", ""), domain.OutboundMessage{Text: "posted"}))
 		})
 	}
+}
+
+func TestSetStatus(t *testing.T) {
+	for _, name := range []string{"slack", "support_2"} {
+		for _, code := range []string{"", "not_in_channel", "missing_scope"} {
+			t.Run(name+"/"+code, func(t *testing.T) {
+				var calls atomic.Int32
+				a := apiInstance(t, name, func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					require.Equal(t, http.MethodPost, r.Method)
+					require.Equal(t, "/assistant.threads.setStatus", r.URL.Path)
+					require.NoError(t, r.ParseForm())
+					require.Equal(t, url.Values{
+						"token":      {"xoxb-test"},
+						"channel_id": {"CTEST"},
+						"thread_ts":  {"123.000001"},
+						"status":     {"is looking into it…"},
+					}, r.PostForm)
+					_ = json.NewEncoder(w).Encode(map[string]any{"ok": code == "", "error": code})
+				}, true)
+				args := map[string]string{"channel": "CTEST", "thread_ts": "123.000001", "status": "is looking into it…"}
+				if code == "" {
+					require.JSONEq(t, `{"ok":true}`, string(invoke(t, a, name+"_set_status", args)))
+				} else {
+					for _, tool := range a.Tools() {
+						if tool.Name == name+"_set_status" {
+							data, err := json.Marshal(args)
+							require.NoError(t, err)
+							result, err := tool.Handler(t.Context(), data)
+							require.EqualError(t, err, "set Slack thread status failed: "+code)
+							require.Nil(t, result)
+						}
+					}
+				}
+				require.EqualValues(t, 1, calls.Load())
+			})
+		}
+	}
+}
+
+func TestSetStatusSchema(t *testing.T) {
+	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("invalid input called Slack API %s", r.URL.Path)
+	}, false)
+	var tool domain.Tool
+	for _, candidate := range a.Tools() {
+		if candidate.Name == "slack_set_status" {
+			tool = candidate
+		}
+	}
+	require.NotEmpty(t, tool.Name)
+	require.False(t, tool.ReadOnly)
+	require.JSONEq(t, `{
+		"type":"object",
+		"properties":{
+			"channel":{"type":"string","minLength":1},
+			"thread_ts":{"type":"string","minLength":1},
+			"status":{"type":"string","minLength":1}
+		},
+		"required":["channel","thread_ts","status"],
+		"additionalProperties":false
+	}`, string(tool.InputSchema))
+	_, err := tool.Handler(t.Context(), json.RawMessage(`{"channel":"slack:CTEST:123.000001","thread_ts":"123.000001","status":"is looking into it…"}`))
+	require.EqualError(t, err, "channel must be a bare Slack channel ID")
 }
 
 func TestHistoryTokenFallbackAndErrors(t *testing.T) {

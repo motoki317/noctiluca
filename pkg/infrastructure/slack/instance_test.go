@@ -68,7 +68,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 			require.Equal(t, domain.ConversationRef(name+":C1:"), reaction.Conversation)
 			require.Equal(t, domain.ConversationRef(name+":C1:3.4"), reaction.MessageRef)
 			tools := a.Tools()
-			suffixes := []string{"read_thread", "read_history", "search", "download_file", "upload_file", "react", "send"}
+			suffixes := []string{"read_thread", "read_history", "search", "download_file", "upload_file", "react", "set_status", "send"}
 			require.Len(t, tools, len(suffixes))
 			for i, suffix := range suffixes {
 				require.Equal(t, name+"_"+suffix, tools[i].Name)
