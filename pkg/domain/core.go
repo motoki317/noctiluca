@@ -5,7 +5,8 @@ import "context"
 type AcceptRule struct {
 	Users          []string
 	Groups         []string
-	AllowBots      bool
+	Bots           []string
+	Ignore         bool
 	RequireMention bool
 }
 

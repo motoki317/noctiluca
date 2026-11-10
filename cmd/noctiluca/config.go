@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,15 +55,30 @@ func (s secretRef) read(required bool) (string, error) {
 	return value, nil
 }
 
-type acceptConfig struct {
-	Users          []string `mapstructure:"users"`
-	Groups         []string `mapstructure:"groups"`
-	AllowBots      bool     `mapstructure:"allow_bots"`
-	RequireMention bool     `mapstructure:"require_mention"`
+type trustConfig struct {
+	Users  []string `mapstructure:"users"`
+	Groups []string `mapstructure:"groups"`
+	Bots   []string `mapstructure:"bots"`
 }
 
-func (r acceptConfig) rule() domain.AcceptRule {
-	return domain.AcceptRule{Users: r.Users, Groups: r.Groups, AllowBots: r.AllowBots, RequireMention: r.RequireMention}
+func (t trustConfig) rule() domain.AcceptRule {
+	return domain.AcceptRule{Users: t.Users, Groups: t.Groups, Bots: t.Bots}
+}
+
+type conversationConfig struct {
+	ID             string       `mapstructure:"id"`
+	Ignore         bool         `mapstructure:"ignore"`
+	RequireMention bool         `mapstructure:"require_mention"`
+	Trust          *trustConfig `mapstructure:"trust"`
+}
+
+func (c conversationConfig) rule(entry trustConfig) domain.AcceptRule {
+	if c.Trust != nil {
+		entry = *c.Trust
+	}
+	r := entry.rule()
+	r.Ignore, r.RequireMention = c.Ignore, c.RequireMention
+	return r
 }
 
 type messagingConfig struct {
@@ -82,13 +98,8 @@ type messagingConfig struct {
 		Origin      string    `mapstructure:"origin"`
 		AccessToken secretRef `mapstructure:"access_token"`
 	} `mapstructure:"traq"`
-	Conversations struct {
-		DirectMessages *acceptConfig `mapstructure:"direct_messages"`
-		Rules          []struct {
-			ID           string `mapstructure:"id"`
-			acceptConfig `mapstructure:",squash"`
-		} `mapstructure:"rules"`
-	} `mapstructure:"conversations"`
+	Trust         trustConfig          `mapstructure:"trust"`
+	Conversations []conversationConfig `mapstructure:"conversations"`
 }
 
 func (c messagingConfig) groupRefreshInterval() time.Duration {
@@ -190,9 +201,29 @@ func loadConfig(path string) (Config, error) {
 		return Config{}, errors.New("model.reasoning_effort requires model.type codex")
 	}
 	v.SetDefault("model.reasoning_effort", "")
-	entries, _ := v.Get("messaging").([]any)
+	rawMessaging := v.Get("messaging")
+	entries, list := rawMessaging.([]any)
+	if rawMessaging != nil && !list {
+		return Config{}, errors.New("invalid config: messaging must be a list of entries")
+	}
 	for i, raw := range entries {
 		entry, _ := raw.(map[string]any)
+		if _, mapping := entry["conversations"].(map[string]any); mapping {
+			return Config{}, errors.New("invalid config: replace conversations.direct_messages and conversations.rules with entry trust.users, trust.groups, trust.bots, and a conversations list of overrides")
+		}
+		trust, _ := entry["trust"].(map[string]any)
+		fields := []map[string]any{entry, trust}
+		overrides, _ := entry["conversations"].([]any)
+		for _, raw := range overrides {
+			override, _ := raw.(map[string]any)
+			trust, _ := override["trust"].(map[string]any)
+			fields = append(fields, override, trust)
+		}
+		for _, field := range fields {
+			if _, present := field["allow_bots"]; present {
+				return Config{}, errors.New("invalid config: replace allow_bots with trust.bots listing bot sender IDs")
+			}
+		}
 		for _, platform := range []string{"slack", "discord", "traq"} {
 			if _, present := entry[platform]; present && entry["type"] != platform {
 				return Config{}, fmt.Errorf("invalid config: messaging entry %d has %s settings but a different type", i+1, platform)
@@ -202,6 +233,20 @@ func loadConfig(path string) (Config, error) {
 	var config Config
 	if err := v.UnmarshalExact(&config); err != nil {
 		return Config{}, errors.New("invalid config: check field names and value types")
+	}
+	// Check key presence because strict decoding also accepts explicit false and null values.
+	for i, instance := range config.Messaging {
+		entry, _ := entries[i].(map[string]any)
+		overrides, _ := entry["conversations"].([]any)
+		for j, override := range instance.Conversations {
+			fields, _ := overrides[j].(map[string]any)
+			if override.Ignore && len(fields) > 2 {
+				return Config{}, fmt.Errorf("invalid config: messaging entry %d conversations[%d] ignore: true permits only id and ignore", i+1, j)
+			}
+			if trust, present := fields["trust"]; present && trust == nil {
+				return Config{}, fmt.Errorf("invalid config: messaging entry %d conversations[%d].trust cannot be null: trust: {} means the owner only", i+1, j)
+			}
+		}
 	}
 	if err := config.logLevel.UnmarshalText([]byte(config.Log.Level)); err != nil {
 		return Config{}, errors.New("invalid log.level: use DEBUG, INFO, WARN, or ERROR, optionally followed by a numeric offset")
@@ -281,9 +326,9 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	tokens := make([]messagingTokens, len(c.Messaging))
 	for i, instance := range c.Messaging {
 		seen := map[string]bool{}
-		for _, rule := range instance.Conversations.Rules {
+		for _, rule := range instance.Conversations {
 			if rule.ID == "" || strings.ContainsAny(rule.ID, ": \t\r\n") || seen[rule.ID] {
-				return nil, 0, fmt.Errorf("messaging.%s conversation rules require unique channel IDs", instance.Name)
+				return nil, 0, fmt.Errorf("messaging.%s conversation overrides require unique channel IDs", instance.Name)
 			}
 			seen[rule.ID] = true
 		}
@@ -296,6 +341,9 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 		var fields []tokenField
 		switch instance.Type {
 		case "slack":
+			if err := instance.validateSlackIDs(); err != nil {
+				return nil, 0, err
+			}
 			if instance.groupRefreshInterval() <= 0 {
 				return nil, 0, fmt.Errorf("messaging.%s.slack.group_refresh_interval must be positive", instance.Name)
 			}
@@ -331,11 +379,22 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	return tokens, number, nil
 }
 
+var slackConversationIDPattern = regexp.MustCompile(`^[CDG][A-Z0-9]+$`)
+
+func (c messagingConfig) validateSlackIDs() error {
+	for i, rule := range c.Conversations {
+		if !slackConversationIDPattern.MatchString(rule.ID) {
+			return fmt.Errorf("messaging.%s.conversations[%d].id must be a Slack channel ID matching %s", c.Name, i, slackConversationIDPattern)
+		}
+	}
+	return nil
+}
+
 func (c messagingConfig) validateDiscordIDs() error {
-	for i, rule := range c.Conversations.Rules {
+	for i, rule := range c.Conversations {
 		id, err := strconv.ParseUint(rule.ID, 10, 64)
 		if err != nil || id == 0 || strconv.FormatUint(id, 10) != rule.ID {
-			return fmt.Errorf("messaging.%s.conversations.rules[%d].id must be a Discord numeric ID", c.Name, i)
+			return fmt.Errorf("messaging.%s.conversations[%d].id must be a Discord numeric ID", c.Name, i)
 		}
 	}
 	return nil
@@ -343,15 +402,18 @@ func (c messagingConfig) validateDiscordIDs() error {
 
 func (c messagingConfig) validateTraQIDs() error {
 	fields := map[string][]string{"owner": {c.Owner}}
-	for i, rule := range c.Conversations.Rules {
-		prefix := fmt.Sprintf("conversations.rules[%d].", i)
-		fields[prefix+"id"] = []string{rule.ID}
-		fields[prefix+"users"] = rule.Users
-		fields[prefix+"groups"] = rule.Groups
+	addTrust := func(prefix string, trust trustConfig) {
+		fields[prefix+"users"] = trust.Users
+		fields[prefix+"groups"] = trust.Groups
+		fields[prefix+"bots"] = trust.Bots
 	}
-	if direct := c.Conversations.DirectMessages; direct != nil {
-		fields["conversations.direct_messages.users"] = direct.Users
-		fields["conversations.direct_messages.groups"] = direct.Groups
+	addTrust("trust.", c.Trust)
+	for i, rule := range c.Conversations {
+		prefix := fmt.Sprintf("conversations[%d].", i)
+		fields[prefix+"id"] = []string{rule.ID}
+		if trust := rule.Trust; trust != nil {
+			addTrust(prefix+"trust.", *trust)
+		}
 	}
 	for field, ids := range fields {
 		for _, id := range ids {

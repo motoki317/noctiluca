@@ -88,7 +88,7 @@ type MessagingAdapter interface {
 
 Each adapter is a named entry under `messaging` in the config. The core reads only the first segment of a `ConversationRef`, which is the entry's name, and routes `Send`, the `reply` tool, and lookups to the adapter with that name. The rest of the ref is opaque, and only that adapter interprets it. An adapter's tools carry the same name as a prefix (`slack_send` for an entry named `slack`).
 
-`InboundEvent` carries the conversation and its parent, the sender (human or bot), text, attachments, and whether the agent is mentioned. An adapter can also implement `SourceInfoProvider` (readable channel and sender names for input headers), `UserGroupProvider` (group membership for accept rules), `DirectMessageProvider` (the owner's DM, for notices), and `ConversationFilter` (skips remote lookups in channels without a rule).
+`InboundEvent` carries the conversation and its parent, the sender (human or bot), text, attachments, and whether the agent is mentioned. An adapter can also implement `SourceInfoProvider` (readable channel and sender names for input headers), `UserGroupProvider` (group membership for accept rules), `DirectMessageProvider` (the owner's DM, for notices), and `ConversationFilter` (skips remote lookups in ignored conversations).
 
 Core ↔ model adapter (`pkg/domain/model.go`):
 
@@ -117,7 +117,9 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 
 ## Trust model
 
-Each `messaging` entry's `conversations` rules decide whose messages start turns. Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and the model CLI's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
+Each `messaging` entry's `trust` decides whose messages start turns, in DMs, in every channel the bot is in, and on traQ in mentions elsewhere, so anyone who can add the bot to a channel extends where it applies. The owner is always trusted. A conversation override can replace that trust, require a mention, or ignore the conversation.
+
+Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and the model CLI's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
 
 Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 

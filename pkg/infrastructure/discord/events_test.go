@@ -196,7 +196,7 @@ func TestEditsDeletesAndReactions(t *testing.T) {
 	assert.Empty(t, last.Text)
 	assert.Equal(t, "200", last.Sender.ID)
 	assert.Equal(t, "chat:d:600", last.SourceKey)
-	a.SetConversationFilter(func(domain.ConversationRef, bool) bool { return false })
+	a.SetConversationFilter(func(domain.ConversationRef) bool { return false })
 	self := snowflake.ID(100)
 	emoji := "x"
 	before := len(events)

@@ -190,7 +190,7 @@ func TestBotReactionClassification(t *testing.T) {
 }
 
 func TestMessageSourceReferences(t *testing.T) {
-	a := &adapter{name: "slack", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
+	a := &adapter{name: "slack", acceptConversation: func(_ domain.ConversationRef) bool { return false }}
 	for _, channel := range []string{"DTEST", "CTEST", "GTEST"} {
 		for _, thread := range []string{"", "1.2"} {
 			event, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: channel, User: "U", TimeStamp: "2.3", ThreadTimeStamp: thread})
@@ -203,7 +203,7 @@ func TestMessageSourceReferences(t *testing.T) {
 }
 
 func TestDeletedMessageKeepsSenderAndThread(t *testing.T) {
-	a := &adapter{name: "slack", selfUser: "UBOT", acceptConversation: func(_ domain.ConversationRef, _ bool) bool { return false }}
+	a := &adapter{name: "slack", selfUser: "UBOT", acceptConversation: func(_ domain.ConversationRef) bool { return false }}
 	parsed, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"message","subtype":"message_deleted","channel":"CTEST","previous_message":{"user":"UMEMBER","text":"old body","ts":"2.000001","thread_ts":"1.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, ok := a.inbound(t.Context(), parsed.InnerEvent.Data)
@@ -253,7 +253,7 @@ func TestUnfurlEditsAreDropped(t *testing.T) {
 func TestDeniedReactionDoesNotReadRemoteUserOrMessage(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("unexpected lookup: %s", r.URL.Path) }, false)
 	a.selfUser = "USELF"
-	a.SetConversationFilter(func(ref domain.ConversationRef, _ bool) bool { return ref == Conversation("slack", "CALLOWED", "") })
+	a.SetConversationFilter(func(ref domain.ConversationRef) bool { return ref == Conversation("slack", "CALLOWED", "") })
 	data, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"reaction_added","user":"UMEMBER","item_user":"USELF","reaction":"eyes","item":{"type":"message","channel":"CDENIED","ts":"123.000001"}}}`), slackevents.OptionNoVerifyToken())
 	require.NoError(t, err)
 	event, present := a.inbound(t.Context(), data.InnerEvent.Data)

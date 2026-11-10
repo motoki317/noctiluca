@@ -28,14 +28,11 @@ func TestRunConfigFieldsAndPaths(t *testing.T) {
       app_token: {env: TEST_APP_TOKEN}
       bot_token: {file: bot-token}
       group_refresh_interval: 2h
+    trust: {users: [U_OWNER, U_MEMBER]}
     conversations:
-      direct_messages: {users: [U_OWNER, U_MEMBER]}
-      rules:
-        - id: C_CHANNEL
-          users: [U_OWNER]
-          groups: [S_GROUP]
-          allow_bots: true
-          require_mention: true
+      - id: CCHANNEL
+        trust: {users: [U_OWNER], groups: [S_GROUP], bots: [U_BOT]}
+        require_mention: true
 model: {executable: ./claude, name: haiku, idle_timeout: 2h}
 memory: {dir: memories}
 database: {path: history.db}
@@ -54,12 +51,12 @@ cron:
 	require.Equal(t, "bot-secret", tokens[0].Slack.BotToken)
 	require.Empty(t, tokens[0].Slack.UserToken)
 	require.Equal(t, 12345, port)
-	require.Equal(t, []string{"U_OWNER", "U_MEMBER"}, c.Messaging[0].Conversations.DirectMessages.Users)
-	require.Len(t, c.Messaging[0].Conversations.Rules, 1)
-	require.Equal(t, "C_CHANNEL", c.Messaging[0].Conversations.Rules[0].ID)
-	require.Equal(t, []string{"S_GROUP"}, c.Messaging[0].Conversations.Rules[0].Groups)
-	require.True(t, c.Messaging[0].Conversations.Rules[0].RequireMention)
-	require.True(t, c.Messaging[0].Conversations.Rules[0].AllowBots)
+	require.Equal(t, []string{"U_OWNER", "U_MEMBER"}, c.Messaging[0].Trust.Users)
+	require.Len(t, c.Messaging[0].Conversations, 1)
+	require.Equal(t, "CCHANNEL", c.Messaging[0].Conversations[0].ID)
+	require.Equal(t, []string{"S_GROUP"}, c.Messaging[0].Conversations[0].Trust.Groups)
+	require.True(t, c.Messaging[0].Conversations[0].RequireMention)
+	require.Equal(t, []string{"U_BOT"}, c.Messaging[0].Conversations[0].Trust.Bots)
 	require.False(t, c.Heartbeat.Enabled)
 	require.Equal(t, 30*time.Minute, c.Heartbeat.Interval)
 	require.Equal(t, 2*time.Hour, c.Model.IdleTimeout)
@@ -110,7 +107,7 @@ func TestRunValidationBeforeResources(t *testing.T) {
 		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n", "slack.app_token"},
 		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\ntoolhub: {listen: '0.0.0.0:1234'}\n", "toolhub.listen"},
 		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\nheartbeat: {interval: -1s}\n", "interval"},
-		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    conversations:\n      rules:\n        - {id: C_CHANNEL}\n        - {id: C_CHANNEL}\n", "unique"},
+		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    conversations: [{id: CCHANNEL}, {id: CCHANNEL}]\n", "unique"},
 	} {
 		c, err := loadConfig(writeConfig(t, tc.yaml))
 		require.NoError(t, err)
@@ -128,14 +125,15 @@ func TestExampleConfig(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "bot-example")
 	_, _, err = c.validateRun()
 	require.NoError(t, err)
-	require.Equal(t, []string{c.Messaging[0].Owner}, c.Messaging[0].Conversations.DirectMessages.Users)
+	require.Equal(t, []string{"S_USER_GROUP_ID"}, c.Messaging[0].Trust.Groups)
 }
 
-func TestExplicitEmptyDMRuleDisablesDefault(t *testing.T) {
-	c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    conversations:\n      direct_messages: {users: []}\n"))
+func TestExplicitEmptyTrustReplacesEntryTrust(t *testing.T) {
+	c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    trust: {users: [U_FRIEND]}\n    conversations: [{id: CROOM, trust: {}}]\n"))
 	require.NoError(t, err)
-	require.NotNil(t, c.Messaging[0].Conversations.DirectMessages)
-	require.Empty(t, c.Messaging[0].Conversations.DirectMessages.Users)
+	override := c.Messaging[0].Conversations[0]
+	require.NotNil(t, override.Trust)
+	require.Empty(t, override.rule(c.Messaging[0].Trust).Users)
 }
 
 func TestConsolidationConfig(t *testing.T) {

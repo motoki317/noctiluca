@@ -45,7 +45,7 @@ type DirectMessageProvider interface {
 	DirectMessage(context.Context, string) (ConversationRef, error)
 }
 
-// ConversationFilter avoids sender lookups for reactions in unaccepted channels.
+// ConversationFilter avoids remote lookups in ignored conversations.
 type ConversationFilter interface {
-	SetConversationFilter(func(ConversationRef, bool) bool)
+	SetConversationFilter(func(ConversationRef) bool)
 }

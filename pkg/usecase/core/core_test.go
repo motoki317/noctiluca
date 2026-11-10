@@ -345,8 +345,10 @@ func TestOpenFailureRevokesGrant(t *testing.T) {
 func TestAcceptRules(t *testing.T) {
 	h := &fakeHub{tools: make(map[string]domain.Tool)}
 	m := &fakeMessaging{}
-	config := Messaging{Owner: "owner", UserGroups: map[string][]string{"team": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{
-		"test:room": {Groups: []string{"team"}, RequireMention: true}, "test:bots": {Users: []string{"bot"}, AllowBots: true}, "test:dm": {Users: []string{"owner"}}, "test:blocked": {}}}
+	config := Messaging{Owner: "owner", Trust: domain.AcceptRule{Users: []string{"friend"}, Groups: []string{"team"}, Bots: []string{"bot"}},
+		UserGroups: map[string][]string{"team": {"member", "group-bot"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{
+			"test:room": {Groups: []string{"team"}, RequireMention: true}, "test:bots": {Bots: []string{"bot"}},
+			"test:empty": {}, "test:blocked": {Ignore: true}}}
 	config.Name, config.Adapter = "test", m
 	c, err := New(Config{}, []Messaging{config}, &fakeModel{}, h, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, &unusedWatches{}, nil, nil, &unusedInbox{})
 	require.NoError(t, err)
@@ -358,26 +360,57 @@ func TestAcceptRules(t *testing.T) {
 		bot, mention, want bool
 	}{
 		{"test:room", "member", false, true, true}, {"test:room", "member", false, false, false}, {"test:room", "outsider", false, true, false},
-		{"test:room", "member", true, true, false}, {"test:bots", "bot", true, false, true}, {"test:dm", "owner", false, false, true}, {"test:blocked", "owner", false, false, false}, {"test:unknown", "owner", false, false, false},
+		{"test:room", "member", true, true, false}, {"test:bots", "bot", true, false, true},
+		{"test:bots", "bot", false, false, false}, {"test:blocked", "owner", false, false, false},
+		{"test:blocked", "friend", false, true, false}, {"test:blocked", "bot", true, true, false},
+		{"test:unknown", "owner", false, false, true}, {"test:unknown", "friend", false, false, true},
+		{"test:unknown", "member", false, false, true}, {"test:unknown", "outsider", false, true, false},
+		{"test:unknown", "bot", true, false, true}, {"test:unknown", "friend", true, false, false},
+		{"test:unknown", "group-bot", true, false, false}, {"test:unknown", "owner", true, false, false},
+		{"test:room", "friend", false, true, false}, {"test:room", "owner", false, true, true},
+		{"test:room", "owner", false, false, false}, {"test:empty", "owner", false, false, true},
+		{"test:empty", "friend", false, true, false}, {"test:empty", "bot", true, true, false},
 	} {
-		e := message(tc.to, tc.user, "")
-		e.MentionsMe = tc.mention
-		if tc.bot {
-			e.Sender.Kind = domain.SenderBot
+		for _, direct := range []bool{false, true} {
+			e := message(tc.to, tc.user, "")
+			e.MentionsMe, e.Direct = tc.mention, direct
+			if tc.bot {
+				e.Sender.Kind = domain.SenderBot
+			}
+			_, ok := impl.accepted(e)
+			require.Equal(t, tc.want, ok, "%+v direct=%v", tc, direct)
 		}
-		_, ok := impl.accepted(e)
-		require.Equal(t, tc.want, ok)
 	}
-	config.Rules["test:dm"] = domain.AcceptRule{Users: []string{"member"}}
-	r, ok := impl.accepted(message("test:dm", "owner", ""))
+	config.Trust.Users[0] = "mutated"
+	config.Trust.Bots[0] = "mutated-bot"
+	config.Rules["test:empty"] = domain.AcceptRule{Users: []string{"member"}}
+	r, ok := impl.accepted(message("test:unknown", "friend", ""))
 	require.True(t, ok)
 	require.Contains(t, r.users, "owner")
+	require.Contains(t, r.bots, "bot")
 	thread := message("test:thread", "member", "")
 	thread.Parent = "test:room"
 	thread.MentionsMe = true
 	_, ok = impl.accepted(thread)
 	require.True(t, ok)
 	require.Equal(t, domain.ConversationRef("test:room"), channel(thread))
+	thread.Parent = "test:blocked"
+	_, ok = impl.accepted(thread)
+	require.False(t, ok)
+}
+
+func TestMissingEntryTrustAcceptsOnlyOwner(t *testing.T) {
+	instance, err := newMessagingInstance(Messaging{Owner: "owner"})
+	require.NoError(t, err)
+	impl := &core{messaging: &messagingRouter{byName: map[string]*messagingInstance{"test": instance}}}
+	for _, direct := range []bool{false, true} {
+		for _, sender := range []string{"owner", "other"} {
+			event := message("test:unlisted", sender, "")
+			event.Direct = direct
+			_, accepted := impl.accepted(event)
+			require.Equal(t, sender == "owner", accepted)
+		}
+	}
 }
 
 type unusedEvents struct{ domain.EventRepository }

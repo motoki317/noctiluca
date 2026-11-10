@@ -155,8 +155,7 @@ func TestDeniedStampsSkipSenderAndStampLookup(t *testing.T) {
 	a.self = "bot"
 	a.posted.Store("posted", "channel")
 	a.direct.Store("channel", "")
-	a.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
-		require.False(t, direct)
+	a.SetConversationFilter(func(ref domain.ConversationRef) bool {
 		return ref == Conversation("team", "accepted", "")
 	})
 	require.NoError(t, a.reactions(t.Context(), payload{MessageID: "posted", Stamps: []sdk.MessageStamp{{StampId: "stamp", UserId: "user", Count: 1, UpdatedAt: time.Now()}}}, func(context.Context, domain.InboundEvent) error { t.Error("denied event consumed"); return nil }))

@@ -50,7 +50,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 			require.Equal(t, "root", info.ThreadText)
 			a.selfUser = "USELF"
 			var filtered domain.ConversationRef
-			a.SetConversationFilter(func(ref domain.ConversationRef, _ bool) bool { filtered = ref; return true })
+			a.SetConversationFilter(func(ref domain.ConversationRef) bool { filtered = ref; return true })
 			event, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: "C1", User: "U1", TimeStamp: "2.3", ThreadTimeStamp: "1.2"})
 			require.True(t, ok)
 			require.Equal(t, ref, event.Conversation)
@@ -62,7 +62,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 			a.inbound(t.Context(), &slackevents.MessageEvent{Channel: "C1", User: "USELF", TimeStamp: "3.4"})
 			_, joined = a.joinedThreads.Load(domain.ConversationRef(name + ":C1:3.4"))
 			require.True(t, joined)
-			a.SetConversationFilter(func(domain.ConversationRef, bool) bool { return false })
+			a.SetConversationFilter(func(domain.ConversationRef) bool { return false })
 			reaction, ok := a.inbound(t.Context(), &slackevents.ReactionAddedEvent{User: "U1", ItemUser: "USELF", Item: slackevents.Item{Type: "message", Channel: "C1", Timestamp: "3.4"}})
 			require.True(t, ok)
 			require.Equal(t, domain.ConversationRef(name+":C1:"), reaction.Conversation)

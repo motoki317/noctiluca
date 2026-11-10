@@ -28,7 +28,7 @@ type adapter struct {
 	name               string
 	names              sync.Map
 	joinedThreads      sync.Map
-	acceptConversation func(domain.ConversationRef, bool) bool
+	acceptConversation func(domain.ConversationRef) bool
 	life               lifecycle.Group
 	bot, reader        *sdk.Client
 	history            domain.EventRepository
@@ -207,6 +207,6 @@ func (a *adapter) DirectMessage(ctx context.Context, user string) (domain.Conver
 	return Conversation(a.name, channel.ID, ""), nil
 }
 
-func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef, bool) bool) {
+func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef) bool) {
 	a.acceptConversation = accept
 }

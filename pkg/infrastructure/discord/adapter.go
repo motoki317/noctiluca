@@ -39,7 +39,7 @@ type adapter struct {
 	closeOnce          sync.Once
 	createGateway      gateway.CreateFunc
 	gatewayOptions     []gateway.ConfigOpt
-	acceptConversation func(domain.ConversationRef, bool) bool
+	acceptConversation func(domain.ConversationRef) bool
 }
 
 func newAdapter(name string, config Config, history domain.EventRepository, options ...rest.ClientConfigOpt) (*adapter, error) {
@@ -250,7 +250,7 @@ func discordError(operation string, err error) error {
 	return errors.New(operation)
 }
 
-func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef, bool) bool) {
+func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef) bool) {
 	a.acceptConversation = accept
 }
 
