@@ -74,6 +74,27 @@ func (r *eventRepository) ListInbound(ctx context.Context, conversation domain.C
 		WHERE e.conversation=? ORDER BY e.received_at DESC, e.id DESC LIMIT ?`, conversation, limit)
 }
 
+func (r *eventRepository) ListConversations(ctx context.Context, name string) ([]domain.Conversation, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT conversation, direct FROM events
+		WHERE conversation GLOB ? AND accepted=1 AND kind IN ('message','message_edited') ORDER BY conversation`, name+":*:")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var conversations []domain.Conversation
+	for rows.Next() {
+		var conversation domain.Conversation
+		if err := rows.Scan(&conversation.Ref, &conversation.Direct); err != nil {
+			return nil, err
+		}
+		entry, channel, thread, ok := domain.ParseConversationRef(conversation.Ref)
+		if ok && entry == name && channel != "" && thread == "" {
+			conversations = append(conversations, conversation)
+		}
+	}
+	return conversations, rows.Err()
+}
+
 func (r *eventRepository) LatestMessageTime(ctx context.Context, conversation domain.ConversationRef) (time.Time, error) {
 	var at time.Time
 	err := r.db.QueryRowContext(ctx, `SELECT received_at FROM events

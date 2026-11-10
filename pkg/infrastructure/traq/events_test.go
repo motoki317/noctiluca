@@ -196,6 +196,8 @@ func TestBackfillCursorAndCap(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v3/users/owner/dm-channel":
 			respond(t, w, sdk.DMChannel{Id: "dm", UserId: "owner"})
+		case "/api/v3/channels/channel/bots":
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 		case "/api/v3/channels/channel/messages", "/api/v3/channels/dm/messages":
 			historyCalls.Add(1)
 			since, err := time.Parse(time.RFC3339Nano, r.URL.Query().Get("since"))
@@ -219,12 +221,12 @@ func TestBackfillCursorAndCap(t *testing.T) {
 		}
 	})
 	a.self = "bot"
-	a.config.Channels = []string{"channel", "channel"}
 	a.config.Owner = "owner"
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "events.db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	a.history = repository.NewEventRepository(db)
+	a.direct.Store("channel", "")
 	for _, event := range []domain.InboundEvent{
 		{Kind: domain.InboundEventMessage, ReceivedAt: now.Add(-2 * time.Hour)},
 		{Kind: domain.InboundEventMessageEdited, ReceivedAt: now.Add(-time.Hour)},
@@ -232,6 +234,8 @@ func TestBackfillCursorAndCap(t *testing.T) {
 		{Kind: domain.InboundEventMessageEdited, Deleted: true, ReceivedAt: now.Add(-time.Minute)},
 	} {
 		event.Conversation = Conversation("team", "channel", "")
+		accepted := true
+		event.Accepted = &accepted
 		event.Sender = sender("human", "Human", false)
 		require.NoError(t, a.history.SaveInbound(t.Context(), event))
 	}
@@ -240,10 +244,10 @@ func TestBackfillCursorAndCap(t *testing.T) {
 	var events []domain.InboundEvent
 	require.NoError(t, a.backfill(t.Context(), targets, func(_ context.Context, event domain.InboundEvent) error { events = append(events, event); return nil }))
 	require.Len(t, events, 4)
-	require.Equal(t, "team:m:old", events[0].SourceKey)
-	require.Equal(t, "team:m:new", events[1].SourceKey)
-	require.True(t, events[1].MentionsMe)
-	require.True(t, events[2].Direct)
+	require.True(t, events[0].Direct)
+	require.Equal(t, "team:m:old", events[2].SourceKey)
+	require.Equal(t, "team:m:new", events[3].SourceKey)
+	require.True(t, events[3].MentionsMe)
 	require.EqualValues(t, 2, historyCalls.Load())
 }
 
@@ -255,6 +259,8 @@ func TestWebSocketReconnectBackfillAndShutdown(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v3/users/me":
 			respond(t, w, sdk.MyUserDetail{Id: "bot"})
+		case "/api/v3/channels/channel/bots":
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 		case "/api/v3/channels/channel/messages":
 			backfills.Add(1)
 			respond(t, w, []sdk.Message{restMessage("message", "channel", "hi", at)})
@@ -280,11 +286,11 @@ func TestWebSocketReconnectBackfillAndShutdown(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	})
-	a.config.Channels = []string{"channel"}
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "events.db")})
 	require.NoError(t, err)
 	defer db.Close()
 	a.history = repository.NewEventRepository(db)
+	seedConversations(t, a, "channel")
 	inbox := repository.NewInboxRepository(db)
 	events := make(chan domain.InboundEvent, 10)
 	done := make(chan error, 1)
@@ -320,12 +326,16 @@ func TestWebSocketReconnectBackfillAndShutdown(t *testing.T) {
 	require.EqualValues(t, 2, backfills.Load())
 	var count int
 	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT count(*) FROM events").Scan(&count))
-	require.Equal(t, 1, count)
+	require.Equal(t, 2, count)
 }
 
 func TestBackfillKeepsLatestTwoHundred(t *testing.T) {
 	now := time.Now().UTC()
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v3/channels/channel/bots" {
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
+			return
+		}
 		if r.URL.Path == "/api/v3/users/human" {
 			respond(t, w, sdk.UserDetail{Id: "human"})
 			return
@@ -392,6 +402,8 @@ func TestReconnectDoesNotSkipInterruptedBackfill(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v3/users/me":
 			respond(t, w, sdk.MyUserDetail{Id: "bot"})
+		case "/api/v3/channels/channel/bots":
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 		case "/api/v3/users/human":
 			respond(t, w, sdk.UserDetail{Id: "human"})
 		case "/api/v3/channels/channel/messages":
@@ -424,7 +436,7 @@ func TestReconnectDoesNotSkipInterruptedBackfill(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	})
-	a.config.Channels = []string{"channel"}
+	seedConversations(t, a, "channel")
 	history := a.history.(*historyFake)
 	events := make(chan domain.InboundEvent, 4)
 	done := make(chan error, 1)
@@ -460,6 +472,8 @@ func TestDisconnectDrainsBufferedEditsDeletesAndStamps(t *testing.T) {
 	at := time.Now().UTC()
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/v3/channels/channel/bots":
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 		case "/api/v3/channels/channel/messages":
 			respond(t, w, []sdk.Message{restMessage("backfilled", "channel", "old", at.Add(-time.Minute))})
 		case "/api/v3/stamps/stamp":
@@ -483,7 +497,7 @@ func TestDisconnectDrainsBufferedEditsDeletesAndStamps(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	})
-	a.config.Channels = []string{"channel"}
+	seedConversations(t, a, "channel")
 	a.self = "bot"
 	a.started = at.Add(-time.Hour)
 	a.posted.Store("posted", "channel")

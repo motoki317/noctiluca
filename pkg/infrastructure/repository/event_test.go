@@ -59,6 +59,51 @@ func TestEventHistory(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestListConversations(t *testing.T) {
+	r := repository.NewEventRepository(openDB(t))
+	refs, err := r.ListConversations(t.Context(), "work_chat")
+	require.NoError(t, err)
+	require.Empty(t, refs)
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	accepted, rejected := true, false
+	for _, event := range []domain.InboundEvent{
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:room:", Accepted: &rejected, Direct: true},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:room:"},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:chatter:", Accepted: &rejected},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:unknown:"},
+		{Kind: domain.InboundEventMessageEdited, Conversation: "work_chat:edited:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessageEdited, Conversation: "work_chat:deleted:", Deleted: true, Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:dm:", Direct: true, Accepted: &accepted},
+		{Kind: domain.InboundEventReaction, Conversation: "work_chat:reaction:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:thread_room:thread", Parent: "work_chat:thread_room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat_extra:room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "workxchat:room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "WORK_CHAT:room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "other:room:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat:room:thread:", Accepted: &accepted},
+		{Kind: domain.InboundEventMessage, Conversation: "work_chat::", Accepted: &accepted},
+	} {
+		event.Sender = domain.Sender{ID: "member", Kind: domain.SenderHuman}
+		event.ReceivedAt = at
+		require.NoError(t, r.SaveInbound(t.Context(), event))
+	}
+	require.NoError(t, r.SaveOutbound(t.Context(), domain.SentMessage{
+		ID: "reply", Conversation: "work_chat:outbound:", Message: domain.OutboundMessage{Text: "reply"}, SentAt: at,
+	}))
+	refs, err = r.ListConversations(t.Context(), "work_chat")
+	require.NoError(t, err)
+	require.Equal(t, []domain.Conversation{{Ref: "work_chat:deleted:"}, {Ref: "work_chat:dm:", Direct: true}, {Ref: "work_chat:edited:"}, {Ref: "work_chat:room:"}}, refs)
+	refs, err = r.ListConversations(t.Context(), "missing")
+	require.NoError(t, err)
+	require.Empty(t, refs)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = r.ListConversations(ctx, "work_chat")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestLatestMessageTime(t *testing.T) {
 	r := repository.NewEventRepository(openDB(t))
 	got, err := r.LatestMessageTime(t.Context(), "room")

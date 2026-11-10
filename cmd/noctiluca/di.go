@@ -89,19 +89,13 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		case "slack":
 			adapter, err = slack.New(instance.Name, tokens[i].Slack, events, slackOptions...)
 		case "discord":
-			var channels []string
 			groups := instance.Conversations.DirectMessages != nil && len(instance.Conversations.DirectMessages.Groups) > 0
 			for _, rule := range instance.Conversations.Rules {
-				channels = append(channels, rule.ID)
 				groups = groups || len(rule.Groups) > 0
 			}
-			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, Channels: channels, NeedGroups: groups}, events)
+			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, NeedGroups: groups}, events)
 		case "traq":
-			channels := make([]string, 0, len(instance.Conversations.Rules))
-			for _, rule := range instance.Conversations.Rules {
-				channels = append(channels, rule.ID)
-			}
-			adapter, err = traq.New(instance.Name, traq.Config{Origin: instance.TraQ.Origin, AccessToken: tokens[i].TraQAccessToken, Owner: instance.Owner, Channels: channels}, events)
+			adapter, err = traq.New(instance.Name, traq.Config{Origin: instance.TraQ.Origin, AccessToken: tokens[i].TraQAccessToken, Owner: instance.Owner}, events)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("messaging.%s: %w", instance.Name, err)

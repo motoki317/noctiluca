@@ -104,7 +104,7 @@ func TestGatewayIntentsAndQueue(t *testing.T) {
 
 func TestBackfillAgeAndResume(t *testing.T) {
 	var histories int
-	a := testAdapter(t, Config{Channels: []string{"400"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/channels/400/messages" {
 			return false
 		}
@@ -118,6 +118,7 @@ func TestBackfillAgeAndResume(t *testing.T) {
 		writeJSON(t, w, []sdk.Message{fresh, old})
 		return true
 	})
+	seedConversations(t, a, "400")
 	var events []domain.InboundEvent
 	consume := func(_ context.Context, e domain.InboundEvent) error { events = append(events, e); return nil }
 	require.NoError(t, a.dispatch(t.Context(), gateway.EventResumed{}, consume))
@@ -136,13 +137,14 @@ func TestBackfillRetryDoesNotSkipMessagesBeforeAnEdit(t *testing.T) {
 	newer.CreatedAt = old.CreatedAt.Add(time.Hour)
 	edit := newer.CreatedAt.Add(time.Minute)
 	old.EditedTimestamp = &edit
-	a := testAdapter(t, Config{Channels: []string{"400"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/channels/400/messages" {
 			return false
 		}
 		writeJSON(t, w, []sdk.Message{newer, old})
 		return true
 	})
+	seedConversations(t, a, "400")
 	calls := 0
 	err := a.backfill(t.Context(), func(ctx context.Context, e domain.InboundEvent) error {
 		calls++

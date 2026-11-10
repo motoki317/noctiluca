@@ -63,7 +63,7 @@ Platform differences:
 
 - On Discord, work on a top-level channel request starts a thread from the request message.
 - traQ has no threads, so work on a channel request quotes the request message.
-- Slack redelivers events that noctiluca did not acknowledge. Discord and traQ do not. On each connect, their adapters read each rule channel and the entry owner's DM back to the last stored event, up to 200 messages or 24 hours: new and edited messages on Discord, and new messages on traQ. Thread replies, deletions, reactions, and traQ edits made while noctiluca was down are not recovered.
+- Slack redelivers events that noctiluca did not acknowledge. Discord and traQ do not. On each connect, their adapters read back the entry owner's DM and each channel or DM where a message has started a turn, to the last stored event, up to 200 messages or 24 hours: new and edited messages on Discord, and new messages on traQ. In a traQ channel that the bot has not joined, they read back only messages that mention it. Thread replies, deletions, reactions, and traQ edits made while noctiluca was down are not recovered.
 
 ## Run
 

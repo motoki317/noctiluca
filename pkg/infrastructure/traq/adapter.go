@@ -21,7 +21,6 @@ type Config struct {
 	Origin      string
 	AccessToken string
 	Owner       string
-	Channels    []string
 }
 
 type adapter struct {
@@ -56,7 +55,6 @@ func newAdapter(name string, config Config, history domain.EventRepository) (*ad
 		return nil, errors.New("history repository is required for traQ")
 	}
 	config.Origin = strings.TrimRight(config.Origin, "/")
-	config.Channels = append([]string(nil), config.Channels...)
 	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	settings := sdk.NewConfiguration()
 	settings.Servers = sdk.ServerConfigurations{{URL: config.Origin + "/api/v3"}}

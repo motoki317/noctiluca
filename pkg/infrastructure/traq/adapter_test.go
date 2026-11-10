@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,10 +23,34 @@ import (
 
 type historyFake struct {
 	domain.EventRepository
-	mu       sync.Mutex
-	inbound  []domain.InboundEvent
-	outbound []domain.SentMessage
-	err      error
+	mu            sync.Mutex
+	conversations []domain.Conversation
+	inbound       []domain.InboundEvent
+	outbound      []domain.SentMessage
+	err           error
+}
+
+func (h *historyFake) ListConversations(_ context.Context, _ string) ([]domain.Conversation, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.conversations), nil
+}
+
+func seedConversations(t *testing.T, a *adapter, channels ...string) {
+	t.Helper()
+	for _, channel := range channels {
+		ref := Conversation(a.name, channel, "")
+		if history, ok := a.history.(*historyFake); ok {
+			history.conversations = append(history.conversations, domain.Conversation{Ref: ref})
+		} else {
+			accepted := true
+			require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
+				Kind: domain.InboundEventMessage, Conversation: ref, Accepted: &accepted, Sender: sender("human", "Human", false),
+				Text: "stored message", ReceivedAt: time.Now().Add(-25 * time.Hour),
+			}))
+		}
+		a.direct.Store(channel, "")
+	}
 }
 
 func (h *historyFake) SaveOutbound(_ context.Context, sent domain.SentMessage) error {
@@ -73,6 +98,7 @@ func apiAdapter(t *testing.T, handler http.HandlerFunc) *adapter {
 	t.Cleanup(server.Close)
 	a, err := newAdapter("team", Config{Origin: server.URL, AccessToken: "test-token"}, &historyFake{})
 	require.NoError(t, err)
+	a.self = "bot"
 	return a
 }
 func respond(t *testing.T, w http.ResponseWriter, value any) {

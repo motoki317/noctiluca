@@ -174,6 +174,8 @@ func TestBackfillLookupFailureSkipsWithoutRestart(t *testing.T) {
 				switch r.URL.Path {
 				case "/api/v3/users/me":
 					respond(t, w, sdk.MyUserDetail{Id: "bot"})
+				case "/api/v3/channels/bad/bots", "/api/v3/channels/good/bots":
+					respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 				case "/api/v3/users/owner/dm-channel":
 					respond(t, w, sdk.DMChannel{Id: "dm", UserId: "owner"})
 				case "/api/v3/users/human":
@@ -207,7 +209,7 @@ func TestBackfillLookupFailureSkipsWithoutRestart(t *testing.T) {
 				}
 			})
 			a.config.Owner = "owner"
-			a.config.Channels = []string{"bad", "good"}
+			seedConversations(t, a, "bad", "good")
 			if tc.name == "cursor" {
 				a.history = cursorFailure{a.history}
 			}
@@ -250,6 +252,8 @@ func TestBackfillConsumeFailureStopsStart(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v3/users/me":
 			respond(t, w, sdk.MyUserDetail{Id: "bot"})
+		case "/api/v3/channels/channel/bots":
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
 		case "/api/v3/users/human":
 			respond(t, w, sdk.UserDetail{Id: "human"})
 		case "/api/v3/channels/channel/messages":
@@ -269,7 +273,7 @@ func TestBackfillConsumeFailureStopsStart(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	})
-	a.config.Channels = []string{"channel"}
+	seedConversations(t, a, "channel")
 	stop := errors.New("inbox unavailable")
 	done := make(chan error, 1)
 	go func() { done <- a.Start(t.Context(), func(context.Context, domain.InboundEvent) error { return stop }) }()

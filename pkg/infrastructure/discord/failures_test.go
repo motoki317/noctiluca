@@ -153,7 +153,7 @@ func TestThreadParticipationFailureForwardsWithoutCaching(t *testing.T) {
 
 func TestBackfillSkipsFailedChannels(t *testing.T) {
 	logs := captureWarnings(t)
-	a := testAdapter(t, Config{Channels: []string{"300", "301", "400"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		switch r.URL.Path {
 		case "/channels/300", "/channels/301/messages", "/users/@me/channels":
 			w.WriteHeader(http.StatusForbidden)
@@ -165,6 +165,7 @@ func TestBackfillSkipsFailedChannels(t *testing.T) {
 		}
 		return false
 	})
+	seedConversations(t, a, "300", "301", "400")
 	var got []domain.InboundEvent
 	require.NoError(t, a.backfill(t.Context(), func(_ context.Context, e domain.InboundEvent) error {
 		got = append(got, e)
@@ -193,7 +194,7 @@ func TestBackfillSkipsFailedMessage(t *testing.T) {
 	earlier.CreatedAt, failed.CreatedAt, later.CreatedAt = at, at.Add(time.Minute), at.Add(2*time.Minute)
 	edited := at.Add(3 * time.Minute)
 	failed.EditedTimestamp, later.EditedTimestamp = &edited, &edited
-	a := testAdapter(t, Config{Channels: []string{"400"}}, func(w http.ResponseWriter, r *http.Request) bool {
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		switch r.URL.Path {
 		case "/channels/400/messages":
 			// A malformed page must still identify the message that failed conversion.
@@ -206,6 +207,7 @@ func TestBackfillSkipsFailedMessage(t *testing.T) {
 		}
 		return false
 	})
+	seedConversations(t, a, "400")
 	var keys []string
 	require.NoError(t, a.backfill(t.Context(), func(_ context.Context, event domain.InboundEvent) error {
 		keys = append(keys, event.SourceKey)

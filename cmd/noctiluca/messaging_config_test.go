@@ -352,6 +352,32 @@ func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
 	}
 }
 
+func TestDiscordRuleIDsValidatedBeforeResources(t *testing.T) {
+	t.Setenv("TEST_DISCORD_TOKEN", "fake-token")
+	for _, id := range []string{"400", "general", "0", "0400", "-400", "+400", "0x190", "18446744073709551616"} {
+		t.Run(id, func(t *testing.T) {
+			c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
+  - name: chat
+    type: discord
+    owner: '200'
+    discord: {token: {env: TEST_DISCORD_TOKEN}}
+    conversations: {rules: [{id: '300'}, {id: %q}]}
+`, id)))
+			require.NoError(t, err)
+			if id == "400" {
+				_, _, err = c.validateRun()
+				require.NoError(t, err)
+			} else {
+				_, err = newApplication(t.Context(), c, nil)
+				require.ErrorContains(t, err, "messaging.chat.conversations.rules[1].id must be a Discord numeric ID")
+			}
+			require.NoFileExists(t, c.Database.Path)
+			require.NoDirExists(t, c.Memory.Dir)
+			require.NoDirExists(t, c.Model.Workdir)
+		})
+	}
+}
+
 func TestDiscordApplicationConstruction(t *testing.T) {
 	t.Setenv("TEST_DISCORD_TOKEN", "fake-token")
 	c, err := loadConfig(writeConfig(t, `messaging:

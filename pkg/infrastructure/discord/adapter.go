@@ -20,7 +20,6 @@ import (
 type Config struct {
 	Token      string
 	Owner      string
-	Channels   []string
 	NeedGroups bool
 }
 
@@ -52,11 +51,6 @@ func newAdapter(name string, config Config, history domain.EventRepository, opti
 	}
 	if _, err := parseID(config.Owner); err != nil {
 		return nil, errors.New("invalid Discord owner ID")
-	}
-	for _, channel := range config.Channels {
-		if _, err := parseID(channel); err != nil {
-			return nil, errors.New("invalid Discord rule channel ID")
-		}
 	}
 	logger := disgoLogger()
 	options = append(options, rest.WithLogger(logger), rest.WithRateLimiterConfigOpts(rest.WithRateLimiterLogger(logger)))
