@@ -10,7 +10,7 @@ import (
 )
 
 func (c *core) replyTool() domain.Tool {
-	return domain.Tool{Name: "reply", Description: `Post only when addressed or reporting requested work. Pass a ref from the input, or ` + "`owner`" + ` for the owner's DM. Chat is small talk and factual answers; work is shell commands, reviews, and drafts. Each messaging entry's notes say which ref each goes to.
+	return domain.Tool{Name: "reply", Description: `Post only when addressed or reporting requested work. Pass a ref from the input, or ` + "`owner`" + ` for the owner's DM. Each messaging entry's notes say which ref to use.
 If the message arrived before your last reply, answer only what it adds. Do not repeat your previous reply. If a follow-up asks to append a phrase, send only that phrase once the answer is posted.`, InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"A ref from the input, or owner."},"text":{"type":"string"},"attachments":{"type":"array","items":{"type":"object","properties":{"Ref":{"type":"string"},"Name":{"type":"string"},"MIMEType":{"type":"string"}},"required":["Ref"],"additionalProperties":false}}},"required":["target","text"],"additionalProperties":false}`), Handler: c.reply}
 }
 

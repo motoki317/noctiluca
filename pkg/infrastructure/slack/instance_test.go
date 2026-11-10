@@ -77,7 +77,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 			require.Equal(t, "Upload a local file. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", tools[4].Description)
 			require.Equal(t, "Post Markdown text. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast on a thread reply to also show it in the channel.", tools[7].Description)
 			notes := "A ref ending in a colon is top level: do not append a timestamp. " +
-				"A top-level channel input (a message or a reaction) also has a `thread` ref, the thread under that message: post chat at `conversation` and work at `thread`. " +
+				"A top-level channel input (a message or a reaction) also has a `thread` ref, the thread under that message. Post chat and quick answers at `conversation`, and work (commands, investigations, reviews, drafts, and their background results) at `thread`. " +
 				"Other inputs have only `conversation`; post there. " +
 				"Use slack_read_thread, slack_read_history, and slack_search for context. Slack tools take bare channel IDs. " +
 				"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true. " +

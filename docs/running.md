@@ -58,12 +58,11 @@ In DMs, every message and reaction reaches the trust check, except on traQ: it r
 
 The Slack and Discord adapters check thread participation through the platform, including posts from before noctiluca started. If that lookup fails, they log a warning and forward the event to the trust check.
 
-The agent posts quick answers where the request was made. It posts work, such as command results, reviews, drafts, and background completions, in reply to a channel request: on Slack, in the request's thread.
+Each platform's notes tell the agent where to post:
 
-Platform differences:
-
-- On Discord, work on a top-level channel request starts a thread from the request message.
-- traQ has no threads, so work on a channel request quotes the request message.
+- On Slack, quick answers stay where the request was made. Work on a top-level channel request, such as command results, reviews, drafts, and background completions, goes in the request's thread.
+- On Discord, the agent talks in the channel, including quick investigations. It starts a thread from the request only for a project that spans days, or when asked.
+- traQ has no threads. Quick answers stay in the channel, and a report on work requested in a channel quotes the request message.
 - Slack redelivers events that noctiluca did not acknowledge. Discord and traQ do not. On each connect, their adapters read back the entry owner's DM and each channel or DM where a message has started a turn, to the last stored event, up to 200 messages or 24 hours: new and edited messages on Discord, and new messages on traQ. In a traQ channel that the bot has not joined, only messages that mention the bot are read back. Thread replies, deletions, reactions, and traQ edits made while noctiluca was down are not recovered.
 
 ## Run

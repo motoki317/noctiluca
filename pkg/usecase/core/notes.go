@@ -11,7 +11,7 @@ func (c *core) toolNotes() string {
 		"Process queued conversation messages delivered during tool calls. Each has its own sender and refs. " +
 		"Reply only when addressed (a mention, a request to you, or a DM). " +
 		"Stay silent for chatter between other people. Copy refs exactly. " +
-		"Give watch and wake_at the ref where the result should be posted. A native background completion is work for the input that started it. " +
+		"Give watch and wake_at the ref where the result should be posted. A native background completion continues the input that started it. " +
 		"Run long work with your background tools or watch and end the turn immediately. Do not wait or poll. " +
 		"Reply attachments must come from the same messaging entry as the ref you post to (its first segment).\n\n")
 	notes.WriteString(c.replyTool().Description)
