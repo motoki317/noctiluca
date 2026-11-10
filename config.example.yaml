@@ -1,43 +1,38 @@
 messaging:
   - name: slack
     type: slack
-    owner: &owner U_OWNER_ID
+    owner: U_OWNER_ID
     slack:
       app_token: {env: SLACK_APP_TOKEN}
       bot_token: {env: SLACK_BOT_TOKEN}
       # Optional read token. Choose env or file for each token.
       # user_token: {file: secrets/slack-user-token}
       group_refresh_interval: 1h
-    conversations:
-      direct_messages:
-        users: [*owner]
-      rules:
-        - id: C_CHANNEL_ID
-          users: [*owner]
-          groups: [S_USER_GROUP_ID]
-          allow_bots: false
-          require_mention: true
+    trust:
+      users: [U_FRIEND_ID]
+      groups: [S_USER_GROUP_ID]
+    # Optional, rarely needed overrides by channel ID. An override's trust
+    # replaces the entry's trust there.
+    # conversations:
+    #   - id: C_NOISY_CHANNEL_ID
+    #     ignore: true
+    #   - id: C_SUPPORT_CHANNEL_ID
+    #     require_mention: true
+    #   - id: C_ALERTS_CHANNEL_ID
+    #     trust: {groups: [S_USER_GROUP_ID], bots: [U_ALERT_BOT_ID]}
   # - name: discord
   #   type: discord
   #   owner: DISCORD_OWNER_USER_ID
   #   discord:
   #     token: {env: DISCORD_BOT_TOKEN}
-  #   conversations:
-  #     rules:
-  #       - id: DISCORD_CHANNEL_ID
-  #         users: [DISCORD_OWNER_USER_ID]
-  #         require_mention: true
+  #   trust: {groups: [DISCORD_ROLE_ID]}
   # - name: traq
   #   type: traq
   #   owner: TRAQ_OWNER_USER_UUID
   #   traq:
   #     origin: https://q.example.com
   #     access_token: {env: TRAQ_BOT_ACCESS_TOKEN}
-  #   conversations:
-  #     rules:
-  #       - id: TRAQ_CHANNEL_UUID
-  #         users: [TRAQ_OWNER_USER_UUID]
-  #         require_mention: true
+  #   trust: {groups: [TRAQ_GROUP_UUID]}
 
 model:
   type: claude  # or codex; executable defaults to the type name

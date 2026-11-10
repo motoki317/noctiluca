@@ -37,7 +37,7 @@ type adapter struct {
 	direct             sync.Map
 	posted             sync.Map
 	stamps             sync.Map
-	acceptConversation func(domain.ConversationRef, bool) bool
+	acceptConversation func(domain.ConversationRef) bool
 	snapshots          map[string]map[string]time.Time
 }
 
@@ -138,7 +138,7 @@ func (a *adapter) DirectMessage(ctx context.Context, user string) (domain.Conver
 	return Conversation(a.name, result.Id, ""), nil
 }
 
-func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef, bool) bool) {
+func (a *adapter) SetConversationFilter(accept func(domain.ConversationRef) bool) {
 	a.acceptConversation = accept
 }
 

@@ -13,17 +13,18 @@ Neither build needs cgo. Release archives for Linux and macOS are on the [Releas
 ## Requirements
 
 - Git, and one model CLI logged in with a subscription: Claude CLI 2.1.316 or newer, or Codex CLI 0.163.0 or newer after `codex login` with a ChatGPT account.
-- For each Slack entry, a Slack app with Socket Mode, subscribed to channel and DM message events and `reaction_added`. It needs an app token (`connections:write`) and a bot token. An optional user token (`channels:history`, `channels:read`, `search:read`, `files:read`) lets the agent read any public channel that the token's user joined and search the workspace. Posts always use the bot token.
-- For each Discord entry, a Discord application with a bot. In the Developer Portal, turn on the Message Content intent, and the Server Members intent if any rule or `direct_messages` lists `groups`. Invite the bot with the `bot` scope and these permissions: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Attach Files, and Embed Links.
-- For each traQ entry, a traQ bot in WebSocket mode and its access token. Subscribe it to `MESSAGE_CREATED`, `MENTION_MESSAGE_CREATED`, `MESSAGE_UPDATED`, `MESSAGE_DELETED`, `DIRECT_MESSAGE_CREATED`, `DIRECT_MESSAGE_UPDATED`, `DIRECT_MESSAGE_DELETED`, and `BOT_MESSAGE_STAMPS_UPDATED`. Add the bot to each rule channel unless the rule sets `require_mention: true`. Outside its channels, the bot receives only messages that mention it.
+- For each Slack entry, a Slack app with Socket Mode, subscribed to these bot events: `message.channels`, `message.groups` (private channels, with the `groups:history` scope), `message.im`, and `reaction_added`. It needs an app token (`connections:write`) and a bot token. An optional user token (`channels:history`, `channels:read`, `search:read`, `files:read`) lets the agent read public channels that the token's user joined and search the workspace. Posts always use the bot token.
+- For each Discord entry, a Discord application with a bot. In the Developer Portal, turn on the Message Content intent. Also turn on the Server Members intent if the entry's `trust` or any conversation override's `trust` lists `groups`. Invite the bot with the `bot` scope and these permissions: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Attach Files, and Embed Links. Allow View Channels only in the channels where the bot should work, and turn off Public Bot so that others cannot add it to their servers.
+- For each traQ entry, a traQ bot in WebSocket mode and its access token. Subscribe it to `MESSAGE_CREATED`, `MENTION_MESSAGE_CREATED`, `MESSAGE_UPDATED`, `MESSAGE_DELETED`, `DIRECT_MESSAGE_CREATED`, `DIRECT_MESSAGE_UPDATED`, `DIRECT_MESSAGE_DELETED`, and `BOT_MESSAGE_STAMPS_UPDATED`. The bot receives every message in the channels it has joined, and elsewhere only messages that mention it.
 - Connect each Discord or traQ bot token once, from one entry in one process. Both platforms send each event to every connection of the token, so a second connection answers every message again.
 
 ## Configure
 
 Start from [config.example.yaml](../config.example.yaml). Each token is `{env: NAME}` or `{file: path}`. Relative paths resolve against the config file.
 
-- `messaging`: one entry per chat account, in a list. Each entry has a `name` (lowercase letters, digits, and `_`, starting with a letter), a `type` (`slack`, `discord`, or `traq`), the type's settings under a key named after the type (`slack`: tokens and `group_refresh_interval`; `discord`: `token`; `traq`: `origin` and `access_token`), the account's `owner` user ID (on traQ, the user's UUID), and `conversations`. Owner notices go to the owner of the first entry. The name prefixes the entry's tool names and the conversation refs stored in the database, so renaming an entry detaches its existing sessions and history.
-- `conversations.rules` in an entry: one rule per channel ID, with allowed users and groups (Slack user groups, Discord role IDs, or traQ group IDs), `allow_bots`, and `require_mention` (both false by default). DMs accept only that entry's owner unless `direct_messages` says otherwise. Unlisted channels start no turns.
+- `messaging`: one entry per chat account, in a list. Each entry has a `name` (lowercase letters, digits, and `_`, starting with a letter), a `type` (`slack`, `discord`, or `traq`), the type's settings under a key named after the type (`slack`: tokens and `group_refresh_interval`; `discord`: `token`; `traq`: `origin` and `access_token`), the account's `owner` user ID (on traQ, the user's UUID), `trust`, and optional `conversations`. Owner notices go to the owner of the first entry. The name prefixes the entry's tool names and the conversation refs stored in the database, so renaming an entry detaches its existing sessions and history.
+- `trust` in an entry: the senders whose messages start turns, in DMs and in every channel the bot is in. On traQ, a mention in a channel the bot has not joined also counts. Anyone who can add the bot to a channel extends where this trust applies. `users` and `groups` (Slack user groups, Discord role IDs, or traQ group IDs) list people. `bots` lists bot senders by user ID. On Slack, a post without a user ID, such as one from an incoming webhook, carries only its bot ID (`B…`); list both IDs if unsure. List a bot here only if people you do not trust cannot make it post; otherwise, trust it in an override for the channels it serves. The owner is always trusted. Without `trust`, only the owner starts turns.
+- `conversations` in an entry: optional overrides by channel or DM ID, which also cover the channel's threads. `ignore: true` starts no turns there, not even the owner's, and allows no other key. `require_mention: true` starts turns only on messages that mention the agent, the owner's included, so reactions start none. `trust` replaces the entry's trust there, and the owner stays trusted.
 - `model`: `type` is `claude` (default) or `codex`, and `executable` defaults to the type's name. Changing `type` starts each conversation in a fresh session, because neither CLI can resume the other's sessions. An empty `name` uses the CLI's default model. `reasoning_effort` is Codex only. `workdir` is where the model runs. Keep config, database, tokens, and memory outside it. Config validation rejects overlaps.
 - `memory.dir`: the memory repository. noctiluca initializes it as a Git repository if missing.
 - `heartbeat`, `cron`, `consolidate`: background tasks. Consolidation is off until `consolidate.enabled: true`.
@@ -47,15 +48,15 @@ At startup, noctiluca writes and commits missing defaults for `procedures/consol
 
 ## Conversation events
 
-Before channel rules apply, each adapter selects these events:
+Before trust and conversation overrides apply, each adapter selects these events:
 
 - Top-level messages, including edits and deletions.
 - Thread messages that mention the agent or belong to a thread it takes part in. On Slack, that is a thread where it posted the root or a reply. On Discord, it is a thread it owns, joined, or started from its own message. Edits, deletions, and Slack thread broadcasts follow the same rule.
 - Reactions on messages the agent posted.
 
-In DMs, every message and reaction reaches the `direct_messages` rule, except on traQ: it reports stamps only on the bot's own messages.
+In DMs, every message and reaction reaches the trust check, except on traQ: it reports stamps only on the bot's own messages.
 
-The Slack and Discord adapters check thread participation through the platform, including posts from before noctiluca started. If that lookup fails, they log a warning and forward the event to the channel rules.
+The Slack and Discord adapters check thread participation through the platform, including posts from before noctiluca started. If that lookup fails, they log a warning and forward the event to the trust check.
 
 The agent posts quick answers where the request was made. It posts work, such as command results, reviews, drafts, and background completions, in reply to a channel request: on Slack, in the request's thread.
 
@@ -63,7 +64,7 @@ Platform differences:
 
 - On Discord, work on a top-level channel request starts a thread from the request message.
 - traQ has no threads, so work on a channel request quotes the request message.
-- Slack redelivers events that noctiluca did not acknowledge. Discord and traQ do not. On each connect, their adapters read back the entry owner's DM and each channel or DM where a message has started a turn, to the last stored event, up to 200 messages or 24 hours: new and edited messages on Discord, and new messages on traQ. In a traQ channel that the bot has not joined, they read back only messages that mention it. Thread replies, deletions, reactions, and traQ edits made while noctiluca was down are not recovered.
+- Slack redelivers events that noctiluca did not acknowledge. Discord and traQ do not. On each connect, their adapters read back the entry owner's DM and each channel or DM where a message has started a turn, to the last stored event, up to 200 messages or 24 hours: new and edited messages on Discord, and new messages on traQ. In a traQ channel that the bot has not joined, only messages that mention the bot are read back. Thread replies, deletions, reactions, and traQ edits made while noctiluca was down are not recovered.
 
 ## Run
 

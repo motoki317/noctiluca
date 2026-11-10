@@ -168,8 +168,7 @@ func TestRunTraQAssemblyRepliesAndBackfill(t *testing.T) {
     type: traq
     owner: %s
     traq: {origin: %q, access_token: {env: TEST_TRAQ_TOKEN}}
-    conversations:
-      rules: [{id: %s, groups: [%s], require_mention: true}]
+    conversations: [{id: %s, trust: {groups: [%s]}, require_mention: true}]
 model: {executable: ./model}
 heartbeat: {enabled: false}
 consolidate: {enabled: false}

@@ -108,7 +108,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 	if thread != "" {
 		event.Parent = Conversation(a.name, channel, "")
 	}
-	acceptsConversation := a.acceptConversation == nil || a.acceptConversation(Conversation(a.name, channel, ""), event.Direct)
+	acceptsConversation := a.acceptConversation == nil || a.acceptConversation(Conversation(a.name, channel, ""))
 	if !event.Direct {
 		switch {
 		case event.Kind == domain.InboundEventReaction:

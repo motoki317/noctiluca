@@ -84,16 +84,17 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	events := repository.NewEventRepository(db)
 	messaging := make([]core.Messaging, 0, len(config.Messaging))
 	for i, instance := range config.Messaging {
+		trust := instance.Trust.rule()
+		rules := make(map[domain.ConversationRef]domain.AcceptRule, len(instance.Conversations))
+		for _, r := range instance.Conversations {
+			rules[domain.NewConversationRef(instance.Name, r.ID, "")] = r.rule(instance.Trust)
+		}
 		var adapter domain.MessagingAdapter
 		switch instance.Type {
 		case "slack":
 			adapter, err = slack.New(instance.Name, tokens[i].Slack, events, slackOptions...)
 		case "discord":
-			groups := instance.Conversations.DirectMessages != nil && len(instance.Conversations.DirectMessages.Groups) > 0
-			for _, rule := range instance.Conversations.Rules {
-				groups = groups || len(rule.Groups) > 0
-			}
-			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, NeedGroups: groups}, events)
+			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, NeedGroups: needsGroups(trust, rules)}, events)
 		case "traq":
 			adapter, err = traq.New(instance.Name, traq.Config{Origin: instance.TraQ.Origin, AccessToken: tokens[i].TraQAccessToken, Owner: instance.Owner}, events)
 		}
@@ -107,16 +108,8 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 				result = errors.Join(result, adapter.Shutdown(stopCtx))
 			}
 		}()
-		rules := make(map[domain.ConversationRef]domain.AcceptRule, len(instance.Conversations.Rules))
-		for _, r := range instance.Conversations.Rules {
-			rules[domain.NewConversationRef(instance.Name, r.ID, "")] = r.rule()
-		}
-		direct := domain.AcceptRule{Users: []string{instance.Owner}}
-		if instance.Conversations.DirectMessages != nil {
-			direct = instance.Conversations.DirectMessages.rule()
-		}
 		messaging = append(messaging, core.Messaging{Name: instance.Name, Adapter: adapter, Owner: instance.Owner, Rules: rules,
-			DirectMessages: &direct, GroupRefreshInterval: instance.groupRefreshInterval()})
+			Trust: trust, GroupRefreshInterval: instance.groupRefreshInterval()})
 	}
 	external, err := mcpclient.New(config.MCPServers, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, logger)
 	if err != nil {
@@ -160,6 +153,18 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		return nil, err
 	}
 	return &application{core: agent, db: db}, nil
+}
+
+func needsGroups(entry domain.AcceptRule, overrides map[domain.ConversationRef]domain.AcceptRule) bool {
+	if len(entry.Groups) > 0 {
+		return true
+	}
+	for _, rule := range overrides {
+		if len(rule.Groups) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *application) Start(ctx context.Context) (result error) {

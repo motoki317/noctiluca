@@ -102,12 +102,11 @@ func TestGroupStartupFailure(t *testing.T) {
 	take(t, called)
 }
 
-func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
-	f := setup(t, Config{}, Messaging{Owner: "owner", DirectMessages: &domain.AcceptRule{Groups: []string{"team"}}, UserGroups: map[string][]string{"team": {"owner"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:blocked-direct": {}}}, nil)
+func TestEntryTrustRefreshAndRestore(t *testing.T) {
+	f := setup(t, Config{}, Messaging{Owner: "owner", Trust: domain.AcceptRule{Groups: []string{"team"}}, UserGroups: map[string][]string{"team": {"owner"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:blocked-direct": {Ignore: true}}}, nil)
 	blocked := message("test:blocked-direct", "owner", "denied override")
 	blocked.Direct = true
 	f.messaging.in <- blocked
-	f.messaging.in <- message("test:unknown", "owner", "denied channel")
 	e := message("test:direct-thread", "owner", "first")
 	e.Parent = "test:direct"
 	e.Direct = true
@@ -152,14 +151,20 @@ func TestDirectDefaultsRefreshAndRestore(t *testing.T) {
 	}
 }
 
-func TestEmptyGroupRetiresConversationAndRejectsWake(t *testing.T) {
+func TestIgnoredConversationRetiresSessionAndRejectsWake(t *testing.T) {
 	f := setup(t, Config{}, Messaging{Owner: "owner", UserGroups: map[string][]string{"group": {"member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}, nil)
 	f.messaging.in <- message("test:room", "member", "first")
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
 	item, err := f.core.(*core).workItem(t.Context(), "test:room")
 	require.NoError(t, err)
-	require.NoError(t, f.core.(*core).applyGroups(f.core.(*core).messaging.instances[0], map[string][]string{"group": {}}))
+	impl := f.core.(*core)
+	impl.mu.Lock()
+	instance := impl.messaging.instances[0]
+	instance.config.Rules["test:room"] = domain.AcceptRule{Ignore: true}
+	groups := instance.config.UserGroups
+	impl.mu.Unlock()
+	require.NoError(t, impl.applyGroups(instance, groups))
 	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
 	item.SourceKey = "wake:removed"
 	item.ReadyAt = time.Now()
@@ -171,6 +176,9 @@ func TestEmptyGroupRetiresConversationAndRejectsWake(t *testing.T) {
 		items, err := f.core.(*core).inbox.Active(t.Context())
 		return err == nil && len(items) == 0
 	}, time.Second, time.Millisecond)
+	record, err := f.sessions.Get(t.Context(), "test:room")
+	require.NoError(t, err)
+	require.Equal(t, "resume-test:room", record.ResumeToken)
 	select {
 	case <-f.model.opened:
 		t.Fatal("opened a model without an accept rule")

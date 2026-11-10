@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/slack"
 )
 
@@ -23,17 +24,15 @@ func TestMultipleMessagingConfig(t *testing.T) {
       bot_token: {env: SUPPORT_BOT}
       user_token: {file: support-user}
       group_refresh_interval: 15m
-    conversations:
-      direct_messages: {users: [U_SUPPORT, U_OTHER]}
-      rules: [{id: C_SHARED, users: [U_SUPPORT], groups: [S_SHARED]}]
+    trust: {users: [U_SUPPORT, U_OTHER]}
+    conversations: [{id: CSHARED, trust: {users: [U_SUPPORT], groups: [S_SHARED]}}]
   - name: slack
     type: slack
     owner: U_OWNER
     slack:
       app_token: {env: TEST_APP_TOKEN}
       bot_token: {file: slack-bot}
-    conversations:
-      rules: [{id: C_SHARED, users: [U_OWNER], groups: [S_SHARED]}]
+    conversations: [{id: CSHARED, trust: {users: [U_OWNER], groups: [S_SHARED]}}]
 `)
 	t.Setenv("SUPPORT_BOT", "support-bot-secret")
 	t.Setenv("TEST_APP_TOKEN", "slack-app-secret")
@@ -55,10 +54,10 @@ func TestMultipleMessagingConfig(t *testing.T) {
 	require.Equal(t, "U_OWNER", c.Messaging[1].Owner)
 	require.Equal(t, 15*time.Minute, c.Messaging[0].groupRefreshInterval())
 	require.Equal(t, time.Hour, c.Messaging[1].groupRefreshInterval())
-	require.Equal(t, []string{"U_SUPPORT", "U_OTHER"}, c.Messaging[0].Conversations.DirectMessages.Users)
-	require.Nil(t, c.Messaging[1].Conversations.DirectMessages)
+	require.Equal(t, []string{"U_SUPPORT", "U_OTHER"}, c.Messaging[0].Trust.Users)
+	require.Empty(t, c.Messaging[1].Trust.Users)
 	for i, owner := range []string{"U_SUPPORT", "U_OWNER"} {
-		require.Equal(t, []string{owner}, c.Messaging[i].Conversations.Rules[0].Users)
+		require.Equal(t, []string{owner}, c.Messaging[i].Conversations[0].Trust.Users)
 	}
 }
 
@@ -158,24 +157,24 @@ func TestMixedMessagingTypesConfig(t *testing.T) {
     owner: '100000000000000001'
     discord:
       token: {%s: DISCORD_TOKEN}
+    trust: {users: ['100000000000000002']}
     conversations:
-      direct_messages: {users: ['100000000000000002']}
-      rules:
-        - id: '100000000000000003'
+      - id: '100000000000000003'
+        trust:
           users: ['100000000000000001']
           groups: ['100000000000000004']
-          allow_bots: true
-          require_mention: true
+          bots: ['100000000000000005']
+        require_mention: true
   - name: team
     type: traq
     owner: '00000000-0000-4000-8000-000000000001'
     traq:
       origin: https://chat.example.org
       access_token: {%s: TRAQ_TOKEN}
+    trust: {users: []}
     conversations:
-      direct_messages: {users: []}
-      rules:
-        - id: '00000000-0000-4000-8000-000000000003'
+      - id: '00000000-0000-4000-8000-000000000003'
+        trust:
           users: ['00000000-0000-4000-8000-000000000001']
           groups: ['00000000-0000-4000-8000-000000000004']
 `, source, source))
@@ -200,17 +199,16 @@ func TestMixedMessagingTypesConfig(t *testing.T) {
 			for i, id := range []string{"100000000000000003", "00000000-0000-4000-8000-000000000003"} {
 				entry := c.Messaging[i+1]
 				require.Equal(t, time.Hour, entry.groupRefreshInterval())
-				require.Len(t, entry.Conversations.Rules, 1)
-				rule := entry.Conversations.Rules[0]
+				require.Len(t, entry.Conversations, 1)
+				rule := entry.Conversations[0]
 				require.Equal(t, id, rule.ID)
-				require.Equal(t, []string{entry.Owner}, rule.Users)
-				require.Equal(t, []string{id[:len(id)-1] + "4"}, rule.Groups)
-				require.Equal(t, i == 0, rule.AllowBots)
+				require.Equal(t, []string{entry.Owner}, rule.Trust.Users)
+				require.Equal(t, []string{id[:len(id)-1] + "4"}, rule.Trust.Groups)
+				require.Equal(t, i == 0, len(rule.Trust.Bots) > 0)
 				require.Equal(t, i == 0, rule.RequireMention)
 			}
-			require.Equal(t, []string{"100000000000000002"}, c.Messaging[1].Conversations.DirectMessages.Users)
-			require.NotNil(t, c.Messaging[2].Conversations.DirectMessages)
-			require.Empty(t, c.Messaging[2].Conversations.DirectMessages.Users)
+			require.Equal(t, []string{"100000000000000002"}, c.Messaging[1].Trust.Users)
+			require.Empty(t, c.Messaging[2].Trust.Users)
 			if source == "file" {
 				require.Equal(t, filepath.Join(filepath.Dir(path), "DISCORD_TOKEN"), c.Messaging[1].Discord.Token.File)
 				require.Equal(t, filepath.Join(filepath.Dir(path), "TRAQ_TOKEN"), c.Messaging[2].TraQ.AccessToken.File)
@@ -248,7 +246,7 @@ func TestNewMessagingTypesValidation(t *testing.T) {
     type: %s
     owner: %s
     %s: {%s%s: %s}
-    conversations: {rules: %s}
+    conversations: %s
 `, platform.name, owner, platform.name, platform.settings, platform.field, tc.token, tc.rules)))
 					require.NoError(t, err)
 					_, err = newApplication(t.Context(), c, nil)
@@ -303,7 +301,7 @@ func TestTraQOriginValidation(t *testing.T) {
 func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
 	t.Setenv("TEST_TRAQ_TOKEN", "fake-token")
 	const valid = "00000000-0000-4000-8000-000000abcdef"
-	for _, field := range []string{"owner", "conversations.rules[0].id", "conversations.rules[0].users", "conversations.rules[0].groups", "conversations.direct_messages.users", "conversations.direct_messages.groups"} {
+	for _, field := range []string{"owner", "conversations[0].id", "conversations[0].trust.users", "conversations[0].trust.groups", "conversations[0].trust.bots", "trust.users", "trust.groups", "trust.bots"} {
 		for _, value := range []string{valid, strings.ToUpper(valid), strings.Replace(valid, "abcdef", "Abcdef", 1), "username", "invalid_id", "00000000-0000-4000-8000-00000000000g", "00000000000040008000000000000001", "{" + valid + "}", "urn:uuid:" + valid} {
 			t.Run(field+"/"+value, func(t *testing.T) {
 				c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
@@ -311,25 +309,29 @@ func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
     type: traq
     owner: '%[1]s'
     traq: {origin: https://chat.example.org, access_token: {env: TEST_TRAQ_TOKEN}}
+    trust: {users: ['%[1]s'], groups: ['%[1]s'], bots: ['%[1]s']}
     conversations:
-      rules: [{id: '%[1]s', users: ['%[1]s'], groups: ['%[1]s']}]
-      direct_messages: {users: ['%[1]s'], groups: ['%[1]s']}
+      - {id: '%[1]s', trust: {users: ['%[1]s'], groups: ['%[1]s'], bots: ['%[1]s']}}
 `, valid)))
 				require.NoError(t, err)
 				entry := &c.Messaging[0]
 				switch field {
 				case "owner":
 					entry.Owner = value
-				case "conversations.rules[0].id":
-					entry.Conversations.Rules[0].ID = value
-				case "conversations.rules[0].users":
-					entry.Conversations.Rules[0].Users = []string{value}
-				case "conversations.rules[0].groups":
-					entry.Conversations.Rules[0].Groups = []string{value}
-				case "conversations.direct_messages.users":
-					entry.Conversations.DirectMessages.Users = []string{value}
-				case "conversations.direct_messages.groups":
-					entry.Conversations.DirectMessages.Groups = []string{value}
+				case "conversations[0].id":
+					entry.Conversations[0].ID = value
+				case "conversations[0].trust.users":
+					entry.Conversations[0].Trust.Users = []string{value}
+				case "conversations[0].trust.groups":
+					entry.Conversations[0].Trust.Groups = []string{value}
+				case "conversations[0].trust.bots":
+					entry.Conversations[0].Trust.Bots = []string{value}
+				case "trust.users":
+					entry.Trust.Users = []string{value}
+				case "trust.groups":
+					entry.Trust.Groups = []string{value}
+				case "trust.bots":
+					entry.Trust.Bots = []string{value}
 				}
 				if value == valid {
 					_, _, err = c.validateRun()
@@ -337,7 +339,7 @@ func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
 				} else {
 					_, err = newApplication(t.Context(), c, nil)
 					require.Error(t, err)
-					if field == "conversations.rules[0].id" && strings.Contains(value, ":") {
+					if field == "conversations[0].id" && strings.Contains(value, ":") {
 						require.ErrorContains(t, err, "unique channel IDs")
 					} else {
 						require.ErrorContains(t, err, "messaging.team."+field)
@@ -352,7 +354,7 @@ func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
 	}
 }
 
-func TestDiscordRuleIDsValidatedBeforeResources(t *testing.T) {
+func TestDiscordOverrideIDsValidatedBeforeResources(t *testing.T) {
 	t.Setenv("TEST_DISCORD_TOKEN", "fake-token")
 	for _, id := range []string{"400", "general", "0", "0400", "-400", "+400", "0x190", "18446744073709551616"} {
 		t.Run(id, func(t *testing.T) {
@@ -361,7 +363,7 @@ func TestDiscordRuleIDsValidatedBeforeResources(t *testing.T) {
     type: discord
     owner: '200'
     discord: {token: {env: TEST_DISCORD_TOKEN}}
-    conversations: {rules: [{id: '300'}, {id: %q}]}
+    conversations: [{id: '300'}, {id: %q}]
 `, id)))
 			require.NoError(t, err)
 			if id == "400" {
@@ -369,7 +371,7 @@ func TestDiscordRuleIDsValidatedBeforeResources(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				_, err = newApplication(t.Context(), c, nil)
-				require.ErrorContains(t, err, "messaging.chat.conversations.rules[1].id must be a Discord numeric ID")
+				require.ErrorContains(t, err, "messaging.chat.conversations[1].id must be a Discord numeric ID")
 			}
 			require.NoFileExists(t, c.Database.Path)
 			require.NoDirExists(t, c.Memory.Dir)
@@ -385,9 +387,8 @@ func TestDiscordApplicationConstruction(t *testing.T) {
     type: discord
     owner: "200"
     discord: {token: {env: TEST_DISCORD_TOKEN}}
-    conversations:
-      rules: [{id: "400", groups: ["700"]}]
-      direct_messages: {groups: ["701"]}
+    trust: {groups: ["701"]}
+    conversations: [{id: "400", trust: {groups: ["700"]}}]
 heartbeat: {enabled: false}
 `))
 	require.NoError(t, err)
@@ -395,4 +396,119 @@ heartbeat: {enabled: false}
 	require.NoError(t, err)
 	require.NoError(t, app.Shutdown(t.Context()))
 	require.FileExists(t, c.Database.Path)
+}
+
+func TestDiscordGroupsRequiredByEntryOrOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		want         bool
+	}{
+		{"none", "", false},
+		{"users and bots", "trust: {users: ['300'], bots: ['400']}", false},
+		{"entry groups", "trust: {groups: ['500']}", true},
+		{"override-only groups", "conversations: [{id: '600', trust: {groups: ['500']}}]", true},
+		{"empty override trust", "trust: {groups: ['500']}, conversations: [{id: '600', trust: {}}]", true},
+		{"ignored override", "conversations: [{id: '600', ignore: true}]", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := loadConfig(writeConfig(t, "messaging: [{name: chat, type: discord, owner: '200', "+tc.fields+"}]"))
+			require.NoError(t, err)
+			entry := c.Messaging[0]
+			rules := make(map[domain.ConversationRef]domain.AcceptRule, len(entry.Conversations))
+			for _, override := range entry.Conversations {
+				rules[domain.NewConversationRef(entry.Name, override.ID, "")] = override.rule(entry.Trust)
+			}
+			require.Equal(t, tc.want, needsGroups(entry.Trust.rule(), rules))
+		})
+	}
+}
+
+func TestLegacyConversationConfigNamesReplacement(t *testing.T) {
+	for _, conversations := range []string{"{}", "{direct_messages: {users: [U_OWNER]}}", "{direct_messages: null}", "{rules: []}", "{rules: null}"} {
+		_, err := loadConfig(writeConfig(t, "messaging: [{name: chat, type: slack, owner: U_OWNER, conversations: "+conversations+"}]"))
+		require.ErrorContains(t, err, "conversations.direct_messages")
+		require.ErrorContains(t, err, "conversations.rules")
+		require.ErrorContains(t, err, "trust")
+		require.ErrorContains(t, err, "conversations list")
+	}
+	for _, fields := range []string{
+		"allow_bots: true", "allow_bots: false", "allow_bots: null", "trust: {allow_bots: false}",
+		"conversations: [{id: C_ROOM, allow_bots: true}]", "conversations: [{id: C_ROOM, trust: {allow_bots: null}}]",
+	} {
+		_, err := loadConfig(writeConfig(t, "messaging: [{name: chat, type: slack, owner: U_OWNER, "+fields+"}]"))
+		require.ErrorContains(t, err, "allow_bots")
+		require.ErrorContains(t, err, "trust.bots")
+	}
+}
+
+func TestIgnoreOverrideRejectsEveryOtherKey(t *testing.T) {
+	for _, extra := range []string{"trust: {}", "trust: null", "trust: {users: []}", "require_mention: true", "require_mention: false", "require_mention: null"} {
+		for _, ignore := range []string{"true", "'true'"} {
+			_, err := loadConfig(writeConfig(t, "messaging: [{name: chat, type: slack, owner: U_OWNER, conversations: [{id: C_ROOM, ignore: "+ignore+", "+extra+"}]}]"))
+			require.ErrorContains(t, err, "ignore: true permits only id and ignore", extra)
+		}
+	}
+	c, err := loadConfig(writeConfig(t, "messaging: [{name: chat, type: slack, owner: U_OWNER, conversations: [{id: C_ROOM, ignore: true}]}]"))
+	require.NoError(t, err)
+	require.True(t, c.Messaging[0].Conversations[0].Ignore)
+}
+
+func TestNullOverrideTrustRejected(t *testing.T) {
+	for _, value := range []string{"", "null", "~"} {
+		_, err := loadConfig(writeConfig(t, `messaging:
+  - name: chat
+    type: slack
+    owner: U_OWNER
+    trust: {users: [U_MEMBER]}
+    conversations:
+      - id: CROOM
+        trust: `+value+"\n"))
+		require.ErrorContains(t, err, "conversations[0].trust cannot be null")
+		require.ErrorContains(t, err, "trust: {} means the owner only")
+	}
+}
+
+func TestIgnoredOverrideRequiresID(t *testing.T) {
+	c, err := loadConfig(writeConfig(t, "messaging: [{name: chat, type: slack, owner: U_OWNER, conversations: [{ignore: true}]}]"))
+	require.NoError(t, err)
+	_, err = newApplication(t.Context(), c, nil)
+	require.ErrorContains(t, err, "conversation overrides require unique channel IDs")
+	require.NoFileExists(t, c.Database.Path)
+	require.NoDirExists(t, c.Memory.Dir)
+	require.NoDirExists(t, c.Model.Workdir)
+}
+
+func TestSlackOverrideIDsValidatedBeforeResources(t *testing.T) {
+	t.Setenv("TEST_APP_TOKEN", "app-token")
+	t.Setenv("TEST_BOT_TOKEN", "bot-token")
+	for _, tc := range []struct {
+		id    string
+		valid bool
+	}{
+		{"C012ABC", true}, {"D012ABC", true}, {"G012ABC", true},
+		{"general", false}, {"C_ROOM", false}, {"C", false}, {"c012ABC", false}, {"U012ABC", false},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			c, err := loadConfig(writeConfig(t, fmt.Sprintf(`messaging:
+  - name: chat
+    type: slack
+    owner: U_OWNER
+    slack:
+      app_token: {env: TEST_APP_TOKEN}
+      bot_token: {env: TEST_BOT_TOKEN}
+    conversations: [{id: %q}]
+`, tc.id)))
+			require.NoError(t, err)
+			if tc.valid {
+				_, _, err = c.validateRun()
+				require.NoError(t, err)
+			} else {
+				_, err = newApplication(t.Context(), c, nil)
+				require.ErrorContains(t, err, "messaging.chat.conversations[0].id must be a Slack channel ID matching ^[CDG][A-Z0-9]+$")
+			}
+			require.NoFileExists(t, c.Database.Path)
+			require.NoDirExists(t, c.Memory.Dir)
+			require.NoDirExists(t, c.Model.Workdir)
+		})
+	}
 }

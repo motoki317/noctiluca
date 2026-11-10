@@ -15,7 +15,7 @@ type Messaging struct {
 	Adapter              domain.MessagingAdapter
 	Owner                string
 	Rules                map[domain.ConversationRef]domain.AcceptRule
-	DirectMessages       *domain.AcceptRule
+	Trust                domain.AcceptRule
 	UserGroups           map[string][]string
 	GroupRefreshInterval time.Duration
 }

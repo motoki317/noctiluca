@@ -327,7 +327,7 @@ func (a *adapter) reactions(ctx context.Context, body payload, consume func(cont
 			continue
 		}
 		ref := Conversation(a.name, channel, "")
-		if a.acceptConversation != nil && !a.acceptConversation(ref, direct) {
+		if a.acceptConversation != nil && !a.acceptConversation(ref) {
 			previous[key] = stamp.UpdatedAt
 			continue
 		}

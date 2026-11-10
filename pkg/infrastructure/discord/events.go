@@ -125,7 +125,7 @@ func (a *adapter) message(ctx context.Context, m sdk.Message, edited bool) (*dom
 		return nil, err
 	}
 	if location.thread != nil && !mentions &&
-		(a.acceptConversation == nil || a.acceptConversation(location.parent, location.direct)) {
+		(a.acceptConversation == nil || a.acceptConversation(location.parent)) {
 		joined, err := a.inThread(ctx, *location.thread)
 		if err != nil {
 			a.warnLookup(ctx, m.ChannelID, m.ID, err)
@@ -228,7 +228,7 @@ func (a *adapter) reaction(ctx context.Context, e gateway.EventMessageReactionAd
 		if location.parent != "" {
 			target = location.parent
 		}
-		if !a.acceptConversation(target, location.direct) {
+		if !a.acceptConversation(target) {
 			return nil, nil
 		}
 	}

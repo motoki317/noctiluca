@@ -29,12 +29,13 @@ func cloneRules(rules map[domain.ConversationRef]domain.AcceptRule) map[domain.C
 func cloneRule(r domain.AcceptRule) domain.AcceptRule {
 	r.Users = slices.Clone(r.Users)
 	r.Groups = slices.Clone(r.Groups)
+	r.Bots = slices.Clone(r.Bots)
 	return r
 }
 
 type compiledRules struct {
 	conversations map[domain.ConversationRef]rule
-	direct        *rule
+	entry         rule
 }
 
 func newMessagingInstance(config Messaging) (*messagingInstance, error) {
@@ -45,15 +46,11 @@ func newMessagingInstance(config Messaging) (*messagingInstance, error) {
 		config.GroupRefreshInterval = time.Hour
 	}
 	config.Rules = cloneRules(config.Rules)
+	config.Trust = cloneRule(config.Trust)
 	config.UserGroups = cloneGroups(config.UserGroups)
-	all := make([]domain.AcceptRule, 0, len(config.Rules)+1)
+	all := []domain.AcceptRule{config.Trust}
 	for _, r := range config.Rules {
 		all = append(all, r)
-	}
-	if config.DirectMessages != nil {
-		direct := cloneRule(*config.DirectMessages)
-		config.DirectMessages = &direct
-		all = append(all, direct)
 	}
 	var ids []string
 	for _, r := range all {
@@ -80,6 +77,11 @@ func newMessagingInstance(config Messaging) (*messagingInstance, error) {
 
 func compileRules(config Messaging) (compiledRules, error) {
 	rules := compiledRules{conversations: make(map[domain.ConversationRef]rule, len(config.Rules))}
+	entry, err := compileRule(config, config.Trust)
+	if err != nil {
+		return rules, err
+	}
+	rules.entry = entry
 	for conversation, value := range config.Rules {
 		if conversation == "" {
 			return rules, errors.New("accept rule conversation is required")
@@ -90,19 +92,15 @@ func compileRules(config Messaging) (compiledRules, error) {
 		}
 		rules.conversations[conversation] = r
 	}
-	if config.DirectMessages != nil {
-		r, err := compileRule(config, *config.DirectMessages)
-		if err != nil {
-			return rules, err
-		}
-		rules.direct = &r
-	}
 	return rules, nil
 }
 
 func compileRule(config Messaging, value domain.AcceptRule) (rule, error) {
-	r := rule{users: make(map[string]struct{}), allowBots: value.AllowBots, requireMention: value.RequireMention}
+	r := rule{users: make(map[string]struct{}), bots: make(map[string]struct{}), ignore: value.Ignore, requireMention: value.RequireMention}
 	users := slices.Clone(value.Users)
+	if config.Owner != "" {
+		users = append(users, config.Owner)
+	}
 	for _, group := range value.Groups {
 		members, ok := config.UserGroups[group]
 		if !ok {
@@ -116,20 +114,26 @@ func compileRule(config Messaging, value domain.AcceptRule) (rule, error) {
 		}
 		r.users[user] = struct{}{}
 	}
+	for _, bot := range value.Bots {
+		if bot == "" {
+			return r, errors.New("accepted bot ID must not be empty")
+		}
+		r.bots[bot] = struct{}{}
+	}
 	return r, nil
 }
 
-func (c *core) findRule(conversation domain.ConversationRef, direct bool) (rule, bool) {
+func (c *core) findRule(conversation domain.ConversationRef) (rule, bool) {
 	instance, err := c.messaging.resolve(conversation)
 	if err != nil {
 		return rule{}, false
 	}
 	rules := instance.rules
 	r, ok := rules.conversations[conversation]
-	if !ok && direct && rules.direct != nil {
-		return *rules.direct, true
+	if !ok {
+		r = rules.entry
 	}
-	return r, ok
+	return r, !r.ignore
 }
 
 func (c *core) applyGroups(instance *messagingInstance, groups map[string][]string) error {

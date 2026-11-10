@@ -28,8 +28,8 @@ type Config struct {
 	Completed   func(context.Context, string, time.Time) error
 }
 type rule struct {
-	users                     map[string]struct{}
-	allowBots, requireMention bool
+	users, bots            map[string]struct{}
+	ignore, requireMention bool
 }
 type core struct {
 	config           Config
@@ -61,15 +61,15 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	c := &core{config: config, messaging: router, events: events, sessions: sessions, inbox: inbox, hub: hub, external: external, done: make(chan struct{})}
 	for _, instance := range router.instances {
 		if filter, ok := instance.config.Adapter.(domain.ConversationFilter); ok {
-			filter.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
+			filter.SetConversationFilter(func(ref domain.ConversationRef) bool {
 				c.mu.Lock()
 				defer c.mu.Unlock()
 				owner, err := router.resolve(ref)
 				if err != nil || owner != instance {
 					return false
 				}
-				rule, ok := c.findRule(ref, direct)
-				return ok && len(rule.users) > 0
+				_, ok := c.findRule(ref)
+				return ok
 			})
 		}
 	}
@@ -164,14 +164,18 @@ func (c *core) Shutdown(ctx context.Context) error {
 	}
 }
 func (c *core) accepted(event domain.InboundEvent) (rule, bool) {
-	r, ok := c.findRule(channel(event), event.Direct)
+	r, ok := c.findRule(channel(event))
 	if !ok || event.Conversation == "" || (r.requireMention && !event.MentionsMe) {
 		return r, false
 	}
-	if event.Sender.Kind != domain.SenderHuman && (!r.allowBots || event.Sender.Kind != domain.SenderBot) {
+	switch event.Sender.Kind {
+	case domain.SenderHuman:
+		_, ok = r.users[event.Sender.ID]
+	case domain.SenderBot:
+		_, ok = r.bots[event.Sender.ID]
+	default:
 		return r, false
 	}
-	_, ok = r.users[event.Sender.ID]
 	return r, ok
 }
 func (c *core) receive(ctx context.Context, event domain.InboundEvent) error {
@@ -249,8 +253,8 @@ func (c *core) acceptSession(info domain.SessionContext) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r, ok := c.findRule(info.Conversation, info.Direct)
-	return ok && len(r.users) > 0
+	_, ok := c.findRule(info.Conversation)
+	return ok
 }
 func (c *core) runMessaging(ctx context.Context, instance *messagingInstance) error {
 	for ctx.Err() == nil {

@@ -21,7 +21,7 @@ type sourceCall struct {
 type namedMessaging struct {
 	*fakeMessaging
 	name        string
-	filter      func(domain.ConversationRef, bool) bool
+	filter      func(domain.ConversationRef) bool
 	info        chan sourceCall
 	dmUsers     chan string
 	start       func(context.Context, func(context.Context, domain.InboundEvent) error) error
@@ -56,7 +56,7 @@ func (m *namedMessaging) SourceInfo(_ context.Context, ref domain.ConversationRe
 	return domain.SourceInfo{Conversation: m.name + " room", Sender: m.name + " user"}
 }
 
-func (m *namedMessaging) SetConversationFilter(filter func(domain.ConversationRef, bool) bool) {
+func (m *namedMessaging) SetConversationFilter(filter func(domain.ConversationRef) bool) {
 	m.filter = filter
 }
 
@@ -104,13 +104,32 @@ func TestMessagingConfigurationValidation(t *testing.T) {
 		{"unknown rule", []Messaging{{Name: "alpha", Adapter: m, Rules: map[domain.ConversationRef]domain.AcceptRule{"other:room": {}}}}, "unknown messaging entry"},
 		{"foreign rule", []Messaging{{Name: "alpha", Adapter: m, Rules: map[domain.ConversationRef]domain.AcceptRule{"beta:room": {}}}, {Name: "beta", Adapter: m}}, "does not belong"},
 		{"negative refresh", []Messaging{{Name: "alpha", Adapter: m, GroupRefreshInterval: -time.Second}}, "group refresh interval"},
-		{"unknown group", []Messaging{{Name: "alpha", Adapter: m, DirectMessages: &domain.AcceptRule{Groups: []string{"missing"}}}}, "unknown user group"},
+		{"unknown group", []Messaging{{Name: "alpha", Adapter: m, Trust: domain.AcceptRule{Groups: []string{"missing"}}}}, "unknown user group"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := newMessagingRouter(tc.instances)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+}
+
+func TestConversationFilterSkipsOnlyIgnoredConversations(t *testing.T) {
+	adapter := newNamedMessaging("test")
+	c, err := New(Config{}, []Messaging{{Name: "test", Adapter: adapter,
+		Trust: domain.AcceptRule{Bots: []string{"bot"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{
+			"test:ignored": {Ignore: true}, "test:empty": {},
+		},
+	}}, &fakeModel{}, &fakeHub{tools: make(map[string]domain.Tool)}, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, &unusedWatches{}, nil, nil, &unusedInbox{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.Shutdown(t.Context())) })
+	for _, tc := range []struct {
+		ref  domain.ConversationRef
+		want bool
+	}{{"test:unlisted", true}, {"test:empty", true}, {"test:ignored", false}, {"other:room", false}} {
+		require.Equal(t, tc.want, adapter.filter(tc.ref), "%s", tc.ref)
+	}
+	require.True(t, c.(*core).acceptSession(domain.SessionContext{Conversation: "test:unlisted"}))
+	require.False(t, c.(*core).acceptSession(domain.SessionContext{Conversation: "test:ignored"}))
 }
 
 func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
@@ -145,10 +164,10 @@ func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
 	require.Contains(t, f.hub.sources, "messaging:beta")
 	require.Contains(t, f.hub.tools, "alpha_send")
 	require.Contains(t, f.hub.tools, "beta_send")
-	require.True(t, alpha.filter("alpha:room", false))
-	require.False(t, alpha.filter("beta:room", false))
-	require.False(t, beta.filter("alpha:room", false))
-	require.False(t, beta.filter("missing:room", true))
+	require.True(t, alpha.filter("alpha:room"))
+	require.False(t, alpha.filter("beta:room"))
+	require.False(t, beta.filter("alpha:room"))
+	require.False(t, beta.filter("missing:room"))
 	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "alpha:room"})
 	for _, adapter := range []*namedMessaging{alpha, beta} {
 		ref := domain.ConversationRef(adapter.name + ":room:thread")
@@ -264,8 +283,8 @@ func TestMessagingGroupsAndDirectRulesAreIndependent(t *testing.T) {
 			}
 		}}
 		instances = append(instances, Messaging{Name: name, Adapter: provider, GroupRefreshInterval: 10 * time.Millisecond,
-			Rules:          map[domain.ConversationRef]domain.AcceptRule{domain.ConversationRef(name + ":room"): {Groups: []string{"team"}}, domain.ConversationRef(name + ":blocked"): {}},
-			DirectMessages: &domain.AcceptRule{Groups: []string{name}},
+			Rules: map[domain.ConversationRef]domain.AcceptRule{domain.ConversationRef(name + ":room"): {Groups: []string{"team"}}, domain.ConversationRef(name + ":blocked"): {Ignore: true}},
+			Trust: domain.AcceptRule{Groups: []string{name}},
 		})
 	}
 	f := setupInstances(t, Config{}, instances, nil, nil, nil)
@@ -276,8 +295,8 @@ func TestMessagingGroupsAndDirectRulesAreIndependent(t *testing.T) {
 		adapter.in <- message(domain.ConversationRef(name+":room"), name, "own group")
 		session := take(t, f.model.opened)
 		require.Contains(t, take(t, session.inputs).Text, "own group")
-		require.True(t, adapter.filter(domain.ConversationRef(name+":room"), false))
-		require.False(t, adapter.filter(domain.ConversationRef(name+":blocked"), true))
+		require.True(t, adapter.filter(domain.ConversationRef(name+":room")))
+		require.False(t, adapter.filter(domain.ConversationRef(name+":blocked")))
 		wrong := message(domain.ConversationRef(name+":dm"), "outsider", "wrong DM user")
 		wrong.Direct = true
 		adapter.in <- wrong
@@ -291,10 +310,9 @@ func TestMessagingGroupsAndDirectRulesAreIndependent(t *testing.T) {
 	}
 	responses["alpha"] <- map[string][]string{"team": {}, "alpha": {"alpha-dm"}}
 	take(t, calls["alpha"])
-	require.Equal(t, domain.SessionKey("alpha:room"), take(t, f.hub.closed))
-	require.False(t, alpha.filter("alpha:room", false))
-	require.True(t, alpha.filter("alpha:dm", true))
-	require.True(t, beta.filter("beta:room", false))
+	require.True(t, alpha.filter("alpha:room"))
+	require.True(t, alpha.filter("alpha:dm"))
+	require.True(t, beta.filter("beta:room"))
 	require.True(t, f.hub.active("beta:room"))
 	require.True(t, f.hub.active("beta:dm"))
 	impl := f.core.(*core)

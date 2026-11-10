@@ -42,8 +42,8 @@ func TestRunMultipleMessagingInstances(t *testing.T) {
       app_token: {env: support_APP}
       bot_token: {env: support_BOT}
       group_refresh_interval: 10ms
-    conversations:
-      rules: [{id: C_SHARED, groups: [S_SHARED], require_mention: true}]
+    trust: {groups: [S_SHARED], bots: [U_ALERT]}
+    conversations: [{id: CSHARED, require_mention: true}]
   - name: slack
     type: slack
     owner: U_OWNER
@@ -51,9 +51,8 @@ func TestRunMultipleMessagingInstances(t *testing.T) {
       app_token: {env: slack_APP}
       bot_token: {env: slack_BOT}
       group_refresh_interval: 15ms
-    conversations:
-      direct_messages: {users: []}
-      rules: [{id: C_SHARED, groups: [S_SHARED], require_mention: true}]
+    trust: {groups: [S_SHARED], bots: [U_ALERT]}
+    conversations: [{id: CSHARED, require_mention: true}, {id: DDIRECT, ignore: true}]
 model: {executable: ./claude}
 heartbeat: {enabled: false}
 `), 0600))
@@ -88,7 +87,7 @@ heartbeat: {enabled: false}
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "ws://" + r.Host + "/socket/" + name})
 		case "/usergroups.users.list":
 			require.Equal(t, "S_SHARED", r.Form.Get("usergroup"))
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "users": []string{owners[name]}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "users": []string{owners[name], "U_MEMBER"}})
 		case "/users.info":
 			fmt.Fprint(w, `{"ok":true,"user":{"profile":{"display_name":"Owner"}}}`)
 		case "/conversations.info":
@@ -138,19 +137,32 @@ heartbeat: {enabled: false}
 		case <-time.After(5 * time.Second):
 			t.Fatal("socket startup timed out", name)
 		}
-		for i, channel := range []string{"C_SHARED", "D_DIRECT"} {
+		for i, tc := range []struct {
+			channel, user, bot string
+			accepted           bool
+		}{
+			{"CSHARED", owners[name], "", true},
+			{"DDIRECT", owners[name], "", name == "support"},
+			{"CSHARED", "U_MEMBER", "", true},
+			{"C_UNLISTED", "U_MEMBER", "", true},
+			{"D_FRIEND", "U_MEMBER", "", true},
+			{"C_UNLISTED", "U_ALERT", "B_ALERT", true},
+			{"C_UNLISTED", "U_MEMBER", "B_OTHER", false},
+			{"C_UNLISTED", "U_ALERT", "", false},
+		} {
+			channel := tc.channel
 			id := fmt.Sprintf("shared-%d", i)
 			require.NoError(t, socket.WriteJSON(map[string]any{"type": "events_api", "envelope_id": id, "payload": map[string]any{
 				"type": "event_callback", "event_id": id, "event": map[string]any{
-					"type": "message", "channel": channel, "user": owners[name], "text": "<@U_BOT> hello", "ts": fmt.Sprintf("1.%d", i),
+					"type": "message", "channel": channel, "user": tc.user, "bot_id": tc.bot, "text": "<@U_BOT> hello", "ts": fmt.Sprintf("1.%d", i),
 				},
 			}}))
-			accepted := channel != "D_DIRECT" || name == "support"
 			require.Eventually(t, func() bool {
-				events, err := repository.NewEventRepository(app.db).ListInbound(t.Context(), domain.ConversationRef(name+":"+channel+":"), 10)
-				return err == nil && len(events) == 1 && events[0].Accepted != nil && *events[0].Accepted == accepted
+				ref := domain.NewConversationRef(name, channel, fmt.Sprintf("1.%d", i))
+				event, err := repository.NewEventRepository(app.db).GetInbound(t.Context(), ref)
+				return err == nil && event.Accepted != nil && *event.Accepted == tc.accepted
 			}, 5*time.Second, 10*time.Millisecond)
-			if accepted {
+			if tc.accepted {
 				post := takePost()
 				require.Equal(t, "xoxb-"+name, post.Get("token"))
 				require.Equal(t, channel, post.Get("channel"))

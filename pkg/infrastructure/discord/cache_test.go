@@ -124,10 +124,9 @@ func TestUnlistedThreadSkipsParticipationLookup(t *testing.T) {
 	require.NoError(t, err)
 	calls.Store(0)
 	filtered := false
-	a.SetConversationFilter(func(ref domain.ConversationRef, direct bool) bool {
+	a.SetConversationFilter(func(ref domain.ConversationRef) bool {
 		filtered = true
 		assert.Equal(t, domain.ConversationRef("chat:400:"), ref)
-		assert.False(t, direct)
 		return false
 	})
 	event, err := a.message(t.Context(), message(600, 300), false)

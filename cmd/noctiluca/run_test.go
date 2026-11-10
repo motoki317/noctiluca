@@ -223,9 +223,9 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 				envelope := fmt.Sprintf(`{"type":"events_api","envelope_id":"event-%d","payload":{"type":"event_callback","event_id":"source-%d","event":{"type":"message","channel":"D_DIRECT","channel_type":"im","user":%q,"text":"hello","ts":"1.2"}}}`, i, min(i, 1), user)
 				require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(envelope)))
 			}
-			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"reaction","payload":{"type":"event_callback","event_id":"reaction-source","event":{"type":"reaction_added","user":"U_MEMBER","item_user":"U_BOT","reaction":"thumbsdown","item":{"type":"message","channel":"C_UNLISTED","ts":"1.2"}}}}`)))
-			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"unjoined","payload":{"type":"event_callback","event_id":"unjoined-source","event":{"type":"message","channel":"C_CHANNEL","user":"U_MEMBER","text":"unjoined reply","ts":"8.1","thread_ts":"8.0"}}}`)))
-			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"other-reaction","payload":{"type":"event_callback","event_id":"other-reaction-source","event":{"type":"reaction_added","user":"U_MEMBER","item_user":"U_OTHER","reaction":"eyes","item":{"type":"message","channel":"C_CHANNEL","ts":"8.2"}}}}`)))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"reaction","payload":{"type":"event_callback","event_id":"reaction-source","event":{"type":"reaction_added","user":"U_DENIED","item_user":"U_BOT","reaction":"thumbsdown","item":{"type":"message","channel":"C_UNLISTED","ts":"1.2"}}}}`)))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"unjoined","payload":{"type":"event_callback","event_id":"unjoined-source","event":{"type":"message","channel":"CCHANNEL","user":"U_MEMBER","text":"unjoined reply","ts":"8.1","thread_ts":"8.0"}}}`)))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"other-reaction","payload":{"type":"event_callback","event_id":"other-reaction-source","event":{"type":"reaction_added","user":"U_MEMBER","item_user":"U_OTHER","reaction":"eyes","item":{"type":"message","channel":"CCHANNEL","ts":"8.2"}}}}`)))
 			for {
 				_, raw, err := conn.ReadMessage()
 				if err != nil {
@@ -267,9 +267,8 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
       app_token: {env: TEST_APP_TOKEN}
       bot_token: {env: TEST_BOT_TOKEN}
       group_refresh_interval: 10ms
-    conversations:
-      rules:
-        - {id: C_CHANNEL, groups: [S_GROUP], require_mention: true}
+    trust: {groups: [S_GROUP]}
+    conversations: [{id: CCHANNEL, require_mention: true}]
 model: {executable: ./claude, name: haiku}
 heartbeat: {enabled: true, interval: 10ms}
 cron:
@@ -357,7 +356,7 @@ mcp_servers:
 	defer db.Close()
 	history := repository.NewEventRepository(db)
 	var droppedEvents, droppedInbox int
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM events WHERE message_ref IN ('slack:C_CHANNEL:8.1', 'slack:C_CHANNEL:8.2')").Scan(&droppedEvents))
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM events WHERE message_ref IN ('slack:CCHANNEL:8.1', 'slack:CCHANNEL:8.2')").Scan(&droppedEvents))
 	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('slack:unjoined-source', 'slack:other-reaction-source')").Scan(&droppedInbox))
 	require.Zero(t, droppedEvents)
 	require.Zero(t, droppedInbox)
@@ -458,7 +457,7 @@ func TestRunCancellationDuringStartup(t *testing.T) {
 			t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
 			yaml := "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\n"
 			if groups {
-				yaml += "    conversations:\n      rules:\n        - {id: C_CHANNEL, groups: [S_GROUP]}\n"
+				yaml += "    trust: {groups: [S_GROUP]}\n"
 			}
 			c, err := loadConfig(writeConfig(t, yaml))
 			require.NoError(t, err)
