@@ -22,6 +22,16 @@ type SourceInfoProvider interface {
 	SourceInfo(context.Context, ConversationRef, string, bool) SourceInfo
 }
 
+type NamedRef struct {
+	Name string
+	Ref  ConversationRef
+}
+
+type PostRefProvider interface {
+	// PostRefs names the refs besides the conversation that an input can be answered at.
+	PostRefs(conversation, message ConversationRef, direct bool) []NamedRef
+}
+
 type OutboundMessage struct {
 	Text        string
 	Attachments []Attachment

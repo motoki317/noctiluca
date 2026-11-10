@@ -121,6 +121,16 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Equal(t, thread, post.Get("thread_ts"))
 		require.Contains(t, post.Get("text"), word)
 	}
+	postAt := func(t *testing.T, ref domain.ConversationRef) url.Values {
+		t.Helper()
+		name, channel, thread, ok := domain.ParseConversationRef(ref)
+		require.True(t, ok)
+		require.Equal(t, "slack", name)
+		post := liveTake(t, slack.posts)
+		require.Equal(t, channel, post.Get("channel"))
+		require.Equal(t, thread, post.Get("thread_ts"))
+		return post
+	}
 	idle := func(t *testing.T, key domain.SessionKey) domain.Session {
 		t.Helper()
 		var saved domain.Session
@@ -232,23 +242,16 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	})
 	run("b_top_level_chat_and_work", func(t *testing.T) {
 		send(t, "C_ROOM", "", "<@U_BOT> Hi! How are you?")
-		post := liveTake(t, slack.posts)
-		require.Equal(t, "C_ROOM", post.Get("channel"))
-		require.Empty(t, post.Get("thread_ts"))
+		postAt(t, "slack:C_ROOM:")
 		idle(t, "slack:C_ROOM:")
 		send(t, "C_ROOM", "", "<@U_BOT> Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
-		thread := lastMessageTS
-		post = liveTake(t, slack.posts)
-		require.Equal(t, "C_ROOM", post.Get("channel"))
-		require.Equal(t, thread, post.Get("thread_ts"))
+		post := postAt(t, domain.NewConversationRef("slack", "C_ROOM", lastMessageTS))
 		require.NotEmpty(t, post.Get("text"))
 		idle(t, "slack:C_ROOM:")
 	})
 	run("b_DM_work", func(t *testing.T) {
 		send(t, "D_OWNER", "", "Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
-		post := liveTake(t, slack.posts)
-		require.Equal(t, "D_OWNER", post.Get("channel"))
-		require.Empty(t, post.Get("thread_ts"))
+		post := postAt(t, "slack:D_OWNER:")
 		require.NotEmpty(t, post.Get("text"))
 		idle(t, "slack:D_OWNER:")
 	})

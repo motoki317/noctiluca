@@ -57,9 +57,10 @@ func TestCodexRunHelper(t *testing.T) {
 			if os.Getenv("NOCTILUCA_CODEX_RUN_HANG") == "1" {
 				continue
 			}
-			_, targets, ok := strings.Cut(request.Params.Input[0].Text, "reply → ")
+			_, refs, ok := strings.Cut(request.Params.Input[0].Text, "\nrefs: conversation=")
 			require.True(t, ok)
-			target, _, _ := strings.Cut(targets, " | work → ")
+			line, _, _ := strings.Cut(refs, "\n")
+			target, _, _ := strings.Cut(line, " thread=")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			client := mcp.NewClient(&mcp.Implementation{Name: "fake-codex", Version: "1"}, nil)
 			session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint.URL,

@@ -32,8 +32,9 @@ type toolInput struct {
 
 func (a *adapter) ToolNotes() string {
 	return fmt.Sprintf("traQ has no threads. A ref ending in a colon is a channel. "+
-		"A channel work target ends in the request's message ID: replying to it appends the request's URL as a quote. "+
-		"With %[1]s_send or %[1]s_upload_file, set quote_message_id to that ID. Tool arguments are bare IDs. "+
+		"A channel input (a message or a stamp) also has a `quote` ref: posting there posts in the channel and quotes the message. "+
+		"Post chat at `conversation` and work at `quote`. In a DM, post at `conversation`. "+
+		"With %[1]s_send or %[1]s_upload_file, set quote_message_id to the message ID at the end of the `quote` ref you post to. Tool arguments are bare IDs. "+
 		"Use %[1]s_read_message, %[1]s_read_history, and %[1]s_search for context. "+
 		"Text uses Markdown and @username mentions. The 10000-character limit includes file and quote URLs. "+
 		"A file ID is the UUID in a /files/<id> URL in message text.", a.name)
@@ -78,12 +79,12 @@ func (a *adapter) Tools() []domain.Tool {
 		}}
 	}
 	return []domain.Tool{
-		tool("send", "Post Markdown in a channel. When the work target ends in a message ID, set quote_message_id to it.", map[string]any{"channel": id, "text": str, "quote_message_id": id}, []string{"channel", "text"}, a.sendTool),
+		tool("send", "Post Markdown in a channel.", map[string]any{"channel": id, "text": str, "quote_message_id": id}, []string{"channel", "text"}, a.sendTool),
 		tool("read_history", "Read channel messages, newest first. Continue with next_offset.", map[string]any{"channel": id, "limit": limit, "offset": offset}, []string{"channel"}, a.readHistory),
 		tool("read_message", "Read one message by ID.", map[string]any{"message_id": id}, []string{"message_id"}, a.readMessage),
 		tool("search", "Search traQ messages by words, optionally within a channel.", map[string]any{"query": str, "channel": id, "limit": limit, "offset": offset}, []string{"query"}, a.search),
 		tool("download_file", "Download a file as raw bytes to a new local path.", map[string]any{"file_id": id, "path": str}, []string{"file_id", "path"}, a.download),
-		tool("upload_file", "Upload a local file and post its URL. When the work target ends in a message ID, set quote_message_id to it.", map[string]any{"channel": id, "path": str, "text": str, "quote_message_id": id}, []string{"channel", "path"}, a.upload),
+		tool("upload_file", "Upload a local file and post its URL.", map[string]any{"channel": id, "path": str, "text": str, "quote_message_id": id}, []string{"channel", "path"}, a.upload),
 		tool("react", "Add a stamp to a message by stamp name.", map[string]any{"message_id": id, "stamp": str}, []string{"message_id", "stamp"}, a.react),
 	}
 }

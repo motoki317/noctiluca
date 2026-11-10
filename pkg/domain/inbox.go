@@ -7,6 +7,7 @@ import (
 
 type InboxPayload struct {
 	Target        ConversationRef `json:",omitempty"`
+	MessageRef    ConversationRef `json:",omitempty"`
 	Continuations int             `json:",omitempty"`
 	Procedure     string          `json:",omitempty"`
 	Notice        string          `json:",omitempty"`

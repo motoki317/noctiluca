@@ -215,6 +215,14 @@ func Conversation(name, channel, thread string) domain.ConversationRef {
 	return domain.NewConversationRef(name, channel, thread)
 }
 
+func (a *adapter) PostRefs(conversation, message domain.ConversationRef, direct bool) []domain.NamedRef {
+	_, thread, err := a.destination(conversation)
+	if err != nil || direct || message == "" || thread != 0 {
+		return nil
+	}
+	return []domain.NamedRef{{Name: "thread", Ref: message}}
+}
+
 func parseID(value string) (snowflake.ID, error) {
 	id, err := snowflake.Parse(value)
 	if err != nil || id == 0 || id.String() != value {

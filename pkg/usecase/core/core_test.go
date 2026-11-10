@@ -280,7 +280,7 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	s := take(t, f.model.opened)
 	input := take(t, s.inputs)
 	require.Contains(t, input.Text, "test:room · thread | member |")
-	require.Contains(t, input.Text, "reply → test:thread-a | work → test:thread-a")
+	require.Contains(t, input.Text, "\nrefs: conversation=test:thread-a\n\n")
 	require.NotContains(t, input.Text, "old parent history")
 	require.NotContains(t, input.Text, "memory context")
 	require.Contains(t, s.config.SystemPrompt, "memory context")
@@ -303,7 +303,7 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	}
 	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test:room"})
 	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"text":"missing target"}`))
-	require.ErrorContains(t, err, "target is required")
+	require.EqualError(t, err, "target is required; copy a ref from the input")
 	for _, target := range []string{"test:thread-a", "test:thread-b", "test:room", "test:room-message"} {
 		_, err = f.hub.tools["reply"].Handler(ctx, json.RawMessage(fmt.Sprintf(`{"target":%q,"text":"answer"}`, target)))
 		require.NoError(t, err)

@@ -41,7 +41,7 @@ func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
 		require.Contains(t, item.SourceKey, "interrupted:"+string(item.SessionKey)+":")
 		require.Nil(t, item.Payload.Event)
 		if item.Lane == "conv" {
-			require.Equal(t, "previous turn was interrupted: restart\nThe interrupted turn may cover several inputs: finish each unfinished part at its input's reply or work target from history.", item.Payload.Input.Text)
+			require.Equal(t, "previous turn was interrupted: restart\nThe interrupted turn may cover several inputs: finish each unfinished part at the ref its input's refs and the messaging notes call for.", item.Payload.Input.Text)
 			require.Equal(t, domain.ConversationRef("thread"), item.Payload.Target)
 			require.Equal(t, domain.SessionContext{Conversation: "conv"}, item.Payload.Context)
 		} else {
@@ -49,6 +49,7 @@ func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
 			require.Empty(t, item.Payload.Target)
 			require.Equal(t, domain.SessionContext{TaskName: "daily"}, item.Payload.Context)
 		}
+		require.Empty(t, item.Payload.MessageRef)
 	}
 	var done, events int
 	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE status='done'").Scan(&done))
@@ -78,17 +79,19 @@ func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
 	require.Empty(t, active)
 }
 
-func TestInterruptedConversationWorkTarget(t *testing.T) {
+func TestInterruptedConversationRefs(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		payload domain.InboxPayload
 		opening string
 		want    domain.ConversationRef
+		message domain.ConversationRef
 	}{
-		{name: "top level", payload: domain.InboxPayload{Target: "ignored", Event: &domain.InboundEvent{Conversation: "room", MessageRef: "message"}}, want: "message"},
-		{name: "thread", payload: domain.InboxPayload{Event: &domain.InboundEvent{Conversation: "thread", Parent: "room", MessageRef: "message"}}, want: "thread"},
-		{name: "direct", payload: domain.InboxPayload{Event: &domain.InboundEvent{Conversation: "dm", MessageRef: "message", Direct: true}}, want: "dm"},
+		{name: "top level", payload: domain.InboxPayload{Target: "ignored", MessageRef: "ignored", Event: &domain.InboundEvent{Conversation: "room", MessageRef: "message"}}, want: "room", message: "message"},
+		{name: "thread", payload: domain.InboxPayload{Event: &domain.InboundEvent{Conversation: "thread", Parent: "room", MessageRef: "message"}}, want: "thread", message: "message"},
+		{name: "direct", payload: domain.InboxPayload{Event: &domain.InboundEvent{Conversation: "dm", MessageRef: "message", Direct: true}}, want: "dm", message: "message"},
 		{name: "wake note", payload: domain.InboxPayload{Target: "wake-thread"}, want: "wake-thread"},
+		{name: "continuation", payload: domain.InboxPayload{Target: "room", MessageRef: "message"}, want: "room", message: "message"},
 		{name: "empty event target", payload: domain.InboxPayload{Target: "ignored", Event: &domain.InboundEvent{}}, want: "room"},
 		{name: "empty target", want: "room"},
 		{name: "turn without an opening input", opening: "none", want: "room"},
@@ -128,9 +131,10 @@ func TestInterruptedConversationWorkTarget(t *testing.T) {
 			}
 			require.Len(t, active, 1)
 			require.Equal(t, tc.want, active[0].Payload.Target)
+			require.Equal(t, tc.message, active[0].Payload.MessageRef)
 			require.Equal(t, info, active[0].Payload.Context)
 			require.Nil(t, active[0].Payload.Event)
-			require.Equal(t, "previous turn was interrupted: model process exited\nThe interrupted turn may cover several inputs: finish each unfinished part at its input's reply or work target from history.", active[0].Payload.Input.Text)
+			require.Equal(t, "previous turn was interrupted: model process exited\nThe interrupted turn may cover several inputs: finish each unfinished part at the ref its input's refs and the messaging notes call for.", active[0].Payload.Input.Text)
 		})
 	}
 }
@@ -141,7 +145,8 @@ func TestRecoverContinuesConversationWithMalformedOpeningPayload(t *testing.T) {
 		payload string
 	}{
 		{name: "array", payload: `[]`},
-		{name: "partially decoded target", payload: `{"Target":"wrong-thread","Continuations":"invalid"}`},
+		{name: "partially decoded refs", payload: `{"Target":"wrong-thread","MessageRef":"wrong-message","Continuations":"invalid"}`},
+		{name: "old payload", payload: `{"Target":""}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
@@ -166,6 +171,7 @@ func TestRecoverContinuesConversationWithMalformedOpeningPayload(t *testing.T) {
 			require.NotEqual(t, id, active[0].ID)
 			require.Equal(t, "conv", active[0].Lane)
 			require.Equal(t, domain.ConversationRef("room"), active[0].Payload.Target)
+			require.Empty(t, active[0].Payload.MessageRef)
 			require.Equal(t, info, active[0].Payload.Context)
 			require.Equal(t, 1, active[0].Payload.Continuations)
 			require.Nil(t, active[0].Payload.Event)

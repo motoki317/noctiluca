@@ -66,9 +66,13 @@ func TestRunTraQCLIHelper(t *testing.T) {
 		if frame.Type != "user" {
 			continue
 		}
-		_, targets, ok := strings.Cut(frame.Message.Content, "work → ")
+		_, refs, ok := strings.Cut(frame.Message.Content, "\nrefs: conversation=")
 		require.True(t, ok)
-		target, _, _ := strings.Cut(targets, "\n")
+		line, _, _ := strings.Cut(refs, "\n")
+		target, quote, _ := strings.Cut(line, " quote=")
+		if quote != "" {
+			target = quote
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		endpoint := config.Servers["noctiluca"]
 		client := mcp.NewClient(&mcp.Implementation{Name: "test-model", Version: "1"}, nil)

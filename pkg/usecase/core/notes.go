@@ -7,13 +7,13 @@ import (
 
 func (c *core) toolNotes() string {
 	var notes strings.Builder
-	notes.WriteString("One session covers a channel and all its threads. Inputs name the sender, place, local time, and reply/work targets. " +
-		"Process queued conversation messages delivered during tool calls. Each has its own sender and targets. " +
+	notes.WriteString("One session covers a channel and all its threads. Inputs name the sender, place, and local time, and end the header with refs: `conversation` is where the input was posted, or the ref it was scheduled with; any other ref is named and explained in its messaging entry's notes. " +
+		"Process queued conversation messages delivered during tool calls. Each has its own sender and refs. " +
 		"Reply only when addressed (a mention, a request to you, or a DM). " +
-		"Stay silent for chatter between other people. Copy targets exactly. " +
-		"Use the work target for watch and wake_at. Native background completions use the work target saved from their request. " +
+		"Stay silent for chatter between other people. Copy refs exactly. " +
+		"Give watch and wake_at the ref where the result should be posted. A native background completion is work for the input that started it. " +
 		"Run long work with your background tools or watch and end the turn immediately. Do not wait or poll. " +
-		"Reply attachments must come from the same messaging entry as the reply target (the target's first segment).\n\n")
+		"Reply attachments must come from the same messaging entry as the ref you post to (its first segment).\n\n")
 	notes.WriteString(c.replyTool().Description)
 	for _, instance := range c.messaging.instances {
 		if text := instance.config.Adapter.ToolNotes(); text != "" {

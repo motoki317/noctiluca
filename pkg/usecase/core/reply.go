@@ -10,8 +10,8 @@ import (
 )
 
 func (c *core) replyTool() domain.Tool {
-	return domain.Tool{Name: "reply", Description: `Post only when addressed or reporting requested work. Copy the input's reply target for chat and factual answers. Copy its work target for shell commands, reviews, drafts, and background completions. Both targets preserve existing threads and keep top-level DMs at top level.
-If the message arrived before your last reply, answer only what it adds. Do not repeat your previous reply. If a follow-up asks to append a phrase, send only that phrase once the answer is posted.`, InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy the reply target for chat, or the work target for work and background completions."},"text":{"type":"string"},"attachments":{"type":"array","items":{"type":"object","properties":{"Ref":{"type":"string"},"Name":{"type":"string"},"MIMEType":{"type":"string"}},"required":["Ref"],"additionalProperties":false}}},"required":["target","text"],"additionalProperties":false}`), Handler: c.reply}
+	return domain.Tool{Name: "reply", Description: `Post only when addressed or reporting requested work. Pass a ref from the input, or ` + "`owner`" + ` for the owner's DM. Chat is small talk and factual answers; work is shell commands, reviews, and drafts. Each messaging entry's notes say which ref each goes to.
+If the message arrived before your last reply, answer only what it adds. Do not repeat your previous reply. If a follow-up asks to append a phrase, send only that phrase once the answer is posted.`, InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"A ref from the input, or owner."},"text":{"type":"string"},"attachments":{"type":"array","items":{"type":"object","properties":{"Ref":{"type":"string"},"Name":{"type":"string"},"MIMEType":{"type":"string"}},"required":["Ref"],"additionalProperties":false}}},"required":["target","text"],"additionalProperties":false}`), Handler: c.reply}
 }
 
 func (c *core) reply(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -32,7 +32,7 @@ func (c *core) reply(ctx context.Context, raw json.RawMessage) (json.RawMessage,
 		return nil, err
 	}
 	if args.Target == "" {
-		return nil, errors.New("target is required; copy a target from the input")
+		return nil, errors.New("target is required; copy a ref from the input")
 	}
 	if args.Target == "owner" {
 		first := c.messaging.instances[0]

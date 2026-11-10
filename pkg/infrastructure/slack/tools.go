@@ -37,10 +37,12 @@ type toolInput struct {
 
 func (a *adapter) ToolNotes() string {
 	return "A ref ending in a colon is top level: do not append a timestamp. " +
+		"A top-level channel input (a message or a reaction) also has a `thread` ref, the thread under that message: post chat at `conversation` and work at `thread`. " +
+		"Other inputs have only `conversation`; post there. " +
 		fmt.Sprintf("Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context. Slack tools take bare channel IDs. "+
 			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true. "+
-			"When you decide to post in a thread, call %[1]s_set_status on it before your other tools. The work target of a top-level channel message is its thread. "+
-			"Your post there clears the status, so call it again when work continues after a post. Skip it when the target you post to ends in a colon.", a.name)
+			"When you decide to post in a thread, call %[1]s_set_status on it before your other tools. "+
+			"Your post there clears the status, so call it again when work continues after a post. Skip it for a ref ending in a colon.", a.name)
 }
 
 func (a *adapter) Tools() []domain.Tool {
@@ -74,10 +76,10 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("read_history", "Read recent channel messages. Returns messages and the next cursor.", map[string]any{"channel": str, "limit": limit, "cursor": str}, []string{"channel"}, a.readHistory),
 		tool("search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
 		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
-		tool("upload_file", "Upload a local file to the input's work target. Omit thread_ts for a top-level DM. Otherwise use the thread timestamp from that target. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
+		tool("upload_file", "Upload a local file. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
 		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
 		tool("set_status", "Show \"<app name> <status>\" with a loading animation in a thread, for example status \"is looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": str}, []string{"channel", "thread_ts", "status"}, a.setStatus),
-		tool("send", "Post Markdown text using the same target rules as reply: keep existing threads, top level for chat and DM work, message thread for channel work. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
+		tool("send", "Post Markdown text. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
 

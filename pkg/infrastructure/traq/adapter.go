@@ -71,6 +71,13 @@ func Conversation(name, channel, message string) domain.ConversationRef {
 	return domain.NewConversationRef(name, channel, message)
 }
 
+func (a *adapter) PostRefs(_, message domain.ConversationRef, direct bool) []domain.NamedRef {
+	if direct || message == "" {
+		return nil
+	}
+	return []domain.NamedRef{{Name: "quote", Ref: message}}
+}
+
 func (a *adapter) destination(ref domain.ConversationRef) (string, string, error) {
 	name, channel, message, ok := domain.ParseConversationRef(ref)
 	if !ok || name != a.name || !validID(channel) || (message != "" && !validID(message)) {
