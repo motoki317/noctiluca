@@ -77,6 +77,9 @@ func newRunSlack(t *testing.T, beforePost func(context.Context, url.Values)) *ru
 				}
 				s.acks <- ack.EnvelopeID
 			}
+		case "/assistant.threads.setStatus":
+			// The model may set a thread status before it posts there.
+			_, _ = io.WriteString(w, `{"ok":true}`)
 		case "/conversations.open":
 			_, _ = io.WriteString(w, `{"ok":true,"channel":{"id":"D_OWNER"}}`)
 		case "/chat.postMessage":
