@@ -153,9 +153,9 @@ func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
 	for _, sentence := range []string{
 		"One session covers a channel and all its threads.", "Post only when addressed or reporting requested work.",
 		"Reply only when addressed (a mention, a request to you, or a DM). Stay silent for chatter between other people.",
-		"Copy targets exactly.", "Use the work target for watch and wake_at.", "Do not wait or poll.",
+		"Copy refs exactly.", "Give watch and wake_at the ref where the result should be posted.", "Do not wait or poll.",
 		"Run long work with your background tools or watch and end the turn immediately.",
-		"Reply attachments must come from the same messaging entry as the reply target (the target's first segment).",
+		"Reply attachments must come from the same messaging entry as the ref you post to (its first segment).",
 		"alpha:\n" + alpha.ToolNotes(), "beta:\n" + beta.ToolNotes(),
 	} {
 		require.Equal(t, 1, strings.Count(second.config.SystemPrompt, sentence), sentence)

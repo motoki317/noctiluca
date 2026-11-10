@@ -81,8 +81,8 @@ func (w *watcher) complete(ctx context.Context, id int64, outcome string) error 
 
 func (w *watcher) Tools() []domain.Tool {
 	return []domain.Tool{
-		{Name: "wake_at", Description: "Schedule a note at an RFC3339 time, then end this turn. Copy the input's work target. Completion returns with that target.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy the input's work target exactly."},"at":{"type":"string"},"note":{"type":"string","minLength":1}},"required":["target","at","note"],"additionalProperties":false}`), Handler: w.wake},
-		{Name: "watch", Description: "Start a shell command and end this turn immediately. Its exit code and output tail return as a new input. Copy the input's work target. Completion returns with that target.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"Copy the input's work target exactly."},"command":{"type":"string","minLength":1},"cwd":{"type":"string","minLength":1}},"required":["target","command","cwd"],"additionalProperties":false}`), Handler: w.watch},
+		{Name: "wake_at", Description: "Schedule a note at an RFC3339 time, then end this turn. The note returns with the ref you pass as target.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"The ref where the result should be posted."},"at":{"type":"string"},"note":{"type":"string","minLength":1}},"required":["target","at","note"],"additionalProperties":false}`), Handler: w.wake},
+		{Name: "watch", Description: "Start a shell command and end this turn immediately. Its exit code and output tail return as a new input with the ref you pass as target.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","minLength":1,"description":"The ref where the result should be posted."},"command":{"type":"string","minLength":1},"cwd":{"type":"string","minLength":1}},"required":["target","command","cwd"],"additionalProperties":false}`), Handler: w.watch},
 	}
 }
 

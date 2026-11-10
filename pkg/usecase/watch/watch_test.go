@@ -62,6 +62,22 @@ func toolContext(t *testing.T) context.Context {
 	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: "origin"})
 }
 
+func TestBackgroundToolRefDescriptions(t *testing.T) {
+	w := &watcher{}
+	for i, description := range []string{
+		"Schedule a note at an RFC3339 time, then end this turn. The note returns with the ref you pass as target.",
+		"Start a shell command and end this turn immediately. Its exit code and output tail return as a new input with the ref you pass as target.",
+	} {
+		tool := w.Tools()[i]
+		require.Equal(t, description, tool.Description)
+		var schema struct {
+			Properties map[string]struct{ Description string }
+		}
+		require.NoError(t, json.Unmarshal(tool.InputSchema, &schema))
+		require.Equal(t, "The ref where the result should be posted.", schema.Properties["target"].Description)
+	}
+}
+
 func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	_, inbox, factory := setup(t)
 	at := time.Now().Add(time.Hour).UTC()

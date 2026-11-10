@@ -18,7 +18,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 ## Sessions and replies
 
 - One session per channel. Threads in a channel share context. The cost is that one channel's turns run in order. Background tools keep turns short.
-- Explicit reply targets. With several threads in one session, an implicit "current conversation" picks the wrong thread.
+- Explicit post refs. With several threads in one session, an implicit "current conversation" picks the wrong thread, so every post names a ref from an input.
 - Only tools post. OpenClaw posted the final text unless it was a magic `NO_REPLY` string, which caused stray posts.
 
 ## Model adapter

@@ -128,12 +128,14 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 			item := domain.InboxItem{SourceKey: source, SessionKey: key, Lane: "task", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Context: *info, Input: domain.UserInput{Text: note}}}
 			if info.TaskName == "" {
 				item.Lane = "conv"
-				item.Payload.Input.Text += "\nThe interrupted turn may cover several inputs: finish each unfinished part at its input's reply or work target from history."
+				item.Payload.Input.Text += "\nThe interrupted turn may cover several inputs: finish each unfinished part at the ref its input's refs and the messaging notes call for."
 				var input domain.InboxPayload
 				if json.Unmarshal([]byte(rawInput), &input) == nil {
 					item.Payload.Target = input.Target
+					item.Payload.MessageRef = input.MessageRef
 					if input.Event != nil {
-						item.Payload.Target = input.Event.WorkTarget()
+						item.Payload.Target = input.Event.Conversation
+						item.Payload.MessageRef = input.Event.MessageRef
 					}
 				}
 				if item.Payload.Target == "" {

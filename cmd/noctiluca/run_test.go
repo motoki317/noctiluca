@@ -147,9 +147,13 @@ func TestRunCLIHelper(t *testing.T) {
 		for _, name := range []string{"reply", "watch", "wake_at", "schedule_add", "slack_read_history"} {
 			require.True(t, names[name], name)
 		}
-		_, targets, ok := strings.Cut(capture.Input, "reply → ")
+		_, refs, ok := strings.Cut(capture.Input, "\nrefs: conversation=")
 		require.True(t, ok)
-		target, _, _ := strings.Cut(targets, " | work → ")
+		line, _, _ := strings.Cut(refs, "\n")
+		target, thread, _ := strings.Cut(line, " thread=")
+		if os.Getenv("NOCTILUCA_RUN_WORK") == "1" && thread != "" {
+			target = thread
+		}
 		if !recovery {
 			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "watch", Arguments: map[string]any{
 				"target": target, "command": `NOCTILUCA_RUN_CHILD=1 exec "$NOCTILUCA_RUN_TEST_BINARY" -test.run=TestRunCLIHelper`, "cwd": os.Getenv("NOCTILUCA_RUN_TEST_DIR"),

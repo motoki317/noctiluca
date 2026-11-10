@@ -152,6 +152,14 @@ func Conversation(name, channel, thread string) domain.ConversationRef {
 	return domain.NewConversationRef(name, channel, thread)
 }
 
+func (a *adapter) PostRefs(conversation, message domain.ConversationRef, direct bool) []domain.NamedRef {
+	_, thread, err := a.destination(conversation)
+	if err != nil || direct || message == "" || thread != "" {
+		return nil
+	}
+	return []domain.NamedRef{{Name: "thread", Ref: message}}
+}
+
 func (a *adapter) destination(ref domain.ConversationRef) (string, string, error) {
 	name, channel, thread, ok := domain.ParseConversationRef(ref)
 	if !ok || name != a.name || channel == "" || strings.ContainsAny(channel, " \t\n\r") {
