@@ -57,7 +57,7 @@ A row counts as delivered when the model reports that it started on the row's in
 ## Sessions
 
 - A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, consolidation) runs in its own session.
-- Chat and watch/wake inputs name the place, sender, and local time, with ordering context and copyable `reply` and `work` targets. `reply` always takes an explicit target.
+- Chat and watch/wake inputs name the place, sender, and local time, with ordering context. The header ends with `refs: conversation=<ref>` and any refs the messaging adapter names for the input, such as Slack's `thread`. The adapter's notes say which ref chat and work go to. `reply` always takes an explicit ref.
 - A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
 
@@ -68,7 +68,7 @@ Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at`
 - A row that fails to send, or that the model refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
 - After three failed attempts a row is dead, and the owner gets one DM about that row.
 - Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
-- A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input at that input's own reply or work target. A turn cut at its timeout does not continue. Tasks notify the owner.
+- A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input at the ref its input's refs and the adapter's notes call for. A turn cut at its timeout does not continue. Tasks notify the owner.
 - Conversation sessions run concurrently. Scheduled tasks run one at a time.
 - A failed row never stops the process. Only a failure of SQLite or of the tool-hub listener does.
 
