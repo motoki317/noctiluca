@@ -37,7 +37,7 @@ type toolInput struct {
 
 func (a *adapter) ToolNotes() string {
 	return "A ref ending in a colon is top level: do not append a timestamp. " +
-		"A top-level channel input (a message or a reaction) also has a `thread` ref, the thread under that message: post chat at `conversation` and work at `thread`. " +
+		"A top-level channel input (a message or a reaction) also has a `thread` ref, the thread under that message. Post chat and quick answers at `conversation`, and work (commands, investigations, reviews, drafts, and their background results) at `thread`. " +
 		"Other inputs have only `conversation`; post there. " +
 		fmt.Sprintf("Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context. Slack tools take bare channel IDs. "+
 			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true. "+

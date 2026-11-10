@@ -57,7 +57,7 @@ A row counts as delivered when the model reports that it started on the row's in
 ## Sessions
 
 - A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, consolidation) runs in its own session.
-- Chat and watch/wake inputs name the place, sender, and local time, with ordering context. The header ends with `refs: conversation=<ref>` and any refs the messaging adapter names for the input, such as Slack's `thread`. The adapter's notes say which ref chat and work go to. `reply` always takes an explicit ref.
+- Chat and watch/wake inputs name the place, sender, and local time, with ordering context. The header ends with `refs: conversation=<ref>` and any refs the messaging adapter names for the input, such as Slack's `thread`. The adapter's notes say which ref to post at. `reply` always takes an explicit ref.
 - A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
 
