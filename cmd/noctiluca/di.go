@@ -92,7 +92,9 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		var adapter domain.MessagingAdapter
 		switch instance.Type {
 		case "slack":
-			adapter, err = slack.New(instance.Name, tokens[i].Slack, events, slackOptions...)
+			slackConfig := tokens[i].Slack
+			slackConfig.Owner = instance.Owner
+			adapter, err = slack.New(instance.Name, slackConfig, events, slackOptions...)
 		case "discord":
 			adapter, err = discord.New(instance.Name, discord.Config{Token: tokens[i].DiscordToken, Owner: instance.Owner, NeedGroups: needsGroups(trust, rules)}, events)
 		case "traq":

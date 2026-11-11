@@ -95,6 +95,8 @@ heartbeat: {enabled: false}
 		case "/conversations.open":
 			require.Equal(t, owners[name], r.Form.Get("users"))
 			fmt.Fprint(w, `{"ok":true,"channel":{"id":"D_OWNER"}}`)
+		case "/conversations.history", "/conversations.replies":
+			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
 		case "/chat.postMessage":
 			posts <- r.Form
 			_, _ = fmt.Fprintf(w, `{"ok":true,"channel":%q,"ts":"2.3"}`, r.Form.Get("channel"))

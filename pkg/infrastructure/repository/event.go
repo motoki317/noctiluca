@@ -106,6 +106,27 @@ func (r *eventRepository) LatestMessageTime(ctx context.Context, conversation do
 	return at, err
 }
 
+func (r *eventRepository) ListThreads(ctx context.Context, name string, since time.Time) ([]domain.ConversationRef, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT conversation FROM sends
+		WHERE conversation GLOB ? AND sent_at>=? ORDER BY conversation`, name+":*:?*", since.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []domain.ConversationRef
+	for rows.Next() {
+		var ref domain.ConversationRef
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		entry, channel, thread, ok := domain.ParseConversationRef(ref)
+		if ok && entry == name && channel != "" && thread != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs, rows.Err()
+}
+
 func (r *eventRepository) Search(ctx context.Context, query string, limit int) ([]domain.InboundEvent, error) {
 	if limit <= 0 {
 		return nil, errors.New("limit must be positive")

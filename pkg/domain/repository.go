@@ -34,6 +34,8 @@ type EventRepository interface {
 	GetInbound(ctx context.Context, messageRef ConversationRef) (InboundEvent, error)
 	ListInbound(ctx context.Context, conversation ConversationRef, limit int) ([]InboundEvent, error)
 	ListConversations(ctx context.Context, name string) ([]Conversation, error)
+	// ListThreads selects threads the agent joined through a send at or after since.
+	ListThreads(ctx context.Context, name string, since time.Time) ([]ConversationRef, error)
 	LatestMessageTime(ctx context.Context, conversation ConversationRef) (time.Time, error)
 	ListOutbound(ctx context.Context, conversation ConversationRef, limit int) ([]SentMessage, error)
 	Search(ctx context.Context, query string, limit int) ([]InboundEvent, error)

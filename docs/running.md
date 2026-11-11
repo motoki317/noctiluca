@@ -63,7 +63,12 @@ Each platform's notes tell the agent where to post:
 - On Slack, quick answers stay where the request was made. Work on a top-level channel request, such as command results, reviews, drafts, and background completions, goes in the request's thread.
 - On Discord, the agent talks in the channel, including quick investigations. It starts a thread from the request only for a project that spans days, or when asked.
 - traQ has no threads. Quick answers stay in the channel, and a report on work requested in a channel quotes the request message.
-- Slack redelivers events that noctiluca did not acknowledge. Discord and traQ do not. On each connect, their adapters read back the entry owner's DM and each channel or DM where a message has started a turn, to the last stored event, up to 200 messages or 24 hours: new and edited messages on Discord, and new messages on traQ. In a traQ channel that the bot has not joined, only messages that mention the bot are read back. Thread replies, deletions, reactions, and traQ edits made while noctiluca was down are not recovered.
+
+On each connect, reconnects included, all three adapters read back the messages they missed while disconnected. A read-back message goes through the same trust check as a live one and can start a turn. The adapters read the entry owner's DM and each channel or DM where a top-level message started a turn. In each one they read the messages after the last stored message, at most 24 hours old and at most the newest 200. Discord also reads back edits. In a traQ channel that the bot has not joined, only messages that mention the bot are read back.
+
+Slack also reads back replies in each thread where the agent posted in the last 24 hours, after the agent's last post there or the last stored reply, whichever is later, with the same limits. Replies in other threads are not read back, such as a thread whose parent was posted while disconnected. Discord does not read back thread replies.
+
+Deletions and reactions are not read back. If reading a conversation fails, the adapter logs a warning and skips it. A later live message there moves the last stored message past the gap, so the skipped messages may never be read back.
 
 ## Run
 

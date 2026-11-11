@@ -104,6 +104,68 @@ func TestListConversations(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestListThreads(t *testing.T) {
+	r := repository.NewEventRepository(openDB(t))
+	since := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("offset", 9*3600))
+	refs, err := r.ListThreads(t.Context(), "work_chat", since)
+	require.NoError(t, err)
+	require.Empty(t, refs)
+	accepted, rejected := true, false
+	for _, event := range []domain.InboundEvent{
+		{Conversation: "work_chat:room:message", Accepted: &accepted},
+		{Conversation: "work_chat:room:message", Accepted: &accepted},
+		{Conversation: "work_chat:room:edited", Kind: domain.InboundEventMessageEdited, Accepted: &accepted},
+		{Conversation: "work_chat:room:rejected", Accepted: &rejected},
+		{Conversation: "work_chat:room:unknown"},
+		{Conversation: "work_chat:room:reaction", Kind: domain.InboundEventReaction, Accepted: &accepted},
+		{Conversation: "work_chat:room:old", Accepted: &accepted, ReceivedAt: since.Add(-time.Nanosecond)},
+		{Conversation: "work_chat:room:", Accepted: &accepted},
+		{Conversation: "work_chat::thread", Accepted: &accepted},
+		{Conversation: "work_chat:room:thread:extra", Accepted: &accepted},
+		{Conversation: "workxchat:room:thread", Accepted: &accepted},
+		{Conversation: "work_chat_extra:room:thread", Accepted: &accepted},
+		{Conversation: "WORK_CHAT:room:thread", Accepted: &accepted},
+		{Conversation: "other:room:thread", Accepted: &accepted},
+	} {
+		if event.Kind == "" {
+			event.Kind = domain.InboundEventMessage
+		}
+		if event.ReceivedAt.IsZero() {
+			event.ReceivedAt = since
+		}
+		event.Sender.Kind = domain.SenderHuman
+		require.NoError(t, r.SaveInbound(t.Context(), event))
+	}
+	refs, err = r.ListThreads(t.Context(), "work_chat", since)
+	require.NoError(t, err)
+	require.Empty(t, refs)
+	for _, sent := range []domain.SentMessage{
+		{Conversation: "work_chat:room:sent", SentAt: since.Add(time.Hour)},
+		{Conversation: "work_chat:room:sent", SentAt: since.Add(2 * time.Hour)},
+		{Conversation: "work_chat:room:message", SentAt: since},
+		{Conversation: "work_chat:room:old_send", SentAt: since.Add(-time.Nanosecond)},
+		{Conversation: "work_chat:room:", SentAt: since},
+		{Conversation: "work_chat:room:thread:extra", SentAt: since},
+		{Conversation: "work_chat::thread", SentAt: since},
+		{Conversation: "workxchat:room:thread", SentAt: since},
+		{Conversation: "work_chat_extra:room:thread", SentAt: since},
+		{Conversation: "WORK_CHAT:room:thread", SentAt: since},
+		{Conversation: "other:room:thread", SentAt: since},
+	} {
+		require.NoError(t, r.SaveOutbound(t.Context(), sent))
+	}
+	refs, err = r.ListThreads(t.Context(), "work_chat", since)
+	require.NoError(t, err)
+	require.Equal(t, []domain.ConversationRef{"work_chat:room:message", "work_chat:room:sent"}, refs)
+	refs, err = r.ListThreads(t.Context(), "missing", since)
+	require.NoError(t, err)
+	require.Empty(t, refs)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = r.ListThreads(ctx, "work_chat", since)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestLatestMessageTime(t *testing.T) {
 	r := repository.NewEventRepository(openDB(t))
 	got, err := r.LatestMessageTime(t.Context(), "room")
