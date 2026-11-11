@@ -176,6 +176,6 @@ heartbeat: {enabled: false}
 	require.Equal(t, "D_OWNER", post.Get("channel"))
 	require.Equal(t, "xoxb-support", post.Get("token"))
 	var sources int
-	require.NoError(t, app.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('support:shared-0','slack:shared-0')").Scan(&sources))
+	require.NoError(t, app.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('support:m:CSHARED:1.0','slack:m:CSHARED:1.0')").Scan(&sources))
 	require.Equal(t, 2, sources)
 }

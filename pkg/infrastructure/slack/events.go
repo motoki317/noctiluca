@@ -65,6 +65,9 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		}
 		mentionsMe = a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">")
 		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: mentionsMe, ReceivedAt: time.Now()}
+		if kind == domain.InboundEventMessage {
+			event.SourceKey = a.name + ":m:" + channel + ":" + m.Timestamp
+		}
 		posted := m.Timestamp
 		if kind == domain.InboundEventMessageEdited {
 			posted = e.EventTimeStamp

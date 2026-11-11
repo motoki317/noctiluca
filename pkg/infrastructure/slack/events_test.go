@@ -16,6 +16,21 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
+func TestInboundMessageSourceKeys(t *testing.T) {
+	for _, subtype := range []string{"", "bot_message", "file_share", "me_message", "thread_broadcast"} {
+		t.Run(subtype, func(t *testing.T) {
+			a := apiAdapter(t, func(_ http.ResponseWriter, r *http.Request) { t.Errorf("unexpected API %s", r.URL.Path) }, false)
+			event, accepted := a.inbound(t.Context(), &slackevents.MessageEvent{
+				SubType: subtype, Channel: "D1", User: "U1", TimeStamp: "2.3", ThreadTimeStamp: "1.2",
+			})
+			require.True(t, accepted)
+			require.Equal(t, "slack:m:D1:2.3", event.SourceKey)
+			require.Equal(t, Conversation("slack", "D1", "1.2"), event.Conversation)
+			require.Equal(t, Conversation("slack", "D1", "2.3"), event.MessageRef)
+		})
+	}
+}
+
 func TestInboundNotifications(t *testing.T) {
 	for _, tc := range []struct {
 		name, event, replies  string
