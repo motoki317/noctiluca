@@ -259,10 +259,11 @@ func TestBackfillConsumeFailureStopsStart(t *testing.T) {
 		case "/api/v3/channels/channel/messages":
 			respond(t, w, []sdk.Message{restMessage("backfilled", "channel", "text", time.Now().Add(-time.Minute))})
 		case "/api/v3/bots/ws":
+			// Count before the upgrade: once the client reads the 101 response, Start can return before this handler resumes.
+			connections.Add(1)
 			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 			require.NoError(t, err)
 			defer conn.Close()
-			connections.Add(1)
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
 					return
