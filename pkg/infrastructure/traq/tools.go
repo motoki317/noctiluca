@@ -37,7 +37,8 @@ func (a *adapter) ToolNotes() string {
 		"With %[1]s_send or %[1]s_upload_file, set quote_message_id to the message ID at the end of the `quote` ref you post to. Tool arguments are bare IDs. "+
 		"Use %[1]s_read_message, %[1]s_read_history, and %[1]s_search for context. "+
 		"Text uses Markdown and @username mentions. The 10000-character limit includes file and quote URLs. "+
-		"A file ID is the UUID in a /files/<id> URL in message text.", a.name)
+		"A file ID is the UUID in a /files/<id> URL in message text. "+
+		"If an answer needs any tool besides the reply, first show that you started: add a stamp to the input `message` with %[1]s_react.", a.name)
 }
 
 func (a *adapter) Tools() []domain.Tool {
