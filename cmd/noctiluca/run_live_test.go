@@ -112,7 +112,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		}
 		require.NoError(t, socket.WriteJSON(map[string]any{"type": "events_api", "envelope_id": id, "payload": map[string]any{"type": "event_callback", "event_id": id, "event": event}}))
 		require.Equal(t, id, liveTake(t, slack.acks))
-		return "slack:" + id
+		return "slack:m:" + channel + ":" + lastMessageTS
 	}
 	reply := func(t *testing.T, channel, thread, word string) {
 		t.Helper()

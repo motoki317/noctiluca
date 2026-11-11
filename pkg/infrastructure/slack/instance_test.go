@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 	"github.com/stretchr/testify/require"
@@ -92,8 +94,14 @@ func TestInstanceSocketSourceKeys(t *testing.T) {
 	for _, name := range []string{"slack", "support_2"} {
 		t.Run(name, func(t *testing.T) {
 			a := apiInstance(t, name, func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "/auth.test", r.URL.Path)
-				fmt.Fprint(w, `{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`)
+				switch r.URL.Path {
+				case "/auth.test":
+					fmt.Fprint(w, `{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`)
+				case "/users.info":
+					fmt.Fprint(w, `{"ok":true,"user":{"id":"U1","is_bot":false}}`)
+				default:
+					t.Errorf("unexpected API %s", r.URL.Path)
+				}
 			}, false)
 			stream := make(chan socketmode.Event)
 			a.socketEvents = stream
@@ -107,8 +115,17 @@ func TestInstanceSocketSourceKeys(t *testing.T) {
 				done <- a.Start(ctx, func(_ context.Context, event domain.InboundEvent) error { events <- event; return nil })
 			}()
 			defer func() { cancel(); require.NoError(t, <-done) }()
-			for _, tc := range []struct{ eventID, envelope, want string }{{"event-id", "envelope-id", "event-id"}, {"", "envelope-id", "envelope-id"}} {
-				payload, err := slackevents.ParseEvent(json.RawMessage(fmt.Sprintf(`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":"D1","user":"U1","ts":"1.2"}}`, tc.eventID)), slackevents.OptionNoVerifyToken())
+			for _, tc := range []struct{ event, eventID, envelope, want string }{
+				{`{"type":"message","channel":"D1","user":"U1","ts":"1.2"}`, "event-id", "envelope-id", "m:D1:1.2"},
+				{`{"type":"message","channel":"D1","user":"U1","ts":"1.2"}`, "", "envelope-id", "m:D1:1.2"},
+				{`{"type":"message","subtype":"message_changed","channel":"D1","message":{"user":"U1","ts":"1.2","text":"edited"}}`, "edit-id", "envelope-id", "edit-id"},
+				{`{"type":"message","subtype":"message_changed","channel":"D1","message":{"user":"U1","ts":"1.2","text":"edited"}}`, "", "envelope-id", "envelope-id"},
+				{`{"type":"message","subtype":"message_deleted","channel":"D1","previous_message":{"user":"U1","ts":"1.2"}}`, "delete-id", "envelope-id", "delete-id"},
+				{`{"type":"message","subtype":"message_deleted","channel":"D1","previous_message":{"user":"U1","ts":"1.2"}}`, "", "envelope-id", "envelope-id"},
+				{`{"type":"reaction_added","user":"U1","reaction":"eyes","item":{"type":"message","channel":"D1","ts":"1.2"}}`, "reaction-id", "envelope-id", "reaction-id"},
+				{`{"type":"reaction_added","user":"U1","reaction":"eyes","item":{"type":"message","channel":"D1","ts":"1.2"}}`, "", "envelope-id", "envelope-id"},
+			} {
+				payload, err := slackevents.ParseEvent(json.RawMessage(fmt.Sprintf(`{"type":"event_callback","event_id":%q,"event":%s}`, tc.eventID, tc.event)), slackevents.OptionNoVerifyToken())
 				require.NoError(t, err)
 				select {
 				case stream <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: payload, Request: &socketmode.Request{EnvelopeID: tc.envelope}}:
@@ -125,5 +142,65 @@ func TestInstanceSocketSourceKeys(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSocketInboxDeduplication(t *testing.T) {
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "inbox.db")})
+	require.NoError(t, err)
+	defer db.Close()
+	inbox := repository.NewInboxRepository(db)
+	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth.test":
+			fmt.Fprint(w, `{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`)
+		case "/users.info":
+			fmt.Fprint(w, `{"ok":true,"user":{"id":"U1","is_bot":false}}`)
+		default:
+			t.Errorf("unexpected API %s", r.URL.Path)
+		}
+	}, false)
+	stream := make(chan socketmode.Event)
+	acks := make(chan string, 1)
+	a.socketEvents = stream
+	a.runSocket = func(ctx context.Context) error { <-ctx.Done(); return nil }
+	a.ack = func(_ context.Context, id string, _ any) error { acks <- id; return nil }
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- a.Start(ctx, func(ctx context.Context, event domain.InboundEvent) error {
+			return inbox.Receive(ctx, event, domain.InboxItem{
+				SourceKey: event.SourceKey, SessionKey: domain.SessionKey(event.Conversation), Lane: "conv",
+				ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event},
+			})
+		})
+	}()
+	defer func() { cancel(); require.NoError(t, <-done) }()
+	for _, tc := range []struct {
+		event, id string
+		want      int
+	}{
+		{`{"type":"message","channel":"D1","user":"U1","ts":"1.2"}`, "message-a", 1},
+		{`{"type":"message","channel":"D1","user":"U1","ts":"1.2"}`, "message-b", 1},
+		{`{"type":"reaction_added","user":"U1","reaction":"eyes","item":{"type":"message","channel":"D1","ts":"1.2"}}`, "reaction-a", 2},
+		{`{"type":"reaction_added","user":"U1","reaction":"eyes","item":{"type":"message","channel":"D1","ts":"1.2"}}`, "reaction-b", 3},
+	} {
+		payload, err := slackevents.ParseEvent(json.RawMessage(fmt.Sprintf(`{"type":"event_callback","event_id":%q,"event":%s}`, tc.id, tc.event)), slackevents.OptionNoVerifyToken())
+		require.NoError(t, err)
+		select {
+		case stream <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: payload, Request: &socketmode.Request{EnvelopeID: tc.id}}:
+		case <-ctx.Done():
+			t.Fatal("socket did not accept event")
+		}
+		select {
+		case id := <-acks:
+			require.Equal(t, tc.id, id)
+		case <-ctx.Done():
+			t.Fatal("event was not acknowledged")
+		}
+		items, err := inbox.Active(t.Context())
+		require.NoError(t, err)
+		require.Len(t, items, tc.want)
 	}
 }

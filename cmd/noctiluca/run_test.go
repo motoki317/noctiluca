@@ -224,7 +224,7 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 			defer socketClose.Do(func() { close(socketClosed) })
 			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello"}`)))
 			for i, user := range []string{"U_DENIED", "U_OWNER", "U_OWNER"} {
-				envelope := fmt.Sprintf(`{"type":"events_api","envelope_id":"event-%d","payload":{"type":"event_callback","event_id":"source-%d","event":{"type":"message","channel":"D_DIRECT","channel_type":"im","user":%q,"text":"hello","ts":"1.2"}}}`, i, min(i, 1), user)
+				envelope := fmt.Sprintf(`{"type":"events_api","envelope_id":"event-%d","payload":{"type":"event_callback","event_id":"source-%d","event":{"type":"message","channel":"D_DIRECT","channel_type":"im","user":%q,"text":"hello","ts":"1.%d"}}}`, i, min(i, 1), user, min(i, 1)+1)
 				require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(envelope)))
 			}
 			require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"events_api","envelope_id":"reaction","payload":{"type":"event_callback","event_id":"reaction-source","event":{"type":"reaction_added","user":"U_DENIED","item_user":"U_BOT","reaction":"thumbsdown","item":{"type":"message","channel":"C_UNLISTED","ts":"1.2"}}}}`)))
@@ -361,7 +361,7 @@ mcp_servers:
 	history := repository.NewEventRepository(db)
 	var droppedEvents, droppedInbox int
 	require.NoError(t, db.QueryRow("SELECT count(*) FROM events WHERE message_ref IN ('slack:CCHANNEL:8.1', 'slack:CCHANNEL:8.2')").Scan(&droppedEvents))
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('slack:unjoined-source', 'slack:other-reaction-source')").Scan(&droppedInbox))
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('slack:m:CCHANNEL:8.1', 'slack:other-reaction-source')").Scan(&droppedInbox))
 	require.Zero(t, droppedEvents)
 	require.Zero(t, droppedInbox)
 	inbound, err := history.ListInbound(t.Context(), slack.Conversation("slack", "D_DIRECT", ""), 10)

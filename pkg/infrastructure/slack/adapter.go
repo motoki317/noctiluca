@@ -104,7 +104,7 @@ func (a *adapter) Start(ctx context.Context, consume func(context.Context, domai
 				if e.Type == socketmode.EventTypeEventsAPI {
 					if payload, ok := e.Data.(slackevents.EventsAPIEvent); ok {
 						if event, ok := a.inbound(ctx, payload.InnerEvent.Data); ok {
-							if callback, ok := payload.Data.(*slackevents.EventsAPICallbackEvent); ok {
+							if callback, ok := payload.Data.(*slackevents.EventsAPICallbackEvent); ok && event.SourceKey == "" {
 								event.SourceKey = a.name + ":" + callback.EventID
 							}
 							if event.SourceKey == "" || event.SourceKey == a.name+":" {
