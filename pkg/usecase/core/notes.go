@@ -12,7 +12,7 @@ func (c *core) toolNotes() string {
 		"Reply only when addressed (a mention, a request to you, or a DM). " +
 		"Stay silent for chatter between other people. Copy refs exactly. " +
 		"Give watch and wake_at the ref where the result should be posted. A native background completion continues the input that started it. " +
-		"Run long work with your background tools or watch and end the turn immediately. Do not wait or poll. " +
+		"A message sent during a tool call reaches you only after the call returns, so run anything that may take over a minute, such as a build, a test suite, or a subagent, with your background tools or watch, and end the turn immediately. Do not wait or poll. " +
 		"Reply attachments must come from the same messaging entry as the ref you post to (its first segment).\n\n")
 	notes.WriteString(c.replyTool().Description)
 	for _, instance := range c.messaging.instances {

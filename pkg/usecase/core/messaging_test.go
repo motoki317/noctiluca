@@ -154,7 +154,7 @@ func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
 		"One session covers a channel and all its threads.", "Post only when addressed or reporting requested work.",
 		"Reply only when addressed (a mention, a request to you, or a DM). Stay silent for chatter between other people.",
 		"Copy refs exactly.", "Give watch and wake_at the ref where the result should be posted.", "Do not wait or poll.",
-		"Run long work with your background tools or watch and end the turn immediately.",
+		"run anything that may take over a minute, such as a build, a test suite, or a subagent, with your background tools or watch, and end the turn immediately.",
 		"Reply attachments must come from the same messaging entry as the ref you post to (its first segment).",
 		"alpha:\n" + alpha.ToolNotes(), "beta:\n" + beta.ToolNotes(),
 	} {
