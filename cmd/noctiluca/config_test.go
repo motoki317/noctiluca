@@ -125,7 +125,47 @@ func TestExampleConfig(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "bot-example")
 	_, _, err = c.validateRun()
 	require.NoError(t, err)
-	require.Equal(t, []string{"S_USER_GROUP_ID"}, c.Messaging[0].Trust.Groups)
+	require.Nil(t, c.Messaging[0].Trust)
+	require.Equal(t, domain.AcceptRule{AnySender: true}, c.Messaging[0].Trust.rule())
+}
+
+func TestEntryAndConversationTrustRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		want         domain.AcceptRule
+		wantErr      bool
+	}{
+		{"omitted", "", domain.AcceptRule{AnySender: true}, false},
+		{"empty", "trust: {}", domain.AcceptRule{}, false},
+		{"null", "trust: null", domain.AcceptRule{}, true},
+		{"blank", "trust:", domain.AcceptRule{}, true},
+		{"tilde", "trust: ~", domain.AcceptRule{}, true},
+		{"allowlist", "trust: {users: [U_MEMBER], bots: [U_ALERT]}", domain.AcceptRule{Users: []string{"U_MEMBER"}, Bots: []string{"U_ALERT"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := loadConfig(writeConfig(t, "messaging:\n  - name: chat\n    type: slack\n    owner: U_OWNER\n    "+tc.fields+`
+    conversations:
+      - id: CINHERIT
+        require_mention: true
+      - id: CEMPTY
+        trust: {}
+      - id: CLISTED
+        trust: {users: [U_OTHER]}
+`))
+			if tc.wantErr {
+				require.EqualError(t, err, "invalid config: messaging entry 1.trust cannot be null: omit trust (entries accept any sender, overrides inherit the entry rule) or use trust: {} for the owner only")
+				return
+			}
+			require.NoError(t, err)
+			entry := c.Messaging[0]
+			require.Equal(t, tc.want, entry.Trust.rule())
+			inherited := tc.want
+			inherited.RequireMention = true
+			require.Equal(t, inherited, entry.Conversations[0].rule(entry.Trust))
+			require.Equal(t, domain.AcceptRule{}, entry.Conversations[1].rule(entry.Trust))
+			require.Equal(t, domain.AcceptRule{Users: []string{"U_OTHER"}}, entry.Conversations[2].rule(entry.Trust))
+		})
+	}
 }
 
 func TestExplicitEmptyTrustReplacesEntryTrust(t *testing.T) {

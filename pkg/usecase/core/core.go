@@ -29,6 +29,7 @@ type Config struct {
 }
 type rule struct {
 	users, bots            map[string]struct{}
+	anySender              bool
 	ignore, requireMention bool
 }
 type core struct {
@@ -176,7 +177,7 @@ func (c *core) accepted(event domain.InboundEvent) (rule, bool) {
 	default:
 		return r, false
 	}
-	return r, ok
+	return r, ok || r.anySender
 }
 func (c *core) receive(ctx context.Context, event domain.InboundEvent) error {
 	if event.ReceivedAt.IsZero() {

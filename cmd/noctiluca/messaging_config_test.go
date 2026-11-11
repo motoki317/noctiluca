@@ -55,7 +55,7 @@ func TestMultipleMessagingConfig(t *testing.T) {
 	require.Equal(t, 15*time.Minute, c.Messaging[0].groupRefreshInterval())
 	require.Equal(t, time.Hour, c.Messaging[1].groupRefreshInterval())
 	require.Equal(t, []string{"U_SUPPORT", "U_OTHER"}, c.Messaging[0].Trust.Users)
-	require.Empty(t, c.Messaging[1].Trust.Users)
+	require.Nil(t, c.Messaging[1].Trust)
 	for i, owner := range []string{"U_SUPPORT", "U_OWNER"} {
 		require.Equal(t, []string{owner}, c.Messaging[i].Conversations[0].Trust.Users)
 	}
@@ -298,6 +298,23 @@ func TestTraQOriginValidation(t *testing.T) {
 	}
 }
 
+func TestTraQConfigWithoutTrust(t *testing.T) {
+	t.Setenv("TEST_TRAQ_TOKEN", "fake-token")
+	c, err := loadConfig(writeConfig(t, `messaging:
+  - name: team
+    type: traq
+    owner: '00000000-0000-4000-8000-000000000001'
+    traq: {origin: https://chat.example.org, access_token: {env: TEST_TRAQ_TOKEN}}
+    conversations:
+      - id: '00000000-0000-4000-8000-000000000003'
+        require_mention: true
+`))
+	require.NoError(t, err)
+	require.Nil(t, c.Messaging[0].Trust)
+	_, _, err = c.validateRun()
+	require.NoError(t, err)
+}
+
 func TestTraQConfigRequiresUUIDsBeforeResources(t *testing.T) {
 	t.Setenv("TEST_TRAQ_TOKEN", "fake-token")
 	const valid = "00000000-0000-4000-8000-000000abcdef"
@@ -463,8 +480,7 @@ func TestNullOverrideTrustRejected(t *testing.T) {
     conversations:
       - id: CROOM
         trust: `+value+"\n"))
-		require.ErrorContains(t, err, "conversations[0].trust cannot be null")
-		require.ErrorContains(t, err, "trust: {} means the owner only")
+		require.EqualError(t, err, "invalid config: messaging entry 1 conversations[0].trust cannot be null: omit trust (entries accept any sender, overrides inherit the entry rule) or use trust: {} for the owner only")
 	}
 }
 

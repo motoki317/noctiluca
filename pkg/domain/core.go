@@ -3,6 +3,7 @@ package domain
 import "context"
 
 type AcceptRule struct {
+	AnySender      bool
 	Users          []string
 	Groups         []string
 	Bots           []string

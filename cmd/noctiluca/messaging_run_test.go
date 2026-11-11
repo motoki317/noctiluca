@@ -42,8 +42,7 @@ func TestRunMultipleMessagingInstances(t *testing.T) {
       app_token: {env: support_APP}
       bot_token: {env: support_BOT}
       group_refresh_interval: 10ms
-    trust: {groups: [S_SHARED], bots: [U_ALERT]}
-    conversations: [{id: CSHARED, require_mention: true}]
+    conversations: [{id: CSHARED, require_mention: true}, {id: COWNER, trust: {}}]
   - name: slack
     type: slack
     owner: U_OWNER
@@ -149,8 +148,12 @@ heartbeat: {enabled: false}
 			{"C_UNLISTED", "U_MEMBER", "", true},
 			{"D_FRIEND", "U_MEMBER", "", true},
 			{"C_UNLISTED", "U_ALERT", "B_ALERT", true},
-			{"C_UNLISTED", "U_MEMBER", "B_OTHER", false},
-			{"C_UNLISTED", "U_ALERT", "", false},
+			{"C_UNLISTED", "U_MEMBER", "B_OTHER", name == "support"},
+			{"C_UNLISTED", "U_ALERT", "", name == "support"},
+			{"D_FRIEND", "U_MEMBER", "B_OTHER", name == "support"},
+			{"COWNER", owners[name], "", true},
+			{"COWNER", "U_MEMBER", "", name == "slack"},
+			{"COWNER", "U_ALERT", "B_ALERT", name == "slack"},
 		} {
 			channel := tc.channel
 			id := fmt.Sprintf("shared-%d", i)
