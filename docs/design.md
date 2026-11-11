@@ -40,7 +40,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 
 | Workload | What it needs |
 |---|---|
-| Owner DMs, team channels open to a user group, with or without mentions | entry `trust`, conversation overrides, group refresh |
+| DMs and team channels open to humans and bots, with or without mentions | any sender by default, optional `trust` allowlists, conversation overrides, group refresh |
 | Alert channels where bot posts start an investigation, a reaction marks it done | top-level bot posts, replies in joined threads, read tools that show reactions on alert posts |
 | Hourly heartbeat over a todo list | heartbeat schedule, `procedures/heartbeat.md` |
 | Daily photo: morning DM preview, evening thread post sent to the channel too | cron with timezone, upload and broadcast tools |

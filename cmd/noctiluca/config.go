@@ -61,7 +61,10 @@ type trustConfig struct {
 	Bots   []string `mapstructure:"bots"`
 }
 
-func (t trustConfig) rule() domain.AcceptRule {
+func (t *trustConfig) rule() domain.AcceptRule {
+	if t == nil {
+		return domain.AcceptRule{AnySender: true}
+	}
 	return domain.AcceptRule{Users: t.Users, Groups: t.Groups, Bots: t.Bots}
 }
 
@@ -72,9 +75,9 @@ type conversationConfig struct {
 	Trust          *trustConfig `mapstructure:"trust"`
 }
 
-func (c conversationConfig) rule(entry trustConfig) domain.AcceptRule {
+func (c conversationConfig) rule(entry *trustConfig) domain.AcceptRule {
 	if c.Trust != nil {
-		entry = *c.Trust
+		entry = c.Trust
 	}
 	r := entry.rule()
 	r.Ignore, r.RequireMention = c.Ignore, c.RequireMention
@@ -98,7 +101,7 @@ type messagingConfig struct {
 		Origin      string    `mapstructure:"origin"`
 		AccessToken secretRef `mapstructure:"access_token"`
 	} `mapstructure:"traq"`
-	Trust         trustConfig          `mapstructure:"trust"`
+	Trust         *trustConfig         `mapstructure:"trust"`
 	Conversations []conversationConfig `mapstructure:"conversations"`
 }
 
@@ -234,17 +237,26 @@ func loadConfig(path string) (Config, error) {
 	if err := v.UnmarshalExact(&config); err != nil {
 		return Config{}, errors.New("invalid config: check field names and value types")
 	}
+	validateTrust := func(fields map[string]any, location string) error {
+		if trust, present := fields["trust"]; present && trust == nil {
+			return fmt.Errorf("invalid config: %s.trust cannot be null: omit trust (entries accept any sender, overrides inherit the entry rule) or use trust: {} for the owner only", location)
+		}
+		return nil
+	}
 	// Check key presence because strict decoding also accepts explicit false and null values.
 	for i, instance := range config.Messaging {
 		entry, _ := entries[i].(map[string]any)
+		if err := validateTrust(entry, fmt.Sprintf("messaging entry %d", i+1)); err != nil {
+			return Config{}, err
+		}
 		overrides, _ := entry["conversations"].([]any)
 		for j, override := range instance.Conversations {
 			fields, _ := overrides[j].(map[string]any)
 			if override.Ignore && len(fields) > 2 {
 				return Config{}, fmt.Errorf("invalid config: messaging entry %d conversations[%d] ignore: true permits only id and ignore", i+1, j)
 			}
-			if trust, present := fields["trust"]; present && trust == nil {
-				return Config{}, fmt.Errorf("invalid config: messaging entry %d conversations[%d].trust cannot be null: trust: {} means the owner only", i+1, j)
+			if err := validateTrust(fields, fmt.Sprintf("messaging entry %d conversations[%d]", i+1, j)); err != nil {
+				return Config{}, err
 			}
 		}
 	}
@@ -402,7 +414,10 @@ func (c messagingConfig) validateDiscordIDs() error {
 
 func (c messagingConfig) validateTraQIDs() error {
 	fields := map[string][]string{"owner": {c.Owner}}
-	addTrust := func(prefix string, trust trustConfig) {
+	addTrust := func(prefix string, trust *trustConfig) {
+		if trust == nil {
+			return
+		}
 		fields[prefix+"users"] = trust.Users
 		fields[prefix+"groups"] = trust.Groups
 		fields[prefix+"bots"] = trust.Bots
@@ -411,9 +426,7 @@ func (c messagingConfig) validateTraQIDs() error {
 	for i, rule := range c.Conversations {
 		prefix := fmt.Sprintf("conversations[%d].", i)
 		fields[prefix+"id"] = []string{rule.ID}
-		if trust := rule.Trust; trust != nil {
-			addTrust(prefix+"trust.", *trust)
-		}
+		addTrust(prefix+"trust.", rule.Trust)
 	}
 	for field, ids := range fields {
 		for _, id := range ids {

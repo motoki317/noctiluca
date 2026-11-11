@@ -117,7 +117,7 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 
 ## Trust model
 
-Each `messaging` entry's `trust` decides whose messages start turns, in DMs, in every channel the bot is in, and on traQ in mentions elsewhere, so anyone who can add the bot to a channel extends where it applies. The owner is always trusted. A conversation override can replace that trust, require a mention, or ignore the conversation.
+Any human or bot that reaches the agent starts turns: in DMs, in every channel the bot is in, and on traQ in mentions elsewhere. Anyone who can add the bot to a channel widens that set. A `messaging` entry's optional `trust` narrows it to an allowlist, and the owner is always on it. A conversation override can replace that trust, require a mention, or ignore the conversation. A sender that the adapter reports as neither human nor bot never starts a turn. Configuration: [running.md](running.md#configure).
 
 Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and the model CLI's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
 

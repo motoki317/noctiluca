@@ -96,7 +96,7 @@ func compileRules(config Messaging) (compiledRules, error) {
 }
 
 func compileRule(config Messaging, value domain.AcceptRule) (rule, error) {
-	r := rule{users: make(map[string]struct{}), bots: make(map[string]struct{}), ignore: value.Ignore, requireMention: value.RequireMention}
+	r := rule{users: make(map[string]struct{}), bots: make(map[string]struct{}), anySender: value.AnySender, ignore: value.Ignore, requireMention: value.RequireMention}
 	users := slices.Clone(value.Users)
 	if config.Owner != "" {
 		users = append(users, config.Owner)

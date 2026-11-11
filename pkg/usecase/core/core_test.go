@@ -342,6 +342,67 @@ func TestOpenFailureRevokesGrant(t *testing.T) {
 	require.Len(t, events, 1)
 }
 
+func TestAnySenderAcceptRules(t *testing.T) {
+	config := Messaging{Name: "test", Adapter: &fakeMessaging{}, Owner: "owner", Trust: domain.AcceptRule{AnySender: true},
+		Rules: map[domain.ConversationRef]domain.AcceptRule{
+			"test:mention": {AnySender: true, RequireMention: true},
+			"test:blocked": {AnySender: true, Ignore: true},
+			"test:empty":   {},
+			"test:listed":  {Users: []string{"member"}, Bots: []string{"bot"}},
+		}}
+	c, err := New(Config{}, []Messaging{config}, &fakeModel{}, &fakeHub{tools: make(map[string]domain.Tool)}, &unusedEvents{}, &unusedSessions{}, nil, &unusedSchedules{}, &unusedWatches{}, nil, nil, &unusedInbox{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.Shutdown(t.Context())) })
+	impl := c.(*core)
+	for _, tc := range []struct {
+		to            domain.ConversationRef
+		user          string
+		kind          domain.SenderKind
+		mention, want bool
+	}{
+		{"test:room", "stranger", domain.SenderHuman, false, true},
+		{"test:room", "new-bot", domain.SenderBot, false, true},
+		{"test:room", "owner", domain.SenderHuman, false, true},
+		{"test:room", "owner", "", true, false},
+		{"test:room", "stranger", "unknown", true, false},
+		{"test:mention", "stranger", domain.SenderHuman, false, false},
+		{"test:mention", "new-bot", domain.SenderBot, false, false},
+		{"test:mention", "owner", domain.SenderHuman, false, false},
+		{"test:mention", "stranger", domain.SenderHuman, true, true},
+		{"test:mention", "new-bot", domain.SenderBot, true, true},
+		{"test:blocked", "stranger", domain.SenderHuman, true, false},
+		{"test:blocked", "new-bot", domain.SenderBot, true, false},
+		{"test:blocked", "owner", domain.SenderHuman, true, false},
+		{"test:empty", "owner", domain.SenderHuman, false, true},
+		{"test:empty", "stranger", domain.SenderHuman, true, false},
+		{"test:empty", "new-bot", domain.SenderBot, true, false},
+		{"test:listed", "owner", domain.SenderHuman, false, true},
+		{"test:listed", "member", domain.SenderHuman, false, true},
+		{"test:listed", "stranger", domain.SenderHuman, true, false},
+		{"test:listed", "bot", domain.SenderBot, false, true},
+		{"test:listed", "new-bot", domain.SenderBot, true, false},
+		{"test:listed", "bot", domain.SenderHuman, false, false},
+		{"test:listed", "member", domain.SenderBot, false, false},
+		{"", "stranger", domain.SenderHuman, true, false},
+		{"other:room", "stranger", domain.SenderHuman, true, false},
+	} {
+		for _, direct := range []bool{false, true} {
+			e := message(tc.to, tc.user, "")
+			e.Sender.Kind, e.MentionsMe, e.Direct = tc.kind, tc.mention, direct
+			_, ok := impl.accepted(e)
+			require.Equal(t, tc.want, ok, "%+v direct=%v", tc, direct)
+		}
+	}
+	thread := message("test:thread", "new-bot", "")
+	thread.Sender.Kind = domain.SenderBot
+	thread.Parent = "test:room"
+	_, ok := impl.accepted(thread)
+	require.True(t, ok)
+	thread.Parent = "test:empty"
+	_, ok = impl.accepted(thread)
+	require.False(t, ok)
+}
+
 func TestAcceptRules(t *testing.T) {
 	h := &fakeHub{tools: make(map[string]domain.Tool)}
 	m := &fakeMessaging{}
