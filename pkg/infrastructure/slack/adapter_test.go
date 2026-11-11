@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,9 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
+	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 )
-
-type unusedHistory struct{ domain.EventRepository }
 
 func apiAdapter(t *testing.T, handler http.HandlerFunc, user bool) *adapter {
 	t.Helper()
@@ -31,7 +31,10 @@ func apiInstance(t *testing.T, name string, handler http.HandlerFunc, user bool)
 	if user {
 		config.UserToken = "xoxp-test"
 	}
-	a, err := newAdapter(name, config, &unusedHistory{}, sdk.OptionAPIURL(server.URL+"/"), sdk.OptionHTTPClient(server.Client()))
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "events.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	a, err := newAdapter(name, config, repository.NewEventRepository(db), sdk.OptionAPIURL(server.URL+"/"), sdk.OptionHTTPClient(server.Client()))
 	require.NoError(t, err)
 	return a
 }

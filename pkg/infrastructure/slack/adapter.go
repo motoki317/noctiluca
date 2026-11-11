@@ -22,10 +22,12 @@ type Config struct {
 	AppToken  string `mapstructure:"app_token"`
 	BotToken  string `mapstructure:"bot_token"`
 	UserToken string `mapstructure:"user_token"`
+	Owner     string
 }
 
 type adapter struct {
 	name               string
+	owner              string
 	names              sync.Map
 	joinedThreads      sync.Map
 	acceptConversation func(domain.ConversationRef) bool
@@ -59,7 +61,7 @@ func newAdapter(name string, config Config, history domain.EventRepository, opti
 		reader = sdk.New(config.UserToken, options...)
 	}
 	socket := socketmode.New(bot)
-	return &adapter{name: name, bot: bot, reader: reader, history: history, socketEvents: socket.Events, runSocket: socket.RunContext, ack: socket.AckCtx}, nil
+	return &adapter{name: name, owner: config.Owner, bot: bot, reader: reader, history: history, socketEvents: socket.Events, runSocket: socket.RunContext, ack: socket.AckCtx}, nil
 }
 
 func (a *adapter) Start(ctx context.Context, consume func(context.Context, domain.InboundEvent) error) error {
@@ -100,6 +102,11 @@ func (a *adapter) Start(ctx context.Context, consume func(context.Context, domai
 			case e, ok := <-a.socketEvents:
 				if !ok {
 					return errors.New("socket mode stream closed for Slack")
+				}
+				if e.Type == socketmode.EventTypeConnected {
+					if err := a.backfill(ctx, a.backfillTargets(ctx), consume); err != nil {
+						return err
+					}
 				}
 				if e.Type == socketmode.EventTypeEventsAPI {
 					if payload, ok := e.Data.(slackevents.EventsAPIEvent); ok {

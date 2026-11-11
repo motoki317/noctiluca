@@ -204,8 +204,10 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 			fmt.Fprint(w, `{"ok":true,"user":{"profile":{"display_name":"Owner"}}}`)
 		case "/conversations.info":
 			fmt.Fprint(w, `{"ok":true,"channel":{"name":"test"}}`)
-		case "/conversations.replies":
+		case "/conversations.history", "/conversations.replies":
 			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
+		case "/conversations.open":
+			fmt.Fprint(w, `{"ok":true,"channel":{"id":"D_OWNER"}}`)
 		case "/auth.test":
 			_, _ = io.WriteString(w, `{"ok":true,"user_id":"U_BOT","bot_id":"B_BOT"}`)
 		case "/usergroups.users.list":
