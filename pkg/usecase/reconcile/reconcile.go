@@ -415,9 +415,13 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 	}
 }
 
+// handleWriteTimeout bounds the writes of one handle call. Writes slower than this mean storage is stuck:
+// stop the process and let restart recovery reconcile from SQLite.
+const handleWriteTimeout = 30 * time.Second
+
 func (r *Reconciler) handle(ctx context.Context, out result) error {
 	// Shutdown must record successful delivery before recovery can retry the row.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handleWriteTimeout)
 	defer cancel()
 	p := out.process
 	if r.live[p.key] != p {
