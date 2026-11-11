@@ -41,8 +41,7 @@ func (a *adapter) ToolNotes() string {
 		"Other inputs have only `conversation`; post there. " +
 		fmt.Sprintf("Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context. Slack tools take bare channel IDs. "+
 			"To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true. "+
-			"When you decide to post in a thread, call %[1]s_set_status on it before your other tools. "+
-			"Your post there clears the status, so call it again when work continues after a post. Skip it for a ref ending in a colon.", a.name)
+			"If an answer needs any tool besides the reply, first show that you started where you will answer: for a thread, call %[1]s_set_status on it, and again when work continues after you post there; for a ref ending in a colon, react to the input `message` with %[1]s_react.", a.name)
 }
 
 func (a *adapter) Tools() []domain.Tool {

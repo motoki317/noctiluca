@@ -63,6 +63,7 @@ Each platform's notes tell the agent where to post:
 - On Slack, quick answers stay where the request was made. Work on a top-level channel request, such as command results, reviews, drafts, and background completions, goes in the request's thread.
 - On Discord, the agent talks in the channel, including quick investigations. It starts a thread from the request only for a project that spans days, or when asked.
 - traQ has no threads. Quick answers stay in the channel, and a report on work requested in a channel quotes the request message.
+- Before tool work, the agent shows that it started where it will answer: set_status on a Slack thread, otherwise a reaction on the input message.
 
 On each connect, reconnects included, all three adapters read back the messages they missed while disconnected. A read-back message goes through the same trust check as a live one and can start a turn. The adapters read the entry owner's DM and each channel or DM where a top-level message started a turn. In each one they read the messages after the last stored message, at most 24 hours old and at most the newest 200. Discord also reads back edits. In a traQ channel that the bot has not joined, only messages that mention the bot are read back.
 

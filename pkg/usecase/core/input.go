@@ -118,7 +118,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 	if kind == domain.InboundEventReaction {
 		header += "Reaction.\n"
 	}
-	if item.Payload.Event != nil {
+	if event := item.Payload.Event; event != nil {
 		if history.LastReply.After(at) {
 			place := "this conversation"
 			if conversation != channelRef {
@@ -127,6 +127,9 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 			header += fmt.Sprintf("Sent at %s, before your reply at %s in %s.\n", at.In(location).Format("15:04:05 MST"), history.LastReply.In(location).Format("15:04:05 MST"), place)
 		} else if history.Running {
 			header += "Sent while your previous turn was running. After its reply, answer only what this message adds.\n"
+		}
+		if kind == domain.InboundEventMessage || kind == domain.InboundEventMessageEdited {
+			header += fmt.Sprintf("message: %s\n", event.MessageRef)
 		}
 	}
 	header += fmt.Sprintf("refs: conversation=%s", conversation)

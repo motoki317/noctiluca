@@ -83,8 +83,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 				"Other inputs have only `conversation`; post there. " +
 				"Use slack_read_thread, slack_read_history, and slack_search for context. Slack tools take bare channel IDs. " +
 				"To broadcast a PNG, JPEG, or GIF image, use slack_upload_file with thread_ts and broadcast=true. " +
-				"When you decide to post in a thread, call slack_set_status on it before your other tools. " +
-				"Your post there clears the status, so call it again when work continues after a post. Skip it for a ref ending in a colon."
+				"If an answer needs any tool besides the reply, first show that you started where you will answer: for a thread, call slack_set_status on it, and again when work continues after you post there; for a ref ending in a colon, react to the input `message` with slack_react."
 			require.Equal(t, strings.ReplaceAll(notes, "slack_", name+"_"), a.ToolNotes())
 		})
 	}
