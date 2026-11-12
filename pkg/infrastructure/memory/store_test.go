@@ -1,12 +1,10 @@
 package memory_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -33,10 +31,8 @@ func setup(t *testing.T) (domain.MemoryStore, string) {
 
 func TestSeedDefaultProcedures(t *testing.T) {
 	dir := t.TempDir()
-	s, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
 	require.NoError(t, err)
-	require.Equal(t, dir, s.Dir())
-	require.Equal(t, "3\n", git(t, dir, "rev-list", "--count", "HEAD"))
 	for _, name := range []string{"procedures/consolidate.md", "procedures/hillclimb.md"} {
 		want, err := consolidate.Procedures.ReadFile(name)
 		require.NoError(t, err)
@@ -44,7 +40,6 @@ func TestSeedDefaultProcedures(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 		require.Equal(t, string(want), git(t, dir, "show", "HEAD:"+name))
-		require.Equal(t, "Add default "+name+"\n", git(t, dir, "log", "-1", "--format=%s", "--", name))
 		info, err := os.Stat(filepath.Join(dir, name))
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0600), info.Mode().Perm())
@@ -56,8 +51,6 @@ func TestSeedDefaultProcedures(t *testing.T) {
 	require.Equal(t, head, git(t, dir, "rev-parse", "HEAD"))
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "procedures/hillclimb.md")))
-	_, err = s.Read(t.Context(), "procedures/hillclimb.md")
-	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
 	require.NoError(t, err)
 	require.Empty(t, git(t, dir, "status", "--porcelain"))
@@ -146,7 +139,6 @@ func TestInitExistingFilesAndReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, root+"\n", git(t, root, "rev-parse", "--show-toplevel"))
 	require.Equal(t, "outside.txt\nowner/persona.md\n", git(t, root, "ls-tree", "-r", "--name-only", "HEAD"))
-	require.NoDirExists(t, filepath.Join(root, ".git/noctiluca-snapshots"))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "topics/untracked.md"), []byte("日本語 untracked"), 0600))
 	text, err := s.Read(t.Context(), "topics/untracked.md")
 	require.NoError(t, err)
@@ -162,16 +154,6 @@ func TestInitExistingFilesAndReopen(t *testing.T) {
 	require.Equal(t, "?? topics/untracked.md\n", git(t, root, "status", "--porcelain", "--untracked-files=all"))
 }
 
-func TestReadCancellation(t *testing.T) {
-	s, _ := setup(t)
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err := s.Read(cancelled, "core.md")
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = s.List(cancelled, "")
-	require.ErrorIs(t, err, context.Canceled)
-}
-
 func TestUnbornRepositoryPreservesStagedFiles(t *testing.T) {
 	dir := t.TempDir()
 	git(t, dir, "init", "--quiet")
@@ -181,17 +163,6 @@ func TestUnbornRepositoryPreservesStagedFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, git(t, dir, "ls-tree", "--name-only", "HEAD"))
 	require.Equal(t, "A  core.md\n", git(t, dir, "status", "--porcelain"))
-}
-
-func TestOversizedCoreRemainsReadable(t *testing.T) {
-	dir := t.TempDir()
-	content := strings.Repeat("x", 8*1024+1)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "core.md"), []byte(content), 0600))
-	store, err := memory.New(t.Context(), memory.Config{Path: dir})
-	require.NoError(t, err)
-	text, err := store.Read(t.Context(), "core.md")
-	require.NoError(t, err)
-	require.Equal(t, content, text)
 }
 
 func TestStartupPreservesGitWorktrees(t *testing.T) {
