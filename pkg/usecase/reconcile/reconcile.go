@@ -266,9 +266,15 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
+	readyAt := func(item domain.InboxItem) time.Time {
+		if item.RetryAt.After(item.ReadyAt) {
+			return item.RetryAt
+		}
+		return item.ReadyAt
+	}
 	queuedWork := map[domain.SessionKey]bool{}
 	for _, item := range items {
-		if item.Payload.Procedure != "rest" {
+		if item.Payload.Procedure != "rest" && (item.Status != "pending" || !readyAt(item).After(now)) {
 			queuedWork[item.SessionKey] = true
 		}
 	}
@@ -286,10 +292,10 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 				continue
 			}
 		}
-		if blocked[item.SessionKey] {
+		rest := item.Payload.Procedure == "rest"
+		if blocked[item.SessionKey] && !rest {
 			continue
 		}
-		rest := item.Payload.Procedure == "rest"
 		if rest && (queuedWork[item.SessionKey] || taskBusy || (p != nil && !p.idle())) {
 			continue
 		}
@@ -299,10 +305,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing || p.resting())) || (item.Lane == "task" && taskBusy) {
 			continue
 		}
-		at := item.ReadyAt
-		if item.RetryAt.After(at) {
-			at = item.RetryAt
-		}
+		at := readyAt(item)
 		if at.After(now) {
 			due(at)
 			continue
