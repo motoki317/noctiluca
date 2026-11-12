@@ -22,7 +22,11 @@ func TestStatePersistence(t *testing.T) {
 	_, err = sessions.Get(t.Context(), "missing")
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.NoError(t, sessions.Save(t.Context(), domain.Session{Key: "session", ResumeToken: "old"}))
-	require.NoError(t, sessions.Save(t.Context(), domain.Session{Key: "session", ResumeToken: "new"}))
+	session, err := sessions.Get(t.Context(), "session")
+	require.NoError(t, err)
+	assert.Nil(t, session.Context)
+	savedSession := domain.Session{Key: "session", ResumeToken: "new", Context: &domain.SessionContext{Conversation: "thread", Direct: true, Workdir: "/work"}}
+	require.NoError(t, sessions.Save(t.Context(), savedSession))
 
 	schedules := repository.NewScheduleRepository(db)
 	schedule := domain.Schedule{Name: "daily", Cron: "0 9 * * *", TZ: "Asia/Tokyo", Prompt: "preview", Workdir: "/workspace"}
@@ -44,9 +48,9 @@ func TestStatePersistence(t *testing.T) {
 	db, err = repository.New(t.Context(), repository.Config{Path: path})
 	require.NoError(t, err)
 	defer db.Close()
-	session, err := repository.NewSessionRepository(db).Get(t.Context(), "session")
+	session, err = repository.NewSessionRepository(db).Get(t.Context(), "session")
 	require.NoError(t, err)
-	assert.Equal(t, domain.Session{Key: "session", ResumeToken: "new"}, session)
+	assert.Equal(t, savedSession, session)
 	schedules = repository.NewScheduleRepository(db)
 	storedSchedules, err := schedules.List(t.Context())
 	require.NoError(t, err)
@@ -66,12 +70,16 @@ func TestSchemaFailureRollsBack(t *testing.T) {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.ExecContext(t.Context(), `CREATE TABLE sends (old_column TEXT)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE oauth_tokens (server TEXT PRIMARY KEY, access_token TEXT, token_type TEXT, refresh_token TEXT, expiry DATETIME);
+		INSERT INTO oauth_tokens VALUES ('saved', 'private-token', 'Bearer', '', '2036-01-01')`)
 	require.NoError(t, err)
 	failed, err := repository.New(t.Context(), repository.Config{Path: path})
-	require.Error(t, err)
+	require.ErrorContains(t, err, "database schema mismatch")
 	assert.Nil(t, failed)
 	var count int
 	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_schema WHERE name='events'`).Scan(&count))
 	assert.Zero(t, count)
+	var token string
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT access_token FROM oauth_tokens WHERE server='saved'`).Scan(&token))
+	assert.Equal(t, "private-token", token)
 }
