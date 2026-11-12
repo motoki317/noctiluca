@@ -44,6 +44,8 @@ Write your own files in `owner/`, for example `soul.md` for the persona and `use
 
 Everything else belongs to the agent, which reads and edits memory with its native file tools and commits changes with git. The prompt tells it to leave `owner/` untouched, propose fixes to you, and keep `core.md` under 8 KB. These rules are prompt instructions, and the harness does not enforce them.
 
+To back up memory, give the memory repository a Git remote: a private repository that the Unix user running noctiluca can push to without a prompt. Memory holds what the agent learns about your work. In the memory directory, run `git remote add origin <url>` and `git push -u origin HEAD`. The agent's pushes run in noctiluca's environment, not your shell, so an SSH key with a passphrase works only if the service can reach its agent. When a model process opens, noctiluca checks for a remote URL; with one, the prompt tells the agent to push after each commit, to answer a rejected push with `git push --force-with-lease`, and to tell you about any other push failure. The remote mirrors the local history rather than keeping every version, so nothing else may push to it: edit and commit `owner/` in the memory directory, not in another clone or a web editor. The agent never commits `owner/`; its next push carries your commits.
+
 At startup, noctiluca writes and commits missing defaults for `procedures/consolidate.md` and `procedures/hillclimb.md`. To use newer shipped text, delete the corresponding procedure before restarting. You can also write `procedures/heartbeat.md` for the heartbeat to follow. It is outside `owner/`, so the agent may edit it later. Without that file, the heartbeat does nothing.
 
 ## Conversation events

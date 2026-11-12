@@ -107,6 +107,18 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 
 func (s *store) Dir() string { return s.dir }
 
+func (s *store) HasRemote(ctx context.Context) (bool, error) {
+	_, err := s.git(ctx, "config", "--get-regexp", `^remote\..*\.url$`)
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *store) seed(ctx context.Context, root *os.Root, defaults fs.FS) error {
 	return fs.WalkDir(defaults, ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
