@@ -155,3 +155,54 @@ func TestInputLifecycle(t *testing.T) {
 		require.Equal(t, tc.kinds, kinds, tc.state+"/"+tc.uuid)
 	}
 }
+
+func TestInternalCompaction(t *testing.T) {
+	p := parser{compactUUID: "internal"}
+	pending := map[string]int64{"queued": 7}
+	for _, line := range []string{
+		`{"type":"command_lifecycle","command_uuid":"internal","state":"started"}`,
+		`{"type":"system","subtype":"status","status":"compacting"}`,
+		`{"type":"user","uuid":"internal","message":{"content":"/compact"}}`,
+		`{"type":"user","uuid":"summary","isCompactSummary":true,"message":{"content":"summary"}}`,
+		`{"type":"user","uuid":"old-tool","message":{"content":[{"type":"tool_result","is_error":true,"content":"old error"}]}}`,
+		`{"type":"stream_event","event":{"type":"message_start"}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"internal"}}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"internal","name":"internal"}]}}`,
+		`{"type":"result","subtype":"success","local_command":"compact","result":"internal","num_turns":0}`,
+		`{"type":"command_lifecycle","command_uuid":"internal","state":"completed"}`,
+	} {
+		f, err := parseFrame([]byte(line))
+		require.NoError(t, err)
+		require.Empty(t, p.events(f, pending), line)
+		require.False(t, p.active)
+		require.Equal(t, map[string]int64{"queued": 7}, pending)
+	}
+	require.False(t, p.compacting)
+	events := p.events(frame{Type: "command_lifecycle", CommandUUID: "queued", State: "started"}, pending)
+	require.Equal(t, []domain.ModelEvent{
+		{Kind: domain.ModelEventInputStarted, InputID: 7},
+		{Kind: domain.ModelEventTurnStarted},
+	}, events)
+	require.True(t, p.active)
+	require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result", LocalCommand: "compact"}, pending)[0].Kind,
+		"a core-submitted /compact must finish its turn")
+}
+
+func TestInternalCompactionFailure(t *testing.T) {
+	p := parser{compactUUID: "internal", compacting: true}
+	f, err := parseFrame([]byte(`{"type":"system","subtype":"status","compact_result":"failed"}`))
+	require.NoError(t, err)
+	require.Empty(t, p.events(f, nil))
+	require.True(t, p.compacting, "compaction owns the frames until its result")
+	require.Empty(t, p.events(frame{Type: "result", LocalCommand: "compact", IsError: true, Result: "private error"}, nil))
+	require.False(t, p.compacting)
+}
+
+func TestCoreCompaction(t *testing.T) {
+	var p parser
+	pending := map[string]int64{"core": 8}
+	require.Len(t, p.events(frame{Type: "command_lifecycle", CommandUUID: "core", State: "started"}, pending), 2)
+	require.Equal(t, []domain.ModelEvent{{Kind: domain.ModelEventTurnFinished}},
+		p.events(frame{Type: "result", LocalCommand: "compact"}, pending))
+	require.False(t, p.active)
+}
