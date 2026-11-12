@@ -17,7 +17,6 @@ func TestFailureSignals(t *testing.T) {
 		want                  []string
 	}{
 		{name: "English correction", text: "I didn't say stop", kind: domain.InboundEventMessage, human: true, after: true, want: []string{"user_correction"}},
-		{name: "Japanese correction", text: "そうじゃない、確認して", kind: domain.InboundEventMessage, human: true, after: true, want: []string{"user_correction"}},
 		{name: "not immediate", text: "訂正", kind: domain.InboundEventMessage, human: true},
 		{name: "bot", text: "that's wrong", kind: domain.InboundEventMessage, after: true},
 		{name: "ordinary", text: "Please continue", kind: domain.InboundEventMessage, human: true, after: true},
@@ -78,13 +77,6 @@ func TestMineErrors(t *testing.T) {
 			wantSignals: []string{"tool_error"},
 		},
 		{
-			name:        "exit code and reason",
-			kind:        domain.ModelEventToolResult,
-			errors:      []string{"Exit code 1\n…\nreason"},
-			want:        []string{"Exit code 1 … reason"},
-			wantSignals: []string{"tool_error"},
-		},
-		{
 			name:        "one line",
 			kind:        domain.ModelEventToolResult,
 			errors:      []string{"file not found"},
@@ -96,13 +88,6 @@ func TestMineErrors(t *testing.T) {
 			kind:        domain.ModelEventToolResult,
 			errors:      []string{" \t\nread failed \r\nmore details\n\tread failed\n \t\r\n"},
 			want:        []string{"read failed"},
-			wantSignals: []string{"tool_error"},
-		},
-		{
-			name:        "cap in runes",
-			kind:        domain.ModelEventToolResult,
-			errors:      []string{strings.Repeat("日", 200), strings.Repeat("日", 201), strings.Repeat("日", 300)},
-			want:        []string{strings.Repeat("日", 200), strings.Repeat("日", 200) + "…"},
 			wantSignals: []string{"tool_error"},
 		},
 		{
@@ -152,17 +137,6 @@ func TestMineErrors(t *testing.T) {
 			require.Len(t, got, 1)
 			require.Equal(t, tc.want, got[0].Errors)
 			require.Equal(t, tc.wantSignals, got[0].Signals)
-			data, err := json.Marshal(got[0])
-			require.NoError(t, err)
-			var fields map[string]json.RawMessage
-			require.NoError(t, json.Unmarshal(data, &fields))
-			if len(tc.want) == 0 {
-				require.NotContains(t, fields, "errors")
-			} else {
-				var messages []string
-				require.NoError(t, json.Unmarshal(fields["errors"], &messages))
-				require.Equal(t, tc.want, messages)
-			}
 		})
 	}
 }

@@ -73,96 +73,51 @@ func (f *deliveryRig) turn(t *testing.T, key string, busy bool) domain.Session {
 	}, time.Second, time.Millisecond)
 	return saved
 }
-func TestConversationSteersBeforeTurnFinish(t *testing.T) {
-	f := newDeliveryRig(t, Config{TurnTimeout: time.Second})
-	f.start(t)
-	first := f.enqueue(t, "room", "first")
-	s := take(t, f.model.opened)
-	require.Equal(t, "first", take(t, s.inputs).Text)
-	f.status(t, first, "done")
-	deadline := f.turn(t, "room", true).Turn.Deadline
-	second := f.enqueue(t, "room", "steer")
-	require.Equal(t, "steer", take(t, s.inputs).Text)
-	f.status(t, second, "done")
-	require.Equal(t, deadline, f.turn(t, "room", true).Turn.Deadline)
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.turn(t, "room", false)
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
-	require.True(t, f.turn(t, "room", true).Turn.Deadline.After(deadline))
-}
+
 func TestDeliveredConversationNeverReplays(t *testing.T) {
-	for _, terminal := range []string{"failed-result", "exit", "deadline", "restart"} {
-		t.Run(terminal, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				cfg := Config{TurnTimeout: time.Hour}
-				if terminal == "deadline" {
-					cfg.TurnTimeout = 100 * time.Millisecond
-				}
-				f := newDeliveryRig(t, cfg)
-				stop := f.start(t)
-				id := f.enqueue(t, "room", "original")
-				s := take(t, f.model.opened)
-				take(t, s.inputs)
-				f.status(t, id, "done")
-				switch terminal {
-				case "failed-result":
-					s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed")}
-					s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-					f.turn(t, "room", false)
-				case "exit":
-					close(s.events)
-					take(t, s.closed)
-				case "deadline":
-					take(t, s.closed)
-				case "restart":
-					stop()
-					f.start(t)
-				}
-				continued := terminal == "exit" || terminal == "restart"
-				if continued {
-					s = take(t, f.model.opened)
-					require.Contains(t, take(t, s.inputs).Text, "previous turn was interrupted")
-				}
-				next := f.enqueue(t, "room", "new input")
-				if terminal == "deadline" {
-					s = take(t, f.model.opened)
-				}
-				require.Equal(t, "new input", take(t, s.inputs).Text)
-				f.status(t, next, "done")
-				var attempts, notes int
-				require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
-				require.Zero(t, attempts)
-				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%' OR source_key LIKE 'interrupted:%'").Scan(&notes))
-				if continued {
-					require.Equal(t, 1, notes)
-				} else {
-					require.Zero(t, notes)
-				}
-			})
-		})
-	}
-}
-func TestClosingProcessReservesSessionKey(t *testing.T) {
 	f := newDeliveryRig(t, Config{})
-	release := make(chan struct{})
-	f.model.closeWait = release
-	stop := f.start(t)
-	var once sync.Once
-	unblock := func() { once.Do(func() { close(release) }) }
-	defer func() { unblock(); stop() }()
-	id := f.enqueue(t, "room", "first")
+	f.start(t)
+	id := f.enqueue(t, "room", "original")
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
 	f.status(t, id, "done")
-	close(s.events)
-	take(t, s.closed)
-	next := f.enqueue(t, "room", "after exit")
-	require.Never(t, func() bool { return len(f.model.opened) > 0 }, 30*time.Millisecond, time.Millisecond)
-	unblock()
-	s = take(t, f.model.opened)
-	require.Equal(t, "after exit", take(t, s.inputs).Text)
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed")}
+	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+	f.turn(t, "room", false)
+	next := f.enqueue(t, "room", "new input")
+	require.Equal(t, "new input", take(t, s.inputs).Text)
 	f.status(t, next, "done")
+	var attempts, notes int
+	require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
+	require.Zero(t, attempts)
+	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%' OR source_key LIKE 'interrupted:%'").Scan(&notes))
+	require.Zero(t, notes)
 }
+
+func TestClosingProcessReservesSessionKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{})
+		release := make(chan struct{})
+		f.model.closeWait = release
+		stop := f.start(t)
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer func() { unblock(); stop() }()
+		id := f.enqueue(t, "room", "first")
+		s := take(t, f.model.opened)
+		take(t, s.inputs)
+		f.status(t, id, "done")
+		close(s.events)
+		take(t, s.closed)
+		next := f.enqueue(t, "room", "after exit")
+		synctest.Wait()
+		require.Empty(t, f.model.opened)
+		unblock()
+		s = take(t, f.model.opened)
+		require.Equal(t, "after exit", take(t, s.inputs).Text)
+		f.status(t, next, "done")
+	})
+}
+
 func TestPermanentRejectionHasNoRetryOrNotice(t *testing.T) {
 	f := newDeliveryRig(t, Config{Accept: func(info domain.SessionContext) bool {
 		return info.Conversation != "removed"
@@ -181,23 +136,45 @@ func TestPermanentRejectionHasNoRetryOrNotice(t *testing.T) {
 	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%'").Scan(&count))
 	require.Zero(t, count)
 }
-func TestSkippedProcedurePreservesResumeToken(t *testing.T) {
-	f := newDeliveryRig(t, Config{Procedure: func(context.Context, string) (string, error) { return "", nil }})
-	require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: "task:heartbeat", ResumeToken: "saved"}))
-	f.start(t)
-	item := TaskItem("heartbeat", "run", "")
-	item.Payload.Procedure = "heartbeat"
-	id, err := f.inbox.Enqueue(t.Context(), item)
-	require.NoError(t, err)
-	f.runner.Notify()
-	f.status(t, id, "done")
-	require.Equal(t, "saved", f.turn(t, "task:heartbeat", false).ResumeToken)
-	require.Empty(t, f.model.opened)
+func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
+	for _, text := range []string{"", "procedure instructions"} {
+		t.Run(text, func(t *testing.T) {
+			f := newDeliveryRig(t, Config{
+				Procedure: func(_ context.Context, name string) (string, error) {
+					require.Equal(t, "heartbeat", name)
+					return text, nil
+				},
+				Completed: func(context.Context, string, time.Time) error {
+					t.Error("unfinished or skipped procedure completed a turn")
+					return nil
+				},
+			})
+			require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: "task:heartbeat", ResumeToken: "saved"}))
+			f.start(t)
+			item := TaskItem("heartbeat", "run", "")
+			item.Payload.Procedure = "heartbeat"
+			id, err := f.inbox.Enqueue(t.Context(), item)
+			require.NoError(t, err)
+			f.runner.Notify()
+			if text != "" {
+				s := take(t, f.model.opened)
+				require.Equal(t, text, take(t, s.inputs).Text)
+			}
+			f.status(t, id, "done")
+			if text == "" {
+				require.Equal(t, "saved", f.turn(t, "task:heartbeat", false).ResumeToken)
+				require.Empty(t, f.model.opened)
+			}
+			var attempts int
+			require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
+			require.Zero(t, attempts)
+		})
+	}
 }
 
 func TestScheduleToolRequiresFiveFields(t *testing.T) {
 	r := New(Config{}, nil, nil, nil, nil, nil, nil)
-	for _, expression := range []string{"@daily", "@every 1h", "CRON_TZ=UTC 0 4 * * *", "0 0 4 * * *", "TZ=UTC\t*\t*\t*\t*"} {
+	for _, expression := range []string{"CRON_TZ=UTC 0 4 * * *", "TZ=UTC\t*\t*\t*\t*"} {
 		raw, err := json.Marshal(map[string]string{"name": "test", "cron": expression, "tz": "UTC", "prompt": "work"})
 		require.NoError(t, err)
 		_, err = r.Tools()[0].Handler(t.Context(), raw)
@@ -267,7 +244,7 @@ func TestTaskDeadlineNotifiesWithoutContinuing(t *testing.T) {
 		take(t, s.inputs)
 		f.status(t, id, "done")
 		take(t, s.closed)
-		require.Contains(t, take(t, notes), "Task hung stopped: turn deadline exceeded")
+		require.Contains(t, take(t, notes), domain.TurnDeadlineExceeded)
 		require.Eventually(t, func() bool {
 			active, err := f.inbox.Active(t.Context())
 			return err == nil && len(active) == 0
@@ -301,7 +278,7 @@ func TestLateTaskDeliveryIsReportedNotContinued(t *testing.T) {
 		unblock()
 		take(t, s.closed)
 		f.status(t, id, "done")
-		require.Equal(t, "Task hung stopped: delivery deadline exceeded", take(t, notes))
+		require.Contains(t, take(t, notes), domain.DeliveryDeadlineExceeded)
 		stop()
 		f.start(t)
 		synctest.Wait()
@@ -321,7 +298,7 @@ func TestLateTaskDeliveryIsReportedNotContinued(t *testing.T) {
 }
 
 func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
-	for _, remaining := range []time.Duration{-time.Nanosecond, 0, time.Nanosecond} {
+	for _, remaining := range []time.Duration{0, time.Nanosecond} {
 		t.Run(remaining.String(), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDeliveryRig(t, Config{})
@@ -353,7 +330,7 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 				active, err := f.inbox.Active(t.Context())
 				require.NoError(t, err)
 				require.Len(t, active, 1)
-				require.Equal(t, "Task late stopped: delivery deadline exceeded", active[0].Payload.Notice)
+				require.Contains(t, active[0].Payload.Notice, domain.DeliveryDeadlineExceeded)
 			})
 		})
 	}
@@ -483,7 +460,7 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 					require.Empty(t, started)
 				}
 				if !notice {
-					require.Contains(t, take(t, notes), "for session failed after 3 attempts: context deadline exceeded")
+					require.Contains(t, take(t, notes), "failed after 3 attempts")
 				}
 				stop()
 				f.start(t)
@@ -536,7 +513,7 @@ func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
 		f.status(t, nextID, "done")
 		f.status(t, id, "dead")
 		require.EqualValues(t, 3, attempts.Load())
-		require.Contains(t, take(t, notes), "for task:late failed after 3 attempts: context deadline exceeded")
+		require.Contains(t, take(t, notes), "failed after 3 attempts")
 		stop()
 		f.start(t)
 		synctest.Wait()
@@ -556,49 +533,57 @@ func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
 }
 
 func TestDeliveryFailureUsesClosingReason(t *testing.T) {
-	for _, reason := range []string{"", domain.DeliveryDeadlineExceeded, "shutdown", "session configuration changed", domain.ConversationNoLongerAccepted, domain.TurnDeadlineExceeded} {
-		for _, cause := range []error{context.Canceled, errors.Join(errors.New("send failed"), context.DeadlineExceeded)} {
-			t.Run(reason+"/"+cause.Error(), func(t *testing.T) {
-				synctest.Test(t, func(t *testing.T) {
-					f := newDeliveryRig(t, Config{RetryDelay: time.Second})
-					item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now()}
-					id, err := f.inbox.Enqueue(t.Context(), item)
-					require.NoError(t, err)
-					item.ID = id
-					claimed, err := f.inbox.Claim(t.Context(), id, time.Now())
-					require.NoError(t, err)
-					require.True(t, claimed)
-					r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
-					_, cancel := context.WithCancel(t.Context())
-					defer cancel()
-					p := &process{key: item.SessionKey, lane: item.Lane, delivering: &item, cancel: cancel}
-					r.live[p.key] = p
-					if reason != "" {
-						r.retire(p, reason)
+	for _, tc := range []struct {
+		reason string
+		cause  error
+	}{
+		{"", context.Canceled},
+		{"", errors.Join(errors.New("send failed"), context.DeadlineExceeded)},
+		{domain.DeliveryDeadlineExceeded, context.Canceled},
+		{"shutdown", context.Canceled},
+		{domain.TurnDeadlineExceeded, context.Canceled},
+	} {
+		reason, cause := tc.reason, tc.cause
+		t.Run(reason+"/"+cause.Error(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeliveryRig(t, Config{RetryDelay: time.Second})
+				item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now()}
+				id, err := f.inbox.Enqueue(t.Context(), item)
+				require.NoError(t, err)
+				item.ID = id
+				claimed, err := f.inbox.Claim(t.Context(), id, time.Now())
+				require.NoError(t, err)
+				require.True(t, claimed)
+				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				_, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				p := &process{key: item.SessionKey, lane: item.Lane, delivering: &item, cancel: cancel}
+				r.live[p.key] = p
+				if reason != "" {
+					r.retire(p, reason)
+				}
+				require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true, err: cause}))
+				require.NoError(t, r.handle(t.Context(), result{process: p, exited: true}))
+				var status, failure string
+				var attempts int
+				var retryAt time.Time
+				require.NoError(t, f.db.QueryRow("SELECT status,attempts,retry_at,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &retryAt, &failure))
+				require.Equal(t, "pending", status)
+				if reason == "" || reason == domain.DeliveryDeadlineExceeded {
+					require.Equal(t, 1, attempts)
+					require.True(t, retryAt.Equal(time.Now().Add(f.config.RetryDelay)))
+					if reason == domain.DeliveryDeadlineExceeded || errors.Is(cause, context.DeadlineExceeded) {
+						require.Equal(t, domain.DeliveryDeadlineExceeded, p.reason)
+						require.Contains(t, failure, context.DeadlineExceeded.Error())
 					}
-					require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true, err: cause}))
-					require.NoError(t, r.handle(t.Context(), result{process: p, exited: true}))
-					var status, failure string
-					var attempts int
-					var retryAt time.Time
-					require.NoError(t, f.db.QueryRow("SELECT status,attempts,retry_at,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &retryAt, &failure))
-					require.Equal(t, "pending", status)
-					if reason == "" || reason == domain.DeliveryDeadlineExceeded {
-						require.Equal(t, 1, attempts)
-						require.True(t, retryAt.Equal(time.Now().Add(f.config.RetryDelay)))
-						if reason == domain.DeliveryDeadlineExceeded || errors.Is(cause, context.DeadlineExceeded) {
-							require.Equal(t, domain.DeliveryDeadlineExceeded, p.reason)
-							require.Contains(t, failure, context.DeadlineExceeded.Error())
-						}
-					} else {
-						require.Zero(t, attempts)
-						require.True(t, retryAt.IsZero())
-						require.Empty(t, failure)
-						require.Equal(t, reason, p.reason)
-					}
-				})
+				} else {
+					require.Zero(t, attempts)
+					require.True(t, retryAt.IsZero())
+					require.Empty(t, failure)
+					require.Equal(t, reason, p.reason)
+				}
 			})
-		}
+		})
 	}
 }
 

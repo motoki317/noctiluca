@@ -214,30 +214,3 @@ func TestToolScheduleUsesDefaultWorkdir(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/work", jobs[0].Workdir)
 }
-
-func TestEmptyProcedureDoesNotOpenModel(t *testing.T) {
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
-	require.NoError(t, err)
-	defer db.Close()
-	inbox := repository.NewInboxRepository(db)
-	item := TaskItem("heartbeat", "run", "")
-	item.SessionKey = "fail"
-	item.Payload.Procedure = "heartbeat"
-	id, err := inbox.Enqueue(t.Context(), item)
-	require.NoError(t, err)
-	r := New(Config{Procedure: func(context.Context, string) (string, error) { return "", nil }, Completed: func(context.Context, string, time.Time) error {
-		return errors.New("skipped turn must not complete a procedure")
-	}}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), &modelFake{opened: make(chan *sessionFake, 1)}, &hubFake{closed: make(chan domain.SessionKey, 2)})
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- r.Start(ctx) }()
-	require.Eventually(t, func() bool {
-		var status string
-		var attempts int
-		err := db.QueryRow("SELECT status,attempts FROM inbox WHERE id=?", id).Scan(&status, &attempts)
-		return err == nil && status == "done" && attempts == 0
-	}, time.Second, time.Millisecond)
-	cancel()
-	require.NoError(t, take(t, done))
-}

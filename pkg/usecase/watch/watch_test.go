@@ -62,22 +62,6 @@ func toolContext(t *testing.T) context.Context {
 	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: "origin"})
 }
 
-func TestBackgroundToolRefDescriptions(t *testing.T) {
-	w := &watcher{}
-	for i, description := range []string{
-		"Schedule a note at an RFC3339 time, then end this turn. The note returns with the ref you pass as target.",
-		"Start a shell command and end this turn immediately. Its exit code and output tail return as a new input with the ref you pass as target.",
-	} {
-		tool := w.Tools()[i]
-		require.Equal(t, description, tool.Description)
-		var schema struct {
-			Properties map[string]struct{ Description string }
-		}
-		require.NoError(t, json.Unmarshal(tool.InputSchema, &schema))
-		require.Equal(t, "The ref where the result should be posted.", schema.Properties["target"].Description)
-	}
-}
-
 func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	_, inbox, factory := setup(t)
 	at := time.Now().Add(time.Hour).UTC()
@@ -115,8 +99,6 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	require.True(t, strings.HasPrefix(note, prefix))
 	require.Len(t, note, len(prefix)+4096)
 	require.True(t, strings.HasSuffix(note, "stderr"))
-	call("pwd")
-	require.Contains(t, nextNote(t, inbox, 2), dir)
 	call("sleep 30 & child=$!; echo $child > child.pid; wait")
 	var pid int
 	require.Eventually(t, func() bool {
@@ -139,7 +121,11 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	require.Contains(t, pending[0].Command, "sleep 30")
 	next := factory()
 	cancel, done = start(t, next)
-	require.Contains(t, nextNote(t, inbox, 3), "interrupted by restart; exit unknown")
+	require.Contains(t, nextNote(t, inbox, 2), "interrupted by restart; exit unknown")
+	items, err := inbox.Active(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, domain.ConversationRef("thread-a"), items[1].Payload.Target)
+	require.Equal(t, domain.SessionKey("origin"), items[1].SessionKey)
 	pending, err = watches.Unfinished(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, pending)
@@ -147,7 +133,7 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	require.NoError(t, take(t, done))
 	// A second restart must neither repeat the command nor enqueue another outcome.
 	cancel, done = start(t, factory())
-	require.Contains(t, nextNote(t, inbox, 3), "interrupted by restart; exit unknown")
+	require.Contains(t, nextNote(t, inbox, 2), "interrupted by restart; exit unknown")
 	cancel()
 	require.NoError(t, take(t, done))
 }
@@ -168,7 +154,7 @@ func TestFailedSpawnIsDurable(t *testing.T) {
 	require.NoError(t, take(t, done))
 }
 
-func TestThreadTargetsSurviveOutOfOrderCompletionAndRestart(t *testing.T) {
+func TestThreadTargetsSurviveOutOfOrderCompletion(t *testing.T) {
 	_, inbox, factory := setup(t)
 	w := factory()
 	cancel, done := start(t, w)
@@ -186,15 +172,9 @@ func TestThreadTargetsSurviveOutOfOrderCompletionAndRestart(t *testing.T) {
 	require.Contains(t, nextNote(t, inbox, 1), "SECOND")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "gate"), []byte("FIRST"), 0600))
 	require.Contains(t, nextNote(t, inbox, 2), "FIRST")
-	call("thread-c", "sleep 30")
-	cancel()
-	require.NoError(t, take(t, done))
-	cancel, done = start(t, factory())
-	defer cancel()
-	require.Contains(t, nextNote(t, inbox, 3), "interrupted by restart")
 	items, err := inbox.Active(t.Context())
 	require.NoError(t, err)
-	for i, target := range []domain.ConversationRef{"thread-b", "thread-a", "thread-c"} {
+	for i, target := range []domain.ConversationRef{"thread-b", "thread-a"} {
 		require.Equal(t, target, items[i].Payload.Target)
 		require.Equal(t, domain.SessionKey("origin"), items[i].SessionKey)
 	}

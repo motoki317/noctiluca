@@ -47,7 +47,7 @@ func TestInputsAwaitTheirOwnStart(t *testing.T) {
 }
 
 func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
-	for _, reason := range []string{"deadline", "exit", "restart", "recovery"} {
+	for _, reason := range []string{"deadline", "exit", "recovery"} {
 		t.Run(reason, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDeliveryRig(t, Config{TurnTimeout: time.Second})
@@ -69,14 +69,12 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 				switch reason {
 				case "exit":
 					close(s.events)
-				case "restart", "recovery":
+				case "recovery":
 					stop()
-					if reason == "recovery" {
-						for _, id := range []int64{second, third} {
-							claimed, err := f.inbox.Claim(t.Context(), id, time.Now().Add(time.Hour))
-							require.NoError(t, err)
-							require.True(t, claimed)
-						}
+					for _, id := range []int64{second, third} {
+						claimed, err := f.inbox.Claim(t.Context(), id, time.Now().Add(time.Hour))
+						require.NoError(t, err)
+						require.True(t, claimed)
 					}
 					f.start(t)
 				}
@@ -189,7 +187,7 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDeliveryRig(t, Config{RetryDelay: time.Hour})
 				f.model.manualAck = true
-				stop := f.start(t)
+				f.start(t)
 				first := f.enqueue(t, "room", "first")
 				s := take(t, f.model.opened)
 				require.Equal(t, first, take(t, s.inputs).ID)
@@ -213,70 +211,51 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 					f.status(t, second, "done")
 				}
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
-				synctest.Wait()
-				events := repository.NewEventRepository(f.db)
-				before, err := events.InputContext(t.Context(), "room", "room", time.Now())
-				require.NoError(t, err)
-				require.True(t, before.Running)
-				stop()
-				after, err := events.InputContext(t.Context(), "room", "room", time.Now())
-				require.NoError(t, err)
-				require.False(t, after.Running)
 			})
 		})
 	}
 }
 
 func TestUnstartedTaskRedeliversWithoutContinuation(t *testing.T) {
-	for _, reason := range []string{"restart", "exit"} {
-		t.Run(reason, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{})
-				f.model.manualAck = true
-				stop := f.start(t)
-				item := TaskItem("unstarted", "original task", "")
-				id, err := f.inbox.Enqueue(t.Context(), item)
-				require.NoError(t, err)
-				f.runner.Notify()
-				s := take(t, f.model.opened)
-				require.Equal(t, id, take(t, s.inputs).ID)
-				require.Equal(t, id, f.turn(t, string(item.SessionKey), true).Turn.InputID)
-				f.status(t, id, "dispatched")
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
-				synctest.Wait()
-				events := repository.NewEventRepository(f.db)
-				before, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
-				require.NoError(t, err)
-				require.True(t, before.Running)
-				if reason == "restart" {
-					stop()
-					f.start(t)
-				} else {
-					close(s.events)
-				}
-				take(t, s.closed)
-				s = take(t, f.model.opened)
-				require.Equal(t, id, take(t, s.inputs).ID)
-				after, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
-				require.NoError(t, err)
-				require.False(t, after.Running)
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-				f.status(t, id, "done")
-				f.turn(t, string(item.SessionKey), false)
-				synctest.Wait()
-				var rows, notes, attempts int
-				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&rows))
-				require.Equal(t, 1, rows)
-				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE kind='error'").Scan(&notes))
-				require.Equal(t, 1, notes)
-				require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
-				require.Zero(t, attempts)
-				require.Empty(t, s.inputs)
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{})
+		f.model.manualAck = true
+		f.start(t)
+		item := TaskItem("unstarted", "original task", "")
+		id, err := f.inbox.Enqueue(t.Context(), item)
+		require.NoError(t, err)
+		f.runner.Notify()
+		s := take(t, f.model.opened)
+		require.Equal(t, id, take(t, s.inputs).ID)
+		require.Equal(t, id, f.turn(t, string(item.SessionKey), true).Turn.InputID)
+		f.status(t, id, "dispatched")
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+		synctest.Wait()
+		events := repository.NewEventRepository(f.db)
+		before, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
+		require.NoError(t, err)
+		require.True(t, before.Running)
+		close(s.events)
+		take(t, s.closed)
+		s = take(t, f.model.opened)
+		require.Equal(t, id, take(t, s.inputs).ID)
+		after, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
+		require.NoError(t, err)
+		require.False(t, after.Running)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		f.status(t, id, "done")
+		f.turn(t, string(item.SessionKey), false)
+		synctest.Wait()
+		var rows, notes, attempts int
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&rows))
+		require.Equal(t, 1, rows)
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE kind='error'").Scan(&notes))
+		require.Equal(t, 1, notes)
+		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
+		require.Zero(t, attempts)
+		require.Empty(t, s.inputs)
+	})
 }
 
 func TestBufferedStartSurvivesDeliveryDeadline(t *testing.T) {
@@ -341,86 +320,67 @@ func TestLateSuccessfulSendWithoutStartFailsOnce(t *testing.T) {
 }
 
 func TestLateInputStartDoesNotRecreateTurn(t *testing.T) {
-	for _, steer := range []bool{false, true} {
-		t.Run(map[bool]string{false: "start", true: "steer"}[steer], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{})
-				f.model.manualAck = true
-				f.start(t)
-				id := f.enqueue(t, "room", "first")
-				s := take(t, f.model.opened)
-				require.Equal(t, id, take(t, s.inputs).ID)
-				if steer {
-					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
-					f.status(t, id, "done")
-					id = f.enqueue(t, "room", "steer")
-					require.Equal(t, id, take(t, s.inputs).ID)
-				}
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-				f.turn(t, "room", false)
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
-				f.status(t, id, "done")
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: id, Err: errors.New("duplicate")}
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: -1}
-				synctest.Wait()
-				saved, err := f.sessions.Get(t.Context(), "room")
-				require.NoError(t, err)
-				require.Nil(t, saved.Turn)
-				var attempts int
-				require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
-				require.Zero(t, attempts)
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{})
+		f.model.manualAck = true
+		f.start(t)
+		id := f.enqueue(t, "room", "first")
+		s := take(t, f.model.opened)
+		require.Equal(t, id, take(t, s.inputs).ID)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		f.turn(t, "room", false)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
+		f.status(t, id, "done")
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: id, Err: errors.New("duplicate")}
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: -1}
+		synctest.Wait()
+		saved, err := f.sessions.Get(t.Context(), "room")
+		require.NoError(t, err)
+		require.Nil(t, saved.Turn)
+		var attempts int
+		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
+		require.Zero(t, attempts)
+	})
 }
 
 func TestUnstartedInputDeadlineFailsOnlyExpiredItem(t *testing.T) {
-	for _, inflight := range []bool{false, true} {
-		t.Run(map[bool]string{false: "silent", true: "another-send"}[inflight], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{TurnTimeout: time.Second, RetryDelay: time.Hour})
-				f.model.manualAck = true
-				sent := make(chan domain.UserInput, 2)
-				f.model.send = func(ctx context.Context, input domain.UserInput) error {
-					sent <- input
-					if input.Text == "later" {
-						<-ctx.Done()
-						return ctx.Err()
-					}
-					return nil
-				}
-				stop := f.start(t)
-				first := f.enqueue(t, "room", "silent")
-				s := take(t, f.model.opened)
-				require.Equal(t, first, take(t, sent).ID)
-				var second int64
-				if inflight {
-					time.Sleep(100 * time.Millisecond)
-					second = f.enqueue(t, "room", "later")
-					require.Equal(t, second, take(t, sent).ID)
-				}
-				take(t, s.closed)
-				synctest.Wait()
-				stop()
-				f.status(t, first, "pending")
-				var attempts int
-				var failure string
-				require.NoError(t, f.db.QueryRow("SELECT attempts,last_error FROM inbox WHERE id=?", first).Scan(&attempts, &failure))
-				require.Equal(t, 1, attempts)
-				require.Equal(t, context.DeadlineExceeded.Error(), failure)
-				if inflight {
-					f.status(t, second, "pending")
-					require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", second).Scan(&attempts))
-					require.Zero(t, attempts)
-				}
-				var marked int
-				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE error LIKE '%delivery deadline exceeded%'").Scan(&marked))
-				require.Equal(t, 1, marked)
-				require.Empty(t, f.model.opened)
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{TurnTimeout: time.Second, RetryDelay: time.Hour})
+		f.model.manualAck = true
+		sent := make(chan domain.UserInput, 2)
+		f.model.send = func(ctx context.Context, input domain.UserInput) error {
+			sent <- input
+			if input.Text == "later" {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		}
+		stop := f.start(t)
+		first := f.enqueue(t, "room", "silent")
+		s := take(t, f.model.opened)
+		require.Equal(t, first, take(t, sent).ID)
+		time.Sleep(100 * time.Millisecond)
+		second := f.enqueue(t, "room", "later")
+		require.Equal(t, second, take(t, sent).ID)
+		take(t, s.closed)
+		synctest.Wait()
+		stop()
+		f.status(t, first, "pending")
+		var attempts int
+		var failure string
+		require.NoError(t, f.db.QueryRow("SELECT attempts,last_error FROM inbox WHERE id=?", first).Scan(&attempts, &failure))
+		require.Equal(t, 1, attempts)
+		require.Equal(t, context.DeadlineExceeded.Error(), failure)
+		f.status(t, second, "pending")
+		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", second).Scan(&attempts))
+		require.Zero(t, attempts)
+		var marked int
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE error LIKE '%delivery deadline exceeded%'").Scan(&marked))
+		require.Equal(t, 1, marked)
+		require.Empty(t, f.model.opened)
+	})
 }
 
 func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {

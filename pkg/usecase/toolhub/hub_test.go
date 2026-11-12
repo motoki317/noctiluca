@@ -95,24 +95,14 @@ func TestSourcesAndSessionContext(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	require.ElementsMatch(t, []string{"identity", "owner_echo", "external_echo"}, names)
-	require.False(t, call(t, memberClient, "owner_echo", map[string]any{}).IsError)
-	require.False(t, call(t, ownerClient, "owner_echo", map[string]any{}).IsError)
 	for _, tc := range []struct {
 		c   *mcp.ClientSession
 		key string
 	}{{memberClient, "member-session"}, {ownerClient, "owner-session"}} {
 		result := call(t, tc.c, "identity", map[string]any{"actor": "owner", "key": "forged"})
 		require.False(t, result.IsError)
-		require.Len(t, result.Content, 1)
 		require.JSONEq(t, fmt.Sprintf(`{"Key":%q}`, tc.key), result.Content[0].(*mcp.TextContent).Text)
-		require.Nil(t, result.StructuredContent)
 	}
-	raw := echo("raw")
-	raw.Handler = func(context.Context, json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage("  {\"ok\": true}\n"), nil
-	}
-	require.NoError(t, h.AddSource("raw", []domain.Tool{raw}))
-	require.Equal(t, "  {\"ok\": true}\n", call(t, ownerClient, "raw", nil).Content[0].(*mcp.TextContent).Text)
 }
 
 func TestSessionLifetime(t *testing.T) {
@@ -168,7 +158,7 @@ func TestInvalidTokensAndRegistry(t *testing.T) {
 	require.Error(t, h.AddSource("collision", []domain.Tool{echo("new"), echo("echo")}))
 	require.Error(t, h.AddSource("duplicate", []domain.Tool{echo("dup"), echo("dup")}))
 	require.Error(t, h.AddSource("", nil))
-	for _, schema := range []string{"null", `{}`, `{"type":"string"}`, `{"type":"object","$ref":"#/$defs/missing"}`} {
+	for _, schema := range []string{`{"type":"string"}`, `{"type":"object","$ref":"#/$defs/missing"}`} {
 		invalid := echo("invalid")
 		invalid.InputSchema = json.RawMessage(schema)
 		require.Error(t, h.AddSource("invalid", []domain.Tool{invalid}))

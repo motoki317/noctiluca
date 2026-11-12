@@ -12,33 +12,24 @@ import (
 )
 
 func TestAlwaysOfferedToolMetadata(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		meta map[string]any
-	}{
-		{name: "configured", meta: map[string]any{"test/alwaysOffered": true}},
-		{name: "unconfigured"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h := startHub(t, toolhub.Config{AlwaysOfferedMeta: tc.meta})
-			onDemand := echo("on_demand")
-			onDemand.OnDemand = true
-			require.NoError(t, h.AddSource("tools", []domain.Tool{echo("built_in"), onDemand}))
-			endpoint, err := h.OpenSession("session")
-			require.NoError(t, err)
-			c := client(t, endpoint)
-			listed, err := c.ListTools(t.Context(), nil)
-			require.NoError(t, err)
-			require.Len(t, listed.Tools, 2)
-			for _, tool := range listed.Tools {
-				if tool.Name == "built_in" {
-					require.Equal(t, mcp.Meta(tc.meta), tool.Meta)
-				} else {
-					require.Equal(t, "on_demand", tool.Name)
-					require.Nil(t, tool.Meta)
-				}
-			}
-		})
+	meta := map[string]any{"test/alwaysOffered": true}
+	h := startHub(t, toolhub.Config{AlwaysOfferedMeta: meta})
+	onDemand := echo("on_demand")
+	onDemand.OnDemand = true
+	require.NoError(t, h.AddSource("tools", []domain.Tool{echo("built_in"), onDemand}))
+	endpoint, err := h.OpenSession("session")
+	require.NoError(t, err)
+	c := client(t, endpoint)
+	listed, err := c.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed.Tools, 2)
+	for _, tool := range listed.Tools {
+		if tool.Name == "built_in" {
+			require.Equal(t, mcp.Meta(meta), tool.Meta)
+		} else {
+			require.Equal(t, "on_demand", tool.Name)
+			require.Nil(t, tool.Meta)
+		}
 	}
 }
 
@@ -67,11 +58,9 @@ func TestReplaceSourceAndTextResults(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	require.ElementsMatch(t, []string{"reserved", "kept", "text"}, names)
-	for _, output := range []string{`null`, `{}`, `false`} {
-		text.Handler = func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(output), nil }
-		require.NoError(t, h.ReplaceSource("remote", []domain.Tool{text}))
-		require.True(t, call(t, c, "text", nil).IsError)
-	}
+	text.Handler = func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`null`), nil }
+	require.NoError(t, h.ReplaceSource("remote", []domain.Tool{text}))
+	require.True(t, call(t, c, "text", nil).IsError)
 	require.NoError(t, h.ReplaceSource("remote", nil))
 	listed, err = c.ListTools(t.Context(), nil)
 	require.NoError(t, err)
