@@ -404,6 +404,7 @@ func TestBackfillUsesLiveMessageFilters(t *testing.T) {
 		live, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: "DTEST", SubType: messages[i].SubType, Message: &messages[i].Msg})
 		require.True(t, ok)
 		require.Equal(t, live, event)
+		require.Equal(t, "slack:m:DTEST:"+messages[i].Timestamp, event.SourceKey)
 		require.Equal(t, "FTEST", event.Attachments[0].Ref)
 	}
 }

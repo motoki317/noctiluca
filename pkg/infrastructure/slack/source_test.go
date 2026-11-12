@@ -44,31 +44,25 @@ func TestSourceInfoNamesAndRoot(t *testing.T) {
 	require.Equal(t, "Alex", a.SourceInfo(t.Context(), Conversation("slack", "D1", ""), "U1", false).Conversation)
 }
 
-func TestSourceInfoUnavailableFallsBackToIDs(t *testing.T) {
-	a := apiAdapter(t, func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"ok":false,"error":"missing_scope"}`)
-	}, false)
-	info := a.SourceInfo(t.Context(), Conversation("slack", "C1", "1.2"), "U1", true)
-	require.Equal(t, "C1", info.Conversation)
-	require.Equal(t, "U1", info.Sender)
-	require.Empty(t, info.ThreadText)
-}
-
 func TestInboundUsesPostedTime(t *testing.T) {
-	a := &adapter{name: "slack"}
+	a := &adapter{name: "slack", selfUser: "USELF", acceptConversation: func(_ domain.ConversationRef) bool { return false }}
 	for _, tt := range []struct {
 		name  string
-		event *slackevents.MessageEvent
+		event any
 		want  time.Time
 	}{
 		{"message", &slackevents.MessageEvent{Channel: "C1", User: "U1", TimeStamp: "1730000000.123456"}, time.Unix(1730000000, 123456000)},
 		{"edit", &slackevents.MessageEvent{Channel: "C1", SubType: "message_changed", Message: &sdk.Msg{User: "U1", Timestamp: "1.0", Edited: &sdk.Edited{Timestamp: "1730000001.0"}}}, time.Unix(1730000001, 0)},
 		{"delete", &slackevents.MessageEvent{Channel: "C1", SubType: "message_deleted", EventTimeStamp: "1730000002.0", PreviousMessage: &sdk.Msg{User: "U1", Timestamp: "1.0"}}, time.Unix(1730000002, 0)},
+		{"reaction", &slackevents.ReactionAddedEvent{User: "U1", ItemUser: "USELF", EventTimestamp: "1730000003.000001", Item: slackevents.Item{Type: "message", Channel: "C1", Timestamp: "1.0"}}, time.Unix(1730000003, 1000)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			event, ok := a.inbound(t.Context(), tt.event)
 			require.True(t, ok)
 			require.Equal(t, tt.want, event.ReceivedAt)
+			if event.Kind != domain.InboundEventMessage {
+				require.Empty(t, event.SourceKey)
+			}
 		})
 	}
 }
@@ -86,21 +80,15 @@ func TestSourceInfoRetriesFailedLookups(t *testing.T) {
 			fmt.Fprint(w, `{"ok":true,"channel":{"name":"general"}}`)
 		}
 	}, false)
-	ref := Conversation("slack", "C1", "")
-	info := a.SourceInfo(t.Context(), ref, "U1", false)
+	ref := Conversation("slack", "C1", "1.2")
+	info := a.SourceInfo(t.Context(), ref, "U1", true)
+	require.Empty(t, info.ThreadText)
 	require.Equal(t, "U1", info.Sender)
 	require.Equal(t, "C1", info.Conversation)
 	healthy = true
 	info = a.SourceInfo(t.Context(), ref, "U1", false)
 	require.Equal(t, "Alex", info.Sender)
 	require.Equal(t, "#general", info.Conversation)
-}
-
-func TestReactionUsesPostedTime(t *testing.T) {
-	a := &adapter{name: "slack", selfUser: "USELF", acceptConversation: func(_ domain.ConversationRef) bool { return false }}
-	event, ok := a.inbound(t.Context(), &slackevents.ReactionAddedEvent{User: "U1", ItemUser: "USELF", EventTimestamp: "1730000003.000001", Item: slackevents.Item{Type: "message", Channel: "C1", Timestamp: "1.0"}})
-	require.True(t, ok)
-	require.Equal(t, time.Unix(1730000003, 1000), event.ReceivedAt)
 }
 
 func TestSourceInfoRetriesDMPeerName(t *testing.T) {
