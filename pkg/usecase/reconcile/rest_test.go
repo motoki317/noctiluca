@@ -156,6 +156,64 @@ func TestBusyRestAllowsLaterInputsAndConsolidation(t *testing.T) {
 	}
 }
 
+func TestRestDoesNotWaitForFutureWork(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		readyAfter time.Duration
+		retryAfter time.Duration
+	}{
+		{name: "ready", readyAfter: 90 * time.Minute, retryAfter: 30 * time.Minute},
+		{name: "retry", readyAfter: -2 * time.Minute, retryAfter: 90 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeliveryRig(t, Config{Procedure: restProcedure})
+				f.model.idle = true
+				info := domain.SessionContext{Conversation: "room"}
+				require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: "room", ResumeToken: "saved", Context: &info}))
+				now := time.Now()
+				id, err := f.inbox.Enqueue(t.Context(), domain.InboxItem{
+					SourceKey: "future", SessionKey: "room", Lane: "conv",
+					ReadyAt: now.Add(tc.readyAfter), RetryAt: now.Add(tc.retryAfter),
+					Payload: domain.InboxPayload{Context: info, Input: domain.UserInput{Text: "future work"}},
+				})
+				require.NoError(t, err)
+				fireConsolidation(t, f, now.Add(-time.Minute))
+				f.start(t)
+				s := take(t, f.model.opened)
+				require.Equal(t, domain.SessionKey("room"), s.config.Key)
+				require.Equal(t, "saved", s.config.ResumeToken)
+				input := take(t, s.inputs)
+				require.Equal(t, "procedure: rest", input.Text)
+				f.status(t, input.ID, "done")
+				f.status(t, id, "pending")
+				synctest.Wait()
+				require.Empty(t, f.model.opened)
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+				take(t, s.closed)
+				require.Empty(t, f.turn(t, "room", false).ResumeToken)
+				consolidate := take(t, f.model.opened)
+				require.Equal(t, domain.SessionKey("task:consolidate"), consolidate.config.Key)
+				input = take(t, consolidate.inputs)
+				require.Equal(t, "procedure: consolidate", input.Text)
+				f.status(t, input.ID, "done")
+				consolidate.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+				take(t, consolidate.closed)
+				time.Sleep(time.Until(now.Add(90*time.Minute - time.Millisecond)))
+				synctest.Wait()
+				f.status(t, id, "pending")
+				require.Empty(t, f.model.opened)
+				time.Sleep(time.Millisecond)
+				fresh := take(t, f.model.opened)
+				require.Equal(t, domain.SessionKey("room"), fresh.config.Key)
+				require.Empty(t, fresh.config.ResumeToken)
+				require.Equal(t, id, take(t, fresh.inputs).ID)
+				f.status(t, id, "done")
+			})
+		})
+	}
+}
+
 func TestRestWaitsForRecoveredContinuation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDeliveryRig(t, Config{Procedure: restProcedure})
