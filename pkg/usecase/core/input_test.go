@@ -14,7 +14,7 @@ import (
 func TestReadableInput(t *testing.T) {
 	at := time.Date(2026, 11, 6, 7, 29, 1, 0, time.UTC)
 	zone := time.FixedZone("JST", 9*60*60)
-	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room", MessageRef: "message", Sender: domain.Sender{ID: "owner"}, Text: "add 了解 at the end", ReceivedAt: at}
+	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room", MessageRef: "entry:channel:message", Sender: domain.Sender{ID: "owner"}, Text: "add 了解 at the end", ReceivedAt: at}
 	item := domain.InboxItem{Lane: "conv", Payload: domain.InboxPayload{Event: &event}}
 	info := domain.SourceInfo{Conversation: "#general", Sender: "Alex", ThreadAt: at.Add(-time.Minute), ThreadText: "What did\nyou run?"}
 	for _, tt := range []struct {
@@ -22,18 +22,18 @@ func TestReadableInput(t *testing.T) {
 		history domain.InputContext
 		want    string
 	}{
-		{"first thread", domain.InputContext{}, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nmessage: message\nrefs: conversation=thread\n\nadd 了解 at the end"},
-		{"deleted root", domain.InputContext{Root: &domain.InboundEvent{Deleted: true}}, "#general · thread 16:28:01 JST (root deleted) | Alex (owner) | 16:29:01 JST\nmessage: message\nrefs: conversation=thread\n\nadd 了解 at the end"},
-		{"seen deleted root", domain.InputContext{ThreadSeen: true, Root: &domain.InboundEvent{Deleted: true}}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nmessage: message\nrefs: conversation=thread\n\nadd 了解 at the end"},
-		{"before reply", domain.InputContext{ThreadSeen: true, Running: true, LastReply: at.Add(time.Second)}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nSent at 16:29:01 JST, before your reply at 16:29:02 JST in this thread.\nmessage: message\nrefs: conversation=thread\n\nadd 了解 at the end"},
-		{"queued", domain.InputContext{ThreadSeen: true, Running: true}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nSent while your previous turn was running. After its reply, answer only what this message adds.\nmessage: message\nrefs: conversation=thread\n\nadd 了解 at the end"},
+		{"first thread", domain.InputContext{}, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nmessage: channel=channel id=message\nrefs: conversation=thread\n\nadd 了解 at the end"},
+		{"deleted root", domain.InputContext{Root: &domain.InboundEvent{Deleted: true}}, "#general · thread 16:28:01 JST (root deleted) | Alex (owner) | 16:29:01 JST\nmessage: channel=channel id=message\nrefs: conversation=thread\n\nadd 了解 at the end"},
+		{"seen deleted root", domain.InputContext{ThreadSeen: true, Root: &domain.InboundEvent{Deleted: true}}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nmessage: channel=channel id=message\nrefs: conversation=thread\n\nadd 了解 at the end"},
+		{"before reply", domain.InputContext{ThreadSeen: true, Running: true, LastReply: at.Add(time.Second)}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nSent at 16:29:01 JST, before your reply at 16:29:02 JST in this thread.\nmessage: channel=channel id=message\nrefs: conversation=thread\n\nadd 了解 at the end"},
+		{"queued", domain.InputContext{ThreadSeen: true, Running: true}, "#general · thread 16:28:01 JST | Alex (owner) | 16:29:01 JST\nSent while your previous turn was running. After its reply, answer only what this message adds.\nmessage: channel=channel id=message\nrefs: conversation=thread\n\nadd 了解 at the end"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, formatInput(item, tt.history, info, nil, "owner", zone).Text)
 		})
 	}
 	event.Parent, event.Conversation, event.Direct = "", "room", true
-	require.Equal(t, "DM with Alex · top level | Alex (owner) | 16:29:01 JST\nmessage: message\nrefs: conversation=room\n\nadd 了解 at the end", formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, nil, "owner", zone).Text)
+	require.Equal(t, "DM with Alex · top level | Alex (owner) | 16:29:01 JST\nmessage: channel=channel id=message\nrefs: conversation=room\n\nadd 了解 at the end", formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, nil, "owner", zone).Text)
 	item.Payload.Event = nil
 	item.Payload.MessageRef = "message"
 	item.Payload.Context = domain.SessionContext{Conversation: "room"}
@@ -62,12 +62,12 @@ func TestReadableMessageChanges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			event := domain.InboundEvent{
 				Kind: domain.InboundEventMessageEdited, Deleted: tc.deleted,
-				Conversation: "room", MessageRef: "message", Sender: domain.Sender{ID: "member"},
+				Conversation: "room", MessageRef: "entry:channel:message", Sender: domain.Sender{ID: "member"},
 				Text: tc.text, ReceivedAt: time.Date(2026, 11, 6, 7, 29, 1, 0, time.UTC),
 			}
 			item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event}}
 			input := formatInput(item, domain.InputContext{}, domain.SourceInfo{}, nil, "owner", time.UTC)
-			require.Equal(t, "room · top level | member | 07:29:01 UTC\n"+tc.notice+"\nmessage: message\nrefs: conversation=room\n\n"+tc.text, input.Text)
+			require.Equal(t, "room · top level | member | 07:29:01 UTC\n"+tc.notice+"\nmessage: channel=channel id=message\nrefs: conversation=room\n\n"+tc.text, input.Text)
 		})
 	}
 }
@@ -77,14 +77,14 @@ func TestInputNamedRefs(t *testing.T) {
 		for _, threaded := range []bool{false, true} {
 			t.Run(fmt.Sprintf("direct=%t/threaded=%t", direct, threaded), func(t *testing.T) {
 				event := message("room", "member", "start work")
-				event.Direct, event.MessageRef = direct, "message-thread"
+				event.Direct, event.MessageRef = direct, "entry:channel:message-thread"
 				if threaded {
 					event.Parent, event.Conversation = "room", "existing-thread"
 				}
 				item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: "room", Direct: direct}}}
 				refs := []domain.NamedRef{{Name: "extra", Ref: "first-ref"}, {Name: "another", Ref: "second-ref"}}
 				input := formatInput(item, domain.InputContext{}, domain.SourceInfo{}, refs, "owner", time.UTC)
-				require.Contains(t, input.Text, fmt.Sprintf("\nmessage: message-thread\nrefs: conversation=%s extra=first-ref another=second-ref\n\n", event.Conversation))
+				require.Contains(t, input.Text, fmt.Sprintf("\nmessage: channel=channel id=message-thread\nrefs: conversation=%s extra=first-ref another=second-ref\n\n", event.Conversation))
 				item.Payload.Target, item.Payload.MessageRef, item.Payload.Event = event.Conversation, event.MessageRef, nil
 				input = formatInput(item, domain.InputContext{}, domain.SourceInfo{}, refs, "owner", time.UTC)
 				require.Contains(t, input.Text, fmt.Sprintf("\nrefs: conversation=%s extra=first-ref another=second-ref\n\n", event.Conversation))
@@ -170,15 +170,22 @@ func TestPrepareWithoutPostRefProvider(t *testing.T) {
 
 func TestInputReactionAndMissingMessageRef(t *testing.T) {
 	event := message("room", "member", "reacted")
-	event.Kind, event.MessageRef = domain.InboundEventReaction, "message"
+	event.Kind, event.MessageRef = domain.InboundEventReaction, "entry:channel:message"
 	item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event, Target: "ignored", MessageRef: "ignored"}}
 	input := formatInput(item, domain.InputContext{LastReply: event.ReceivedAt.Add(time.Second)}, domain.SourceInfo{}, nil, "owner", time.UTC)
 	require.Contains(t, input.Text, "in this conversation.\nrefs: conversation=room\n\n")
 	require.Contains(t, input.Text, "\nReaction.\n")
 	require.NotContains(t, input.Text, "\nmessage:")
-	event.Kind, event.MessageRef = domain.InboundEventMessage, ""
-	input = formatInput(item, domain.InputContext{}, domain.SourceInfo{}, nil, "owner", time.UTC)
-	require.Contains(t, input.Text, "\nmessage: \nrefs: conversation=room\n\n")
+	for _, kind := range []domain.InboundEventKind{domain.InboundEventMessage, domain.InboundEventMessageEdited} {
+		for _, ref := range []domain.ConversationRef{"", "message", "entry:channel", "entry:channel:message:extra"} {
+			t.Run(fmt.Sprintf("%s/%s", kind, ref), func(t *testing.T) {
+				event.Kind, event.MessageRef = kind, ref
+				input = formatInput(item, domain.InputContext{}, domain.SourceInfo{}, nil, "owner", time.UTC)
+				require.Contains(t, input.Text, "\nrefs: conversation=room\n\n")
+				require.NotContains(t, input.Text, "\nmessage:")
+			})
+		}
+	}
 }
 
 func TestReadableInputKeepsKnownSenderName(t *testing.T) {

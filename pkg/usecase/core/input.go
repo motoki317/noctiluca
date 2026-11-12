@@ -129,7 +129,9 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 			header += "Sent while your previous turn was running. After its reply, answer only what this message adds.\n"
 		}
 		if kind == domain.InboundEventMessage || kind == domain.InboundEventMessageEdited {
-			header += fmt.Sprintf("message: %s\n", event.MessageRef)
+			if _, channel, id, ok := domain.ParseConversationRef(event.MessageRef); ok {
+				header += fmt.Sprintf("message: channel=%s id=%s\n", channel, id)
+			}
 		}
 	}
 	header += fmt.Sprintf("refs: conversation=%s", conversation)
