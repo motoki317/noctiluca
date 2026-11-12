@@ -22,6 +22,9 @@ func commandNote(t *testing.T, s *session, method, turnID, id, status, output st
 func TestBackgroundCommandCompletion(t *testing.T) {
 	s, _ := openInputSession(t, "input-normal")
 	sendAndStart(t, s, "start commands")
+	control(t, s, "notify", rpcFrame{Method: "item/started", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"type":"mcpToolCall","id":"mcp-1","server":"noctiluca","tool":"watch"}}`)})
+	require.Equal(t, domain.ModelEventToolCall, nextEvent(t, s).Kind)
+	control(t, s, "notify", rpcFrame{Method: "item/started", Params: json.RawMessage(`{"threadId":"other-thread","turnId":"other-turn","item":{"type":"commandExecution","id":"other-command"}}`)})
 	for _, id := range []string{"foreground", "background-1", "background-2", "background-1"} {
 		event := commandNote(t, s, "item/started", "turn-1", id, "inProgress", "")
 		require.Equal(t, domain.ModelEventToolCall, event.Kind)
@@ -53,15 +56,4 @@ func TestBackgroundCommandCompletion(t *testing.T) {
 	repeated := commandNote(t, s, "item/completed", "turn-1", "background-2", "failed", "failure output")
 	require.Equal(t, domain.ModelEventToolResult, repeated.Kind)
 	require.True(t, s.Idle(), "duplicate starts or completions must not retain a command")
-}
-
-func TestOnlyCommandsRetainIdleSession(t *testing.T) {
-	s, _ := openInputSession(t, "input-normal")
-	sendAndStart(t, s, "tools")
-	control(t, s, "notify", rpcFrame{Method: "item/started", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"type":"mcpToolCall","id":"mcp-1","server":"noctiluca","tool":"watch"}}`)})
-	require.Equal(t, domain.ModelEventToolCall, nextEvent(t, s).Kind)
-	control(t, s, "notify", rpcFrame{Method: "item/started", Params: json.RawMessage(`{"threadId":"other-thread","turnId":"other-turn","item":{"type":"commandExecution","id":"other-command"}}`)})
-	control(t, s, "complete", nil)
-	require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
-	require.Eventually(t, s.Idle, time.Second, time.Millisecond)
 }

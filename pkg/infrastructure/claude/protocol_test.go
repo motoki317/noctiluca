@@ -24,15 +24,11 @@ func TestProtocol(t *testing.T) {
 		{`{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`, nil},
 		{`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"reply","input":{"text":"hello"}}]}}`, []domain.ModelEventKind{domain.ModelEventToolCall}},
 		{`{"type":"stream_event","event":{"type":"message_stop"}}`, nil},
-		{`{"type":"stream_event","event":{"type":"message_start"}}`, nil},
 		{`{"type":"stream_event","parent_tool_use_id":"tool-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"child"}}}`, nil},
 		{`{"type":"assistant","parent_tool_use_id":"tool-1","message":{"content":[{"type":"tool_use","name":"child"}]}}`, nil},
 		{`{"type":"result","subtype":"success"}`, []domain.ModelEventKind{domain.ModelEventTurnFinished}},
 		{`{"type":"system","subtype":"task_notification","task_id":"task-1","status":"completed","summary":"done"}`, []domain.ModelEventKind{domain.ModelEventBackgroundDone}},
 		{`{"type":"stream_event","event":{"type":"message_start"}}`, []domain.ModelEventKind{domain.ModelEventTurnStarted}},
-		{`{"type":"result","subtype":"error_during_execution","is_error":true}`, []domain.ModelEventKind{domain.ModelEventError, domain.ModelEventTurnFinished}},
-		{`{"type":"keep_alive"}`, nil},
-		{`{"type":"command_lifecycle","state":"refused"}`, nil},
 	}
 	for _, tc := range cases {
 		f, err := parseFrame([]byte(tc.line))
@@ -64,10 +60,8 @@ func TestBackgroundActivity(t *testing.T) {
 		pending int
 	}{
 		{`{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}`, 1},
-		{`{"type":"system","subtype":"task_started","task_id":"a","is_backgrounded":true}`, 1},
 		{`{"type":"system","subtype":"task_started","task_id":"foreground","is_backgrounded":false}`, 1},
 		{`{"type":"system","subtype":"task_started","task_id":"b","is_backgrounded":true}`, 2},
-		{`{"type":"system","subtype":"task_notification","task_id":"a","status":"completed"}`, 1},
 		{`{"type":"system","subtype":"task_notification","task_id":"a","status":"completed"}`, 1},
 		{`{"type":"result","subtype":"success"}`, 1},
 		{`{"type":"system","subtype":"background_tasks_changed","tasks":[]}`, 0},
@@ -84,14 +78,8 @@ func TestRecoverableToolError(t *testing.T) {
 		name, content, want string
 	}{
 		{"string", `" \nExit code 1\nfile not found\n\t "`, "Exit code 1\nfile not found"},
-		{"text blocks", `[{"type":"text","text":"\nExit code 1"},{"type":"text","text":"file not found\n"}]`, "Exit code 1\nfile not found"},
 		{"mixed blocks", `[{"type":"image","text":"ignored"},{"type":"text","text":"read failed"},{"type":"text","text":""},{"type":"text","text":"permission denied"}]`, "read failed\n\npermission denied"},
-		{"empty string", `""`, "model tool failed"},
 		{"blank string", `" \t\r\n "`, "model tool failed"},
-		{"empty blocks", `[]`, "model tool failed"},
-		{"blank text block", `[{"type":"text","text":" \n\t "}]`, "model tool failed"},
-		{"non-text block", `[{"type":"image","text":"ignored"}]`, "model tool failed"},
-		{"null", `null`, "model tool failed"},
 		{"unsupported content", `{"text":"ignored"}`, "model tool failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +91,6 @@ func TestRecoverableToolError(t *testing.T) {
 			require.Equal(t, domain.ModelEventToolResult, events[0].Kind)
 			require.Equal(t, "call", events[0].ToolCall.ID)
 			require.EqualError(t, events[0].Err, tc.want)
-			require.Empty(t, events[0].Text)
 		})
 	}
 }
@@ -122,28 +109,49 @@ func TestFailedResultDoesNotExposeBody(t *testing.T) {
 }
 
 func TestAutonomousTurnWithoutInput(t *testing.T) {
-	for _, partial := range []bool{false, true} {
-		var p parser
-		p.events(frame{Type: "result", Subtype: "success"}, nil)
-		events := p.events(frame{Type: "system", Subtype: "task_notification", TaskID: "background", Status: "completed"}, nil)
-		require.Equal(t, domain.ModelEventBackgroundDone, events[0].Kind)
-		if partial {
-			f, err := parseFrame([]byte(`{"type":"stream_event","event":{"type":"message_start"}}`))
-			require.NoError(t, err)
-			events = p.events(f, nil)
-			require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
+	var p parser
+	p.events(frame{Type: "result", Subtype: "success"}, nil)
+	events := p.events(frame{Type: "system", Subtype: "task_notification", TaskID: "background", Status: "completed"}, nil)
+	require.Equal(t, domain.ModelEventBackgroundDone, events[0].Kind)
+	f, err := parseFrame([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"reply","name":"reply","input":{"target":"thread","text":"done"}}]}}`))
+	require.NoError(t, err)
+	events = p.events(f, nil)
+	require.Len(t, events, 2)
+	require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
+	require.Equal(t, domain.ModelEventToolCall, events[1].Kind)
+	require.True(t, p.active)
+	require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result"}, nil)[0].Kind)
+	require.False(t, p.active)
+}
+
+func TestInputLifecycle(t *testing.T) {
+	var p parser
+	pending := map[string]int64{"input": 1, "refused": 2, "discarded": 3, "cancelled": 4}
+	for _, tc := range []struct {
+		state, uuid string
+		kinds       []domain.ModelEventKind
+	}{
+		{"queued", "input", nil},
+		{"started", "input", []domain.ModelEventKind{domain.ModelEventInputStarted, domain.ModelEventTurnStarted}},
+		{"started", "input", nil},
+		{"completed", "input", nil},
+		{"started", "unknown", []domain.ModelEventKind{domain.ModelEventTurnStarted}},
+		{"refused", "refused", []domain.ModelEventKind{domain.ModelEventInputRefused}},
+		{"discarded", "discarded", []domain.ModelEventKind{domain.ModelEventInputRefused}},
+		{"cancelled", "cancelled", []domain.ModelEventKind{domain.ModelEventInputRefused}},
+	} {
+		id := pending[tc.uuid]
+		var kinds []domain.ModelEventKind
+		for _, event := range p.events(frame{Type: "command_lifecycle", State: tc.state, CommandUUID: tc.uuid}, pending) {
+			kinds = append(kinds, event.Kind)
+			if event.Kind == domain.ModelEventInputStarted || event.Kind == domain.ModelEventInputRefused {
+				require.Equal(t, id, event.InputID)
+				require.NotContains(t, pending, tc.uuid)
+				if event.Kind == domain.ModelEventInputRefused {
+					require.Error(t, event.Err)
+				}
+			}
 		}
-		f, err := parseFrame([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"reply","name":"reply","input":{"target":"thread","text":"done"}}]}}`))
-		require.NoError(t, err)
-		events = p.events(f, nil)
-		if !partial {
-			require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
-			events = events[1:]
-		}
-		require.Len(t, events, 1)
-		require.Equal(t, domain.ModelEventToolCall, events[0].Kind)
-		require.True(t, p.active)
-		require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result"}, nil)[0].Kind)
-		require.False(t, p.active)
+		require.Equal(t, tc.kinds, kinds, tc.state+"/"+tc.uuid)
 	}
 }

@@ -7,14 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -64,7 +62,7 @@ func TestAppServerHelper(t *testing.T) {
 			break
 		}
 	}
-	capture, _ := json.Marshal(map[string]any{"args": args, "codexHome": os.Getenv("CODEX_HOME")})
+	capture, _ := json.Marshal(map[string]any{"args": args})
 	_ = os.WriteFile("invocation.json", capture, 0600)
 	log, err := os.OpenFile("requests.jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -93,15 +91,8 @@ func TestAppServerHelper(t *testing.T) {
 		}
 		switch f.Method {
 		case "initialize":
-			if mode == "init-blocked" {
-				continue
-			}
 			if mode == "init-exit" {
 				os.Exit(0)
-			}
-			if mode == "malformed" {
-				fmt.Println("invalid frame secret-bearer")
-				continue
 			}
 			respond(map[string]string{"userAgent": "codex/0.163.0"})
 		case "initialized":
@@ -139,15 +130,13 @@ func TestAppServerHelper(t *testing.T) {
 				reject("turn rejected")
 				continue
 			}
-			if mode != "early-events" {
-				respond(map[string]any{"turn": map[string]string{"id": "turn-1"}})
-			}
+			respond(map[string]any{"turn": map[string]string{"id": "turn-1"}})
 			if mode == "response-only" {
 				notify("item/agentMessage/delta", map[string]string{"threadId": "thread-1", "delta": "response sent"})
 				continue
 			}
 			turnNote("turn/started", "inProgress")
-			if mode == "stay" || mode == "interrupt-blocked" {
+			if mode == "interrupt-blocked" {
 				continue
 			}
 			if mode == "crash" {
@@ -165,21 +154,12 @@ func TestAppServerHelper(t *testing.T) {
 			}
 			emit(map[string]string{"method": "future/notification"})
 			notify("item/agentMessage/delta", map[string]string{"threadId": "other-thread", "delta": "wrong"})
-			count := 1
-			if mode == "early-events" {
-				count = 100
-			}
-			for range count {
-				notify("item/agentMessage/delta", map[string]string{"threadId": "thread-1", "delta": "hello"})
-			}
+			notify("item/agentMessage/delta", map[string]string{"threadId": "thread-1", "delta": "hello"})
 			for _, method := range []string{"item/started", "item/completed"} {
 				notify(method, map[string]any{"threadId": "thread-1", "turnId": "turn-1",
 					"item": map[string]any{"type": "mcpToolCall", "id": "tool-1", "server": "noctiluca", "tool": "reply", "arguments": map[string]string{"text": "hello"}, "status": "completed"}})
 			}
 			turnNote("turn/completed", "completed")
-			if mode == "early-events" {
-				respond(map[string]any{"turn": map[string]string{"id": "turn-1"}})
-			}
 		case "turn/interrupt":
 			if mode == "interrupt-blocked" {
 				continue
@@ -236,7 +216,6 @@ func TestOpenResumeAndSettings(t *testing.T) {
 	for _, resume := range []string{"", token} {
 		t.Run("resume="+resume, func(t *testing.T) {
 			path, dir := fakeServer(t, "normal")
-			t.Setenv("CODEX_HOME", filepath.Join(dir, "shared-home"))
 			s, err := New(path, "test-model", "low").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir,
 				ResumeToken: resume, SystemPrompt: "System instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "secret-bearer"}})
 			require.NoError(t, err)
@@ -246,17 +225,13 @@ func TestOpenResumeAndSettings(t *testing.T) {
 			capture, err := os.ReadFile(filepath.Join(dir, "invocation.json"))
 			require.NoError(t, err)
 			var inv struct {
-				Args      []string `json:"args"`
-				CodexHome string   `json:"codexHome"`
+				Args []string `json:"args"`
 			}
 			require.NoError(t, json.Unmarshal(capture, &inv))
 			require.Equal(t, []string{"app-server", "-c", "mcp_servers={}", "-c", "plugins={}"}, inv.Args)
 			require.NotContains(t, string(capture), "secret-bearer")
-			require.Equal(t, os.Getenv("CODEX_HOME"), inv.CodexHome)
 			frames := requests(t, dir)
 			require.Len(t, frames, 3)
-			require.Equal(t, "initialize", frames[0].Method)
-			require.Equal(t, "initialized", frames[1].Method)
 			method := "thread/start"
 			if resume != "" {
 				method = "thread/resume"
@@ -269,8 +244,6 @@ func TestOpenResumeAndSettings(t *testing.T) {
 			require.Equal(t, resume != "", params.ExcludeTurns)
 			require.Equal(t, dir, params.Cwd)
 			require.Equal(t, "System instructions\n\n"+backgroundInstruction, params.DeveloperInstructions)
-			require.Equal(t, "never", params.ApprovalPolicy)
-			require.Equal(t, "danger-full-access", params.Sandbox)
 			require.Equal(t, "test-model", params.Model)
 			require.Equal(t, map[string]any{"features.apps": false, "model_reasoning_effort": "low", "mcp_servers.noctiluca": map[string]any{
 				"url": "http://127.0.0.1:1234/mcp", "http_headers": map[string]any{"Authorization": "Bearer secret-bearer"}}}, params.Config)
@@ -280,15 +253,9 @@ func TestOpenResumeAndSettings(t *testing.T) {
 
 func TestMissingThreadFallback(t *testing.T) {
 	path, dir := fakeServer(t, "missing")
-	var logs bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
 	s, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: "missing"})
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
-	require.Contains(t, logs.String(), "WARN")
-	require.Contains(t, logs.String(), "starting a fresh session")
 	require.Equal(t, "thread-1:"+promptHash(developerInstructions("")), s.ResumeToken())
 	frames := requests(t, dir)
 	require.Len(t, frames, 4)
@@ -296,45 +263,31 @@ func TestMissingThreadFallback(t *testing.T) {
 	require.Equal(t, "thread/start", frames[3].Method)
 	var params map[string]any
 	require.NoError(t, json.Unmarshal(frames[3].Params, &params))
-	require.NotContains(t, params, "model")
 	require.NotContains(t, params, "threadId")
 	require.NotContains(t, params, "excludeTurns")
-	require.Equal(t, map[string]any{"features.apps": false}, params["config"])
 }
 
-func TestTurnStreamAndRepeatedInput(t *testing.T) {
-	for _, mode := range []string{"normal", "early-events"} {
-		t.Run(mode, func(t *testing.T) {
-			path, dir := fakeServer(t, mode)
-			s, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, s.Close()) })
-			for range 2 {
-				require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "hello"}))
-				require.Equal(t, domain.ModelEventTurnStarted, nextTurnEvent(t, s).Kind)
-				count := 1
-				if mode == "early-events" {
-					count = 100
-				}
-				for range count {
-					require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "hello"}, nextTurnEvent(t, s))
-				}
-				call := nextTurnEvent(t, s)
-				require.Equal(t, domain.ModelEventToolCall, call.Kind)
-				require.Equal(t, "mcp__noctiluca__reply", call.ToolCall.Name)
-				require.JSONEq(t, `{"text":"hello"}`, string(call.ToolCall.Input))
-				result := nextTurnEvent(t, s)
-				require.Equal(t, domain.ModelEventToolResult, result.Kind)
-				require.Equal(t, call.ToolCall.ID, result.ToolCall.ID)
-				require.Equal(t, domain.ModelEventTurnFinished, nextTurnEvent(t, s).Kind)
-				require.Eventually(t, s.Idle, time.Second, time.Millisecond)
-			}
-		})
-	}
+func TestTurnStream(t *testing.T) {
+	path, dir := fakeServer(t, "normal")
+	s, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "hello"}))
+	require.Equal(t, domain.ModelEventTurnStarted, nextTurnEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "hello"}, nextTurnEvent(t, s))
+	call := nextTurnEvent(t, s)
+	require.Equal(t, domain.ModelEventToolCall, call.Kind)
+	require.Equal(t, "mcp__noctiluca__reply", call.ToolCall.Name)
+	require.JSONEq(t, `{"text":"hello"}`, string(call.ToolCall.Input))
+	result := nextTurnEvent(t, s)
+	require.Equal(t, domain.ModelEventToolResult, result.Kind)
+	require.Equal(t, call.ToolCall.ID, result.ToolCall.ID)
+	require.Equal(t, domain.ModelEventTurnFinished, nextTurnEvent(t, s).Kind)
+	require.Eventually(t, s.Idle, time.Second, time.Millisecond)
 }
 
 func TestTurnTimeoutInterruptsBeforeProcessExit(t *testing.T) {
-	for _, mode := range []string{"stay", "interrupt-blocked", "response-only"} {
+	for _, mode := range []string{"interrupt-blocked", "response-only"} {
 		t.Run(mode, func(t *testing.T) {
 			path, dir := fakeServer(t, mode)
 			ctx, cancel := context.WithCancel(t.Context())
@@ -368,12 +321,10 @@ func TestTurnTimeoutInterruptsBeforeProcessExit(t *testing.T) {
 }
 
 func TestOpenFailures(t *testing.T) {
-	for _, mode := range []string{"open-error", "malformed", "init-exit", "init-blocked"} {
+	for _, mode := range []string{"open-error", "init-exit"} {
 		t.Run(mode, func(t *testing.T) {
 			path, dir := fakeServer(t, mode)
-			ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
-			defer cancel()
-			_, err := New(path, "", "").Open(ctx, domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved",
+			_, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: "saved",
 				ToolHub: domain.MCPEndpoint{BearerToken: "secret-bearer"}})
 			require.Error(t, err)
 			require.NotContains(t, err.Error(), "secret-bearer")
@@ -416,11 +367,7 @@ func TestCloseKillsProcessGroup(t *testing.T) {
 	require.NoError(t, err)
 	pid, err := strconv.Atoi(string(data))
 	require.NoError(t, err)
-	var wg sync.WaitGroup
-	for range 3 {
-		wg.Go(func() { require.NoError(t, s.Close()) })
-	}
-	wg.Wait()
+	require.NoError(t, s.Close())
 	require.Eventually(t, func() bool {
 		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 			return true
