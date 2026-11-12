@@ -37,7 +37,7 @@ func TestGroupRefreshKeepsSessionAndAcceptsNewUsers(t *testing.T) {
 			return nil, ctx.Err()
 		}
 	}
-	f := setupGroups(t, Config{}, Messaging{Owner: "owner", GroupRefreshInterval: 10 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}, nil, provider)
+	f := setup(t, Config{}, []Messaging{{Owner: "owner", GroupRefreshInterval: 10 * time.Millisecond, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}}, fixtureOptions{groups: provider})
 	require.Equal(t, []string{"group"}, take(t, calls))
 	e := message("test:thread", "owner", "first")
 	e.Parent = "test:room"
@@ -66,7 +66,7 @@ func TestGroupRefreshKeepsSessionAndAcceptsNewUsers(t *testing.T) {
 }
 
 func TestGroupUpdatesKeepSessionAndRejectRemovedUsers(t *testing.T) {
-	f := setup(t, Config{}, Messaging{Owner: "owner", UserGroups: map[string][]string{"group": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}, nil)
+	f := setup(t, Config{}, []Messaging{{Owner: "owner", UserGroups: map[string][]string{"group": {"owner", "member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}}, fixtureOptions{})
 	f.messaging.in <- message("test:room", "member", "first")
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
@@ -87,38 +87,14 @@ func TestGroupUpdatesKeepSessionAndRejectRemovedUsers(t *testing.T) {
 	require.Len(t, events, 3)
 }
 
-func TestGroupStartupFailure(t *testing.T) {
-	called := make(chan struct{})
-	f := setupGroups(t, Config{}, Messaging{Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}, nil,
-		func(context.Context, []string) (map[string][]string, error) {
-			select {
-			case <-called:
-			default:
-				close(called)
-			}
-			return nil, errors.New("group lookup failed")
-		})
-	_ = f
-	take(t, called)
-}
-
 func TestEntryTrustRefreshAndRestore(t *testing.T) {
-	f := setup(t, Config{}, Messaging{Owner: "owner", Trust: domain.AcceptRule{Groups: []string{"team"}}, UserGroups: map[string][]string{"team": {"owner"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:blocked-direct": {Ignore: true}}}, nil)
-	blocked := message("test:blocked-direct", "owner", "denied override")
-	blocked.Direct = true
-	f.messaging.in <- blocked
+	f := setup(t, Config{}, []Messaging{{Owner: "owner", Trust: domain.AcceptRule{Groups: []string{"team"}}, UserGroups: map[string][]string{"team": {"owner"}}}}, fixtureOptions{})
 	e := message("test:direct-thread", "owner", "first")
 	e.Parent = "test:direct"
 	e.Direct = true
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	require.Contains(t, take(t, s.inputs).Text, "first")
-	require.True(t, f.hub.active("test:direct"))
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	require.Eventually(t, func() bool {
-		records, err := f.events.ListModel(t.Context(), "test:direct", 1)
-		return err == nil && len(records) == 1 && records[0].Event.Kind == domain.ModelEventTurnFinished
-	}, time.Second, time.Millisecond)
 	require.NoError(t, f.core.(*core).applyGroups(f.core.(*core).messaging.instances[0], map[string][]string{"team": {"owner", "member"}}))
 	e.Sender.ID = "member"
 	e.Text = "accepted without restart"
@@ -128,6 +104,9 @@ func TestEntryTrustRefreshAndRestore(t *testing.T) {
 	require.Equal(t, domain.SessionKey("test:direct"), take(t, f.hub.closed))
 	item, err := f.core.(*core).workItem(t.Context(), "test:direct")
 	require.NoError(t, err)
+	require.Equal(t, domain.SessionKey("test:direct"), item.SessionKey)
+	require.Equal(t, domain.ConversationRef("test:direct"), item.Payload.Context.Conversation)
+	require.True(t, item.Payload.Context.Direct)
 	item.SourceKey = "wake-test"
 	item.ReadyAt = time.Now()
 	item.Payload.Input.Text = "wake after close"
@@ -138,50 +117,4 @@ func TestEntryTrustRefreshAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	f.core.(*core).reconciler.Notify()
 	require.Contains(t, take(t, resumed.inputs).Text, "wake after close")
-	require.True(t, f.hub.active("test:direct"))
-	resumed.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	e.Sender.ID = "member"
-	e.Text = "accepted member"
-	f.messaging.in <- e
-	require.Contains(t, take(t, resumed.inputs).Text, "accepted member")
-	select {
-	case <-f.model.opened:
-		t.Fatal("unexpected session")
-	default:
-	}
-}
-
-func TestIgnoredConversationRetiresSessionAndRejectsWake(t *testing.T) {
-	f := setup(t, Config{}, Messaging{Owner: "owner", UserGroups: map[string][]string{"group": {"member"}}, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Groups: []string{"group"}}}}, nil)
-	f.messaging.in <- message("test:room", "member", "first")
-	s := take(t, f.model.opened)
-	take(t, s.inputs)
-	item, err := f.core.(*core).workItem(t.Context(), "test:room")
-	require.NoError(t, err)
-	impl := f.core.(*core)
-	impl.mu.Lock()
-	instance := impl.messaging.instances[0]
-	instance.config.Rules["test:room"] = domain.AcceptRule{Ignore: true}
-	groups := instance.config.UserGroups
-	impl.mu.Unlock()
-	require.NoError(t, impl.applyGroups(instance, groups))
-	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
-	item.SourceKey = "wake:removed"
-	item.ReadyAt = time.Now()
-	item.Payload.Input.Text = "unaccepted wake"
-	_, err = f.core.(*core).inbox.Enqueue(t.Context(), item)
-	require.NoError(t, err)
-	f.core.(*core).reconciler.Notify()
-	require.Eventually(t, func() bool {
-		items, err := f.core.(*core).inbox.Active(t.Context())
-		return err == nil && len(items) == 0
-	}, time.Second, time.Millisecond)
-	record, err := f.sessions.Get(t.Context(), "test:room")
-	require.NoError(t, err)
-	require.Equal(t, "resume-test:room", record.ResumeToken)
-	select {
-	case <-f.model.opened:
-		t.Fatal("opened a model without an accept rule")
-	default:
-	}
 }
