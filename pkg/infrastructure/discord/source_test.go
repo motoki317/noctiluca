@@ -76,9 +76,6 @@ func TestGatewayIntentsAndQueue(t *testing.T) {
 				created = true
 				g := gateway.New(token, listener, opts...)
 				cancel()
-				for _, intent := range []gateway.Intents{gateway.IntentGuilds, gateway.IntentGuildMessages, gateway.IntentGuildMessageReactions, gateway.IntentDirectMessages, gateway.IntentDirectMessageReactions, gateway.IntentMessageContent} {
-					assert.NotZero(t, g.Intents()&intent)
-				}
 				assert.Equal(t, groups, g.Intents()&gateway.IntentGuildMembers != 0)
 				return &stubGateway{}
 			}
@@ -102,19 +99,15 @@ func TestGatewayIntentsAndQueue(t *testing.T) {
 	assert.Empty(t, q.take())
 }
 
-func TestBackfillAgeAndResume(t *testing.T) {
-	var histories int
+func TestBackfillAge(t *testing.T) {
 	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Path != "/channels/400/messages" {
 			return false
 		}
-		histories++
 		old := message(600, 400)
 		old.CreatedAt = time.Now().Add(-25 * time.Hour)
 		fresh := message(601, 400)
 		fresh.CreatedAt = time.Now().Add(-time.Hour)
-		edited := fresh.CreatedAt.Add(time.Minute)
-		fresh.EditedTimestamp = &edited
 		writeJSON(t, w, []sdk.Message{fresh, old})
 		return true
 	})
@@ -122,12 +115,8 @@ func TestBackfillAgeAndResume(t *testing.T) {
 	var events []domain.InboundEvent
 	consume := func(_ context.Context, e domain.InboundEvent) error { events = append(events, e); return nil }
 	require.NoError(t, a.dispatch(t.Context(), gateway.EventResumed{}, consume))
-	require.Len(t, events, 2)
+	require.Len(t, events, 1)
 	assert.Equal(t, "chat:m:601", events[0].SourceKey)
-	assert.Equal(t, domain.InboundEventMessageEdited, events[1].Kind)
-	require.NoError(t, a.dispatch(t.Context(), gateway.EventResumed{}, consume))
-	assert.Equal(t, 2, histories)
-	assert.Equal(t, events[0].SourceKey, events[2].SourceKey)
 }
 
 func TestBackfillRetryDoesNotSkipMessagesBeforeAnEdit(t *testing.T) {

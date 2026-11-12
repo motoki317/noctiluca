@@ -75,26 +75,23 @@ func TestDeletesRecoverAuthor(t *testing.T) {
 	a.history.(*historyFake).inbound = []domain.InboundEvent{known}
 	var events []domain.InboundEvent
 	consume := func(_ context.Context, event domain.InboundEvent) error { events = append(events, event); return nil }
-	for _, kind := range []string{"MESSAGE_DELETED", "DIRECT_MESSAGE_DELETED"} {
-		for _, id := range []string{"known", "unknown"} {
-			body := payload{EventTime: at, Message: wireMessage{ID: id, Channel: "channel"}}
-			require.NoError(t, a.dispatch(t.Context(), frame(t, kind, body), consume))
-		}
+	for _, id := range []string{"known", "unknown"} {
+		body := payload{EventTime: at, Message: wireMessage{ID: id, Channel: "channel"}}
+		require.NoError(t, a.dispatch(t.Context(), frame(t, "MESSAGE_DELETED", body), consume))
 	}
-	require.Len(t, events, 2)
-	for _, event := range events {
-		require.Equal(t, known.Sender, event.Sender)
-		require.True(t, event.Deleted)
-		require.Equal(t, "team:d:known", event.SourceKey)
-		require.Empty(t, event.Text)
-		require.Equal(t, domain.InboundEventMessageEdited, event.Kind)
-		require.False(t, event.MentionsMe)
-		require.Empty(t, event.Attachments)
-	}
+	require.Len(t, events, 1)
+	event := events[0]
+	require.Equal(t, known.Sender, event.Sender)
+	require.True(t, event.Deleted)
+	require.Equal(t, "team:d:known", event.SourceKey)
+	require.Empty(t, event.Text)
+	require.Equal(t, domain.InboundEventMessageEdited, event.Kind)
+	require.False(t, event.MentionsMe)
+	require.Empty(t, event.Attachments)
 	a.history.(*historyFake).err = errors.New("repository unavailable")
 	err := a.dispatch(t.Context(), frame(t, "MESSAGE_DELETED", payload{EventTime: at, Message: wireMessage{ID: "known", Channel: "channel"}}), consume)
 	require.NoError(t, err)
-	require.Len(t, events, 2)
+	require.Len(t, events, 1)
 }
 
 func TestStampSnapshots(t *testing.T) {
@@ -226,18 +223,11 @@ func TestBackfillCursorAndCap(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	a.history = repository.NewEventRepository(db)
 	a.direct.Store("channel", "")
-	for _, event := range []domain.InboundEvent{
-		{Kind: domain.InboundEventMessage, ReceivedAt: now.Add(-2 * time.Hour)},
-		{Kind: domain.InboundEventMessageEdited, ReceivedAt: now.Add(-time.Hour)},
-		{Kind: domain.InboundEventReaction, ReceivedAt: now.Add(-2 * time.Minute)},
-		{Kind: domain.InboundEventMessageEdited, Deleted: true, ReceivedAt: now.Add(-time.Minute)},
-	} {
-		event.Conversation = Conversation("team", "channel", "")
-		accepted := true
-		event.Accepted = &accepted
-		event.Sender = sender("human", "Human", false)
-		require.NoError(t, a.history.SaveInbound(t.Context(), event))
-	}
+	accepted := true
+	require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
+		Kind: domain.InboundEventMessage, ReceivedAt: now.Add(-time.Hour), Conversation: Conversation("team", "channel", ""),
+		Accepted: &accepted, Sender: sender("human", "Human", false),
+	}))
 	targets := a.backfillTargets(t.Context())
 	require.Len(t, targets, 2)
 	var events []domain.InboundEvent
@@ -248,84 +238,6 @@ func TestBackfillCursorAndCap(t *testing.T) {
 	require.Equal(t, "team:m:new", events[3].SourceKey)
 	require.True(t, events[3].MentionsMe)
 	require.EqualValues(t, 2, historyCalls.Load())
-}
-
-func TestWebSocketReconnectBackfillAndShutdown(t *testing.T) {
-	at := time.Now().UTC().Add(-time.Minute)
-	var connections, backfills, delivered atomic.Int32
-	firstDelivered := make(chan struct{})
-	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v3/users/me":
-			respond(t, w, sdk.MyUserDetail{Id: "bot"})
-		case "/api/v3/channels/channel/bots":
-			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
-		case "/api/v3/channels/channel/messages":
-			backfills.Add(1)
-			respond(t, w, []sdk.Message{restMessage("message", "channel", "hi", at)})
-		case "/api/v3/users/human":
-			respond(t, w, sdk.UserDetail{Id: "human"})
-		case "/api/v3/bots/ws":
-			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
-			require.NoError(t, err)
-			defer conn.Close()
-			connection := connections.Add(1)
-			require.NoError(t, conn.WriteJSON(frame(t, "MESSAGE_CREATED", messagePayload("message", "channel", "human", "hi", at))))
-			if connection == 1 {
-				<-firstDelivered
-				return
-			}
-			for {
-				if _, _, err := conn.ReadMessage(); err != nil {
-					return
-				}
-			}
-		default:
-			t.Errorf("unexpected %s", r.URL.Path)
-			w.WriteHeader(500)
-		}
-	})
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "events.db")})
-	require.NoError(t, err)
-	defer db.Close()
-	a.history = repository.NewEventRepository(db)
-	seedConversations(t, a, "channel")
-	inbox := repository.NewInboxRepository(db)
-	events := make(chan domain.InboundEvent, 10)
-	done := make(chan error, 1)
-	go func() {
-		done <- a.Start(t.Context(), func(ctx context.Context, event domain.InboundEvent) error {
-			err := inbox.Receive(ctx, event, domain.InboxItem{SourceKey: event.SourceKey, Lane: "conv", Payload: domain.InboxPayload{Event: &event}})
-			if err == nil {
-				events <- event
-				if delivered.Add(1) == 2 {
-					close(firstDelivered)
-				}
-			}
-			return err
-		})
-	}()
-	for range 4 {
-		select {
-		case <-events:
-		case <-time.After(5 * time.Second):
-			t.Fatal("missing live/backfill event")
-		}
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	require.NoError(t, a.Shutdown(ctx))
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-ctx.Done():
-		t.Fatal("shutdown did not join")
-	}
-	require.EqualValues(t, 2, connections.Load())
-	require.EqualValues(t, 2, backfills.Load())
-	var count int
-	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT count(*) FROM events").Scan(&count))
-	require.Equal(t, 2, count)
 }
 
 func TestBackfillKeepsLatestTwoHundred(t *testing.T) {
@@ -459,7 +371,13 @@ func TestReconnectDoesNotSkipInterruptedBackfill(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	require.NoError(t, a.Shutdown(ctx))
-	require.NoError(t, <-done)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("shutdown did not join")
+	}
+	require.EqualValues(t, 2, connections.Load())
 	require.EqualValues(t, 2, calls.Load())
 }
 

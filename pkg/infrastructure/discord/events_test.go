@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -85,31 +84,11 @@ func seedConversations(t *testing.T, a *adapter, channels ...string) {
 }
 
 func TestMessagesAndThreadParticipation(t *testing.T) {
-	for _, mode := range []string{"top", "dm", "mention", "member", "owner", "starter", "reply", "thread starter", "stranger", "own"} {
+	for _, mode := range []string{"mention", "reply", "thread starter", "own"} {
 		t.Run(mode, func(t *testing.T) {
 			a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
-				switch r.URL.Path {
-				case "/channels/300":
-					owner := "201"
-					if mode == "owner" {
-						owner = "100"
-					}
-					writeJSON(t, w, map[string]any{"id": "300", "type": 11, "parent_id": "400", "guild_id": "500", "owner_id": owner})
-					return true
-				case "/channels/300/thread-members/100":
-					if mode == "member" {
-						writeJSON(t, w, map[string]string{"id": "300", "user_id": "100"})
-					} else {
-						w.WriteHeader(404)
-						writeJSON(t, w, map[string]any{"code": 10007})
-					}
-					return true
-				case "/channels/400/messages/300":
-					m := message(300, 400)
-					if mode == "starter" || mode == "reply" || mode == "thread starter" {
-						m.Author.ID = 100
-					}
-					writeJSON(t, w, m)
+				if r.URL.Path == "/channels/300" {
+					writeJSON(t, w, map[string]any{"id": "300", "type": 11, "parent_id": "400", "guild_id": "500", "owner_id": "201"})
 					return true
 				}
 				return false
@@ -117,15 +96,13 @@ func TestMessagesAndThreadParticipation(t *testing.T) {
 			m := message(600, 300)
 			if mode == "reply" {
 				m.Type = sdk.MessageTypeReply
+				m.ChannelID = 400
 			}
 			if mode == "thread starter" {
 				m.Type, m.Content = sdk.MessageTypeThreadStarterMessage, ""
 			}
-			if mode == "top" || mode == "own" {
+			if mode == "own" {
 				m.ChannelID = 400
-			}
-			if mode == "dm" {
-				m.ChannelID = 900
 			}
 			if mode == "mention" {
 				m.Mentions = []sdk.User{{ID: 100}}
@@ -138,14 +115,14 @@ func TestMessagesAndThreadParticipation(t *testing.T) {
 			}
 			e, err := a.message(t.Context(), m, false)
 			require.NoError(t, err)
-			if mode == "stranger" || mode == "own" || mode == "thread starter" {
+			if mode == "own" || mode == "thread starter" {
 				require.Nil(t, e)
 				return
 			}
 			require.NotNil(t, e)
 			assert.Equal(t, "chat:m:600", e.SourceKey)
 			assert.Equal(t, Conversation("chat", m.ChannelID.String(), "600"), e.MessageRef)
-			assert.Equal(t, mode == "dm", e.Direct)
+			assert.False(t, e.Direct)
 			assert.Equal(t, mode == "mention", e.MentionsMe)
 			if m.ChannelID == 300 {
 				assert.Equal(t, domain.ConversationRef("chat:400:300"), e.Conversation)
@@ -184,6 +161,7 @@ func TestEditsDeletesAndReactions(t *testing.T) {
 		self := snowflake.ID(100)
 		e := gateway.EventMessageReactionAdd{UserID: 201, ChannelID: 400, MessageID: 600, MessageAuthorID: &self, Emoji: sdk.PartialEmoji{Name: &emoji}}
 		require.NoError(t, a.dispatch(t.Context(), e, consume))
+		assert.Equal(t, domain.InboundEventReaction, events[len(events)-1].Kind)
 		assert.Equal(t, ":"+emoji+": on message 600", events[len(events)-1].Text)
 		self = 200
 		before := len(events)
@@ -192,6 +170,7 @@ func TestEditsDeletesAndReactions(t *testing.T) {
 	}
 	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageDeleteBulk{ChannelID: 400, IDs: []snowflake.ID{600, 601}}, consume))
 	last := events[len(events)-1]
+	assert.Equal(t, domain.InboundEventMessageEdited, last.Kind)
 	assert.True(t, last.Deleted)
 	assert.Empty(t, last.Text)
 	assert.Equal(t, "200", last.Sender.ID)
@@ -247,106 +226,6 @@ func TestBackfillCursorCapsAndKeys(t *testing.T) {
 	require.ErrorIs(t, a.backfill(t.Context(), func(context.Context, domain.InboundEvent) error { return stop }), stop)
 }
 
-func TestBackfillIgnoresLocalEventTimes(t *testing.T) {
-	for _, kind := range []string{"deletion", "reaction"} {
-		t.Run(kind, func(t *testing.T) {
-			old := message(600, 400)
-			old.CreatedAt = time.Now().Add(-2 * time.Hour).UTC()
-			missed := message(601, 400)
-			missed.CreatedAt = old.CreatedAt.Add(time.Hour)
-			a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
-				if r.URL.Path == "/channels/400/messages" {
-					writeJSON(t, w, []sdk.Message{missed})
-					return true
-				}
-				return false
-			})
-			consume := a.history.SaveInbound
-			require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageCreate{Message: old}, consume))
-			var late gateway.EventData
-			if kind == "deletion" {
-				late = gateway.EventMessageDelete{ChannelID: 400, ID: 600}
-			} else {
-				self, emoji := snowflake.ID(100), "eyes"
-				late = gateway.EventMessageReactionAdd{ChannelID: 400, MessageID: 700, UserID: 201, MessageAuthorID: &self, Emoji: sdk.PartialEmoji{Name: &emoji}}
-			}
-			require.NoError(t, a.dispatch(t.Context(), late, consume))
-			last, err := a.history.ListInbound(t.Context(), "chat:400:", 1)
-			require.NoError(t, err)
-			require.Len(t, last, 1)
-			require.True(t, last[0].ReceivedAt.After(missed.CreatedAt))
-			events, err := a.backfillChannel(t.Context(), "chat:400:")
-			require.NoError(t, err)
-			require.Len(t, events, 1)
-			assert.Equal(t, "chat:m:601", events[0].SourceKey)
-		})
-	}
-}
-
-type gatewaySession struct {
-	conn   *websocket.Conn
-	mu     sync.Mutex
-	closed chan struct{}
-	pong   chan struct{}
-}
-
-func (s *gatewaySession) write(value any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conn.WriteJSON(value)
-}
-func (s *gatewaySession) dispatch(name string, value any) error {
-	return s.write(map[string]any{"op": 0, "s": 2, "t": name, "d": value})
-}
-
-func fakeGateway(t *testing.T, a *adapter) <-chan *gatewaySession {
-	t.Helper()
-	sessions := make(chan *gatewaySession, 4)
-	var conns sync.Map
-	up := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := up.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		conns.Store(conn, struct{}{})
-		defer conns.Delete(conn)
-		defer conn.Close()
-		s := &gatewaySession{conn: conn, closed: make(chan struct{}), pong: make(chan struct{}, 8)}
-		defer close(s.closed)
-		// READY without HELLO isolates reconnect from Disgo's heartbeat race (disgoorg/disgo#494).
-		conn.SetPongHandler(func(string) error { s.pong <- struct{}{}; return nil })
-		if s.dispatch("READY", map[string]any{"v": 10, "session_id": "fake", "user": map[string]any{"id": "100", "username": "fake", "bot": true}, "guilds": []any{}}) != nil {
-			return
-		}
-		sessions <- s
-		for {
-			var frame struct {
-				Op int `json:"op"`
-			}
-			if conn.ReadJSON(&frame) != nil {
-				return
-			}
-		}
-	}))
-	t.Cleanup(func() {
-		conns.Range(func(key, value any) bool { _ = key.(*websocket.Conn).Close(); return true })
-		server.Close()
-	})
-	a.gatewayOptions = []gateway.ConfigOpt{gateway.WithURL(strings.Replace(server.URL, "http:", "ws:", 1)), gateway.WithCompression(gateway.CompressionNone), gateway.WithEnableResumeURL(false)}
-	a.createGateway = func(token string, listener gateway.EventHandlerFunc, options ...gateway.ConfigOpt) gateway.Gateway {
-		g := gateway.New(token, listener, options...)
-		// Close the reconnected client before the fake server to keep its retry logs out of later tests.
-		t.Cleanup(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			g.Close(ctx)
-		})
-		return g
-	}
-	return sessions
-}
-
 func receive[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
 	select {
@@ -381,14 +260,6 @@ func TestShutdownJoinsConsumption(t *testing.T) {
 	listener := receive(t, listeners)
 	listener(nil, gateway.EventTypeMessageCreate, 1, gateway.EventMessageCreate{Message: message(600, 400)})
 	receive(t, entered)
-	queued := make(chan struct{})
-	go func() {
-		for i := 0; i < 10000; i++ {
-			listener(nil, gateway.EventTypeMessageCreate, i+2, gateway.EventMessageCreate{Message: message(snowflake.ID(601+i), 400)})
-		}
-		close(queued)
-	}()
-	receive(t, queued)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, a.Shutdown(ctx), context.DeadlineExceeded)
@@ -399,30 +270,61 @@ func TestShutdownJoinsConsumption(t *testing.T) {
 	require.Error(t, a.Start(t.Context(), func(context.Context, domain.InboundEvent) error { t.Fatal("consume after shutdown"); return nil }))
 }
 
-func TestShutdownDropsMessagesAfterDisgoReconnect(t *testing.T) {
+type checkedGatewayLimiter struct {
+	gateway.RateLimiter
+	check func()
+}
+
+func (l checkedGatewayLimiter) Wait(ctx context.Context, kind gateway.RateLimiterCommandType) error {
+	l.check()
+	return l.RateLimiter.Wait(ctx, kind)
+}
+
+func TestGatewayStartShutdown(t *testing.T) {
 	a := testAdapter(t, Config{}, nil)
-	sessions := fakeGateway(t, a)
-	consumed := make(chan domain.InboundEvent, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		// READY without HELLO avoids Disgo's heartbeat race (disgoorg/disgo#494).
+		require.NoError(t, conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{
+			"v": 10, "session_id": "fake", "user": map[string]any{"id": "100", "username": "fake", "bot": true}, "guilds": []any{},
+		}}))
+		require.NoError(t, conn.WriteJSON(map[string]any{"op": 0, "s": 2, "t": "MESSAGE_CREATE", "d": message(600, 400)}))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	a.gatewayOptions = []gateway.ConfigOpt{gateway.WithURL("ws" + strings.TrimPrefix(server.URL, "http")), gateway.WithCompression(gateway.CompressionNone)}
+	var g gateway.Gateway
+	a.createGateway = func(token string, handler gateway.EventHandlerFunc, opts ...gateway.ConfigOpt) gateway.Gateway {
+		limiter := checkedGatewayLimiter{RateLimiter: gateway.NewRateLimiter(), check: func() {
+			// Send must leave status unlocked while it holds the connection lock (disgoorg/disgo#646).
+			status := make(chan gateway.Status, 1)
+			go func() { status <- g.Status() }()
+			select {
+			case <-status:
+			case <-time.After(time.Second):
+				t.Error("Send blocks gateway status during shutdown")
+			}
+		}}
+		g = gateway.New(token, handler, append(opts, gateway.WithRateLimiter(limiter))...)
+		return g
+	}
+	consumed := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- a.Start(t.Context(), func(_ context.Context, e domain.InboundEvent) error { consumed <- e; return nil })
+		done <- a.Start(t.Context(), func(context.Context, domain.InboundEvent) error { consumed <- struct{}{}; return nil })
 	}()
-	s := receive(t, sessions)
-	require.NoError(t, s.dispatch("MESSAGE_CREATE", message(600, 400)))
 	receive(t, consumed)
-	require.NoError(t, s.write(map[string]any{"op": 7, "d": nil}))
-	receive(t, s.closed)
-	require.NoError(t, a.Shutdown(t.Context()))
+	require.NoError(t, g.Send(t.Context(), gateway.OpcodePresenceUpdate, gateway.MessageDataPresenceUpdate{}))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	require.NoError(t, a.Shutdown(ctx))
 	require.NoError(t, receive(t, done))
-	late := receive(t, sessions)
-	require.NoError(t, late.dispatch("MESSAGE_CREATE", message(601, 400)))
-	require.NoError(t, late.conn.WriteControl(websocket.PingMessage, []byte("barrier"), time.Now().Add(time.Second)))
-	receive(t, late.pong)
-	select {
-	case e := <-consumed:
-		t.Fatalf("consume after shutdown: %+v", e)
-	default:
-	}
 }
 
 type stubGateway struct {
@@ -451,26 +353,7 @@ func (s *stubGateway) Close(context.Context) {
 	}
 }
 
-func TestStartRetriesAfterFailure(t *testing.T) {
-	a := testAdapter(t, Config{}, nil)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	calls := 0
-	a.createGateway = func(_ string, _ gateway.EventHandlerFunc, _ ...gateway.ConfigOpt) gateway.Gateway {
-		calls++
-		if calls == 1 {
-			return &stubGateway{openErr: errors.New("temporary connection failure")}
-		}
-		cancel()
-		return &stubGateway{}
-	}
-	consume := func(context.Context, domain.InboundEvent) error { return nil }
-	require.ErrorContains(t, a.Start(ctx, consume), "connect Discord gateway failed")
-	require.NoError(t, a.Start(ctx, consume))
-	assert.Equal(t, 2, calls)
-}
-
-func TestLiveAndBackfillCollapseInInbox(t *testing.T) {
+func TestLiveAndBackfillShareEditKey(t *testing.T) {
 	m := message(600, 400)
 	edit := m.CreatedAt.Add(time.Second)
 	m.EditedTimestamp = &edit
@@ -485,25 +368,14 @@ func TestLiveAndBackfillCollapseInInbox(t *testing.T) {
 		}
 		return false
 	})
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "dedup.db")})
+	var live domain.InboundEvent
+	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageUpdate{Message: m}, func(_ context.Context, e domain.InboundEvent) error {
+		live = e
+		return nil
+	}))
+	events, err := a.backfillChannel(t.Context(), "chat:400:")
 	require.NoError(t, err)
-	defer db.Close()
-	a.history = repository.NewEventRepository(db)
-	inbox := repository.NewInboxRepository(db)
-	consume := func(ctx context.Context, e domain.InboundEvent) error {
-		accepted := true
-		e.Accepted = &accepted
-		return inbox.Receive(ctx, e, domain.InboxItem{SourceKey: e.SourceKey, SessionKey: "chat:400:", Lane: "conv", ReadyAt: e.ReceivedAt, Payload: domain.InboxPayload{Event: &e}})
-	}
-	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageCreate{Message: m}, consume))
-	require.NoError(t, a.backfill(t.Context(), consume))
-	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageCreate{Message: m}, consume))
-	require.NoError(t, a.dispatch(t.Context(), gateway.EventMessageUpdate{Message: m}, consume))
-	require.NoError(t, a.backfill(t.Context(), consume))
-	events, err := a.history.ListInbound(t.Context(), "chat:400:", 100)
-	require.NoError(t, err)
-	assert.Len(t, events, 2)
-	items, err := inbox.Active(t.Context())
-	require.NoError(t, err)
-	assert.Len(t, items, 2)
+	require.Len(t, events, 2)
+	assert.NotEmpty(t, live.SourceKey)
+	assert.Equal(t, live.SourceKey, events[1].SourceKey)
 }

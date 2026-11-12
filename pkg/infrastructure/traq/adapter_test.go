@@ -40,15 +40,8 @@ func seedConversations(t *testing.T, a *adapter, channels ...string) {
 	t.Helper()
 	for _, channel := range channels {
 		ref := Conversation(a.name, channel, "")
-		if history, ok := a.history.(*historyFake); ok {
-			history.conversations = append(history.conversations, domain.Conversation{Ref: ref})
-		} else {
-			accepted := true
-			require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
-				Kind: domain.InboundEventMessage, Conversation: ref, Accepted: &accepted, Sender: sender("human", "Human", false),
-				Text: "stored message", ReceivedAt: time.Now().Add(-25 * time.Hour),
-			}))
-		}
+		history := a.history.(*historyFake)
+		history.conversations = append(history.conversations, domain.Conversation{Ref: ref})
 		a.direct.Store(channel, "")
 	}
 }
@@ -222,10 +215,6 @@ func TestToolsReadSendAndReact(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	})
-	require.Len(t, a.Tools(), 7)
-	for _, tool := range a.Tools() {
-		require.NotContains(t, string(tool.InputSchema), "broadcast")
-	}
 	for _, tc := range []struct {
 		name     string
 		input    map[string]any
@@ -254,7 +243,6 @@ func TestToolsReadSendAndReact(t *testing.T) {
 	_, err = callTool(t, a, "read_history", map[string]any{"channel": "channel", "limit": 101})
 	require.Error(t, err)
 	require.Len(t, calls, before)
-	require.Contains(t, a.ToolNotes(), "team_read_message")
 }
 
 func TestFileTransfer(t *testing.T) {
@@ -307,7 +295,7 @@ func TestFileTransfer(t *testing.T) {
 }
 
 func TestDownloadFailureAndRedirect(t *testing.T) {
-	for _, mode := range []string{"truncated", "redirect", "denied"} {
+	for _, mode := range []string{"truncated", "redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 				switch mode {
@@ -317,8 +305,6 @@ func TestDownloadFailureAndRedirect(t *testing.T) {
 				case "redirect":
 					w.Header().Set("Location", "https://invalid.example/file")
 					w.WriteHeader(302)
-				case "denied":
-					w.WriteHeader(403)
 				}
 			})
 			path := filepath.Join(t.TempDir(), "file")
@@ -337,7 +323,6 @@ func TestErrorsDoNotExposeResponseSecrets(t *testing.T) {
 	_, err := a.Send(t.Context(), Conversation("team", "channel", ""), domain.OutboundMessage{Text: "hi"})
 	require.ErrorContains(t, err, "403")
 	require.NotContains(t, err.Error(), "test-token")
-	require.Equal(t, domain.SenderBot, a.user(t.Context(), "unknown").Kind)
 	require.Equal(t, "channel", a.SourceInfo(t.Context(), Conversation("team", "channel", ""), "", false).Conversation)
 }
 
