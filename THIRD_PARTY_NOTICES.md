@@ -104,6 +104,7 @@ The original procedure text in `pkg/usecase/consolidate/procedures/` uses these 
 | [Voyager](https://arxiv.org/abs/2305.16291) | A library of reusable procedures. |
 | [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/) | Fresh cases, checkable claims, held-out evaluation, noise measurement, and rollback of unsuccessful changes. |
 | [Claude Code memory](https://code.claude.com/docs/en/memory) | A short memory index with documents read on demand. |
+| [Mem0](https://arxiv.org/abs/2504.19413) | Each new memory item compared with its existing home and resolved by one of four operations: add, update, delete, or nothing. |
 
 ## Go dependencies
 
