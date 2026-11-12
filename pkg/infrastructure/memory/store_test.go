@@ -29,6 +29,25 @@ func setup(t *testing.T) (domain.MemoryStore, string) {
 	return s, dir
 }
 
+func TestHasRemote(t *testing.T) {
+	s, dir := setup(t)
+	hasRemote, err := s.HasRemote(t.Context())
+	require.NoError(t, err)
+	require.False(t, hasRemote)
+	git(t, dir, "remote", "add", "backup", t.TempDir())
+	hasRemote, err = s.HasRemote(t.Context())
+	require.NoError(t, err)
+	require.True(t, hasRemote)
+}
+
+func TestHasRemoteWithoutURL(t *testing.T) {
+	s, dir := setup(t)
+	git(t, dir, "config", "remote.backup.prune", "true")
+	hasRemote, err := s.HasRemote(t.Context())
+	require.NoError(t, err)
+	require.False(t, hasRemote)
+}
+
 func TestSeedDefaultProcedures(t *testing.T) {
 	dir := t.TempDir()
 	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
