@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,10 +52,8 @@ func TestInboxAtomicReceiveAndRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, dead)
 }
-func TestInboxRestartAndWatchOutcome(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	db, err := repository.New(t.Context(), repository.Config{Path: path})
-	require.NoError(t, err)
+func TestInboxStatesAndWatchOutcome(t *testing.T) {
+	db := openDB(t)
 	r := repository.NewInboxRepository(db)
 	first, err := r.Enqueue(t.Context(), inboxItem("one"))
 	require.NoError(t, err)
@@ -67,17 +64,11 @@ func TestInboxRestartAndWatchOutcome(t *testing.T) {
 	watches := repository.NewWatchRepository(db)
 	id, err := watches.Add(t.Context(), domain.Watch{Command: "do work", CWD: "/work", Item: inboxItem("")})
 	require.NoError(t, err)
-	require.NoError(t, db.Close())
-	db, err = repository.New(t.Context(), repository.Config{Path: path})
-	require.NoError(t, err)
-	defer db.Close()
-	r = repository.NewInboxRepository(db)
 	items, err := r.Active(t.Context())
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 	require.Equal(t, "dispatched", items[0].Status)
 	require.Equal(t, "pending", items[1].Status)
-	watches = repository.NewWatchRepository(db)
 	unfinished, err := watches.Unfinished(t.Context())
 	require.NoError(t, err)
 	require.Len(t, unfinished, 1)

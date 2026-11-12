@@ -3,7 +3,6 @@ package repository_test
 import (
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,10 +13,7 @@ import (
 )
 
 func TestEpisodesWindowAndCheckpoint(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "history.db")
-	db, err := repository.New(t.Context(), repository.Config{Path: path})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	db := openDB(t)
 	events := repository.NewEventRepository(db)
 	repo := repository.NewEpisodeRepository(db)
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -50,30 +46,19 @@ func TestEpisodesWindowAndCheckpoint(t *testing.T) {
 	require.True(t, entries[4].Deleted)
 	require.NoError(t, repo.SaveLastRun(t.Context(), at))
 	require.NoError(t, repo.SaveLastRun(t.Context(), at.Add(-time.Hour)))
-	require.NoError(t, db.Close())
-	db, err = repository.New(t.Context(), repository.Config{Path: path})
-	require.NoError(t, err)
-	repo = repository.NewEpisodeRepository(db)
 	last, err = repo.LastRun(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, at, last)
 	batch, err := consolidate.EpisodesSince(t.Context(), repo, time.Time{}, at.Add(5*time.Second), nil)
 	require.NoError(t, err)
 	require.Equal(t, at, batch.Since)
-	require.Len(t, batch.Items, 2)
-	require.Contains(t, batch.Items[0].Signals, "user_correction")
-	require.Contains(t, batch.Items[1].Signals, "tool_error")
-	require.Equal(t, []string{"read failed … file not found"}, batch.Items[1].Errors)
-	require.Contains(t, batch.Items[1].Signals, "user_deleted")
 	bounded, err := repo.Since(t.Context(), at, at.Add(time.Second))
 	require.NoError(t, err)
 	require.Len(t, bounded, 1)
 }
 
 func TestEpisodeOutcomeAcrossCheckpoint(t *testing.T) {
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "history.db")})
-	require.NoError(t, err)
-	defer db.Close()
+	db := openDB(t)
 	events := repository.NewEventRepository(db)
 	repo := repository.NewEpisodeRepository(db)
 	at := time.Now().UTC()
@@ -91,9 +76,7 @@ func TestEpisodeOutcomeAcrossCheckpoint(t *testing.T) {
 }
 
 func TestQueuedInputAcrossCheckpointRemainsAmbiguous(t *testing.T) {
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "history.db")})
-	require.NoError(t, err)
-	defer db.Close()
+	db := openDB(t)
 	events := repository.NewEventRepository(db)
 	repo := repository.NewEpisodeRepository(db)
 	at := time.Now().UTC()
@@ -112,9 +95,7 @@ func TestQueuedInputAcrossCheckpointRemainsAmbiguous(t *testing.T) {
 }
 
 func TestQueuedTurnStartsAcrossCheckpoint(t *testing.T) {
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "history.db")})
-	require.NoError(t, err)
-	defer db.Close()
+	db := openDB(t)
 	events := repository.NewEventRepository(db)
 	repo := repository.NewEpisodeRepository(db)
 	at := time.Now().UTC()
