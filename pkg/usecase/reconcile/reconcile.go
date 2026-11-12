@@ -42,20 +42,21 @@ type Reconciler struct {
 }
 
 type process struct {
-	key        domain.SessionKey
-	token      string
-	lane       string
-	info       domain.SessionContext
-	cancel     context.CancelFunc
-	inputs     chan domain.InboxItem
-	model      domain.ModelSession
-	delivering *domain.InboxItem
-	unstarted  map[int64]domain.InboxItem
-	turn       *domain.SessionTurn
-	closing    bool
-	reason     string
-	retiredAt  time.Time
-	last       time.Time
+	key          domain.SessionKey
+	token        string
+	lane         string
+	info         domain.SessionContext
+	cancel       context.CancelFunc
+	inputs       chan domain.InboxItem
+	model        domain.ModelSession
+	delivering   *domain.InboxItem
+	unstarted    map[int64]domain.InboxItem
+	turn         *domain.SessionTurn
+	restDeadline time.Time
+	closing      bool
+	reason       string
+	retiredAt    time.Time
+	last         time.Time
 }
 
 type result struct {
@@ -161,6 +162,14 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			r.retire(p, domain.ConversationNoLongerAccepted)
 			continue
 		}
+		if !p.restDeadline.IsZero() {
+			if p.idle() || !now.Before(p.restDeadline) {
+				r.retire(p, "rest")
+			} else {
+				due(p.restDeadline)
+			}
+			continue
+		}
 		for _, item := range p.unstarted {
 			if !now.Before(item.Deadline) {
 				r.retire(p, domain.DeliveryDeadlineExceeded)
@@ -224,6 +233,30 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			value.SourceKey = fmt.Sprintf("schedule:%s:%s", schedule.Name, schedule.NextRun.Format(time.RFC3339Nano))
 			item = &value
 		}
+		if item != nil && item.Payload.Procedure == "consolidate" {
+			sessions, err := r.sessions.List(ctx)
+			if err != nil {
+				return 0, err
+			}
+			for _, session := range sessions {
+				if session.Key == item.SessionKey || session.ResumeToken == "" || session.Context == nil || (r.config.Accept != nil && !r.config.Accept(*session.Context)) {
+					continue
+				}
+				lane := "conv"
+				if session.Context.TaskName != "" {
+					lane = "task"
+				}
+				if _, err := r.inbox.Enqueue(ctx, domain.InboxItem{
+					SourceKey:  fmt.Sprintf("rest:%s:%s", session.Key, schedule.NextRun.Format(time.RFC3339Nano)),
+					SessionKey: session.Key,
+					Lane:       lane,
+					ReadyAt:    schedule.NextRun,
+					Payload:    domain.InboxPayload{Context: *session.Context, Procedure: "rest"},
+				}); err != nil {
+					return 0, err
+				}
+			}
+		}
 		if err := r.inbox.Fire(ctx, schedule, next, item); err != nil {
 			return 0, err
 		}
@@ -233,9 +266,15 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
+	queuedWork := map[domain.SessionKey]bool{}
+	for _, item := range items {
+		if item.Payload.Procedure != "rest" {
+			queuedWork[item.SessionKey] = true
+		}
+	}
 	taskBusy := false
 	for _, p := range r.live {
-		if p.lane == "task" && (p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil || p.closing) {
+		if p.resting() || (p.lane == "task" && (p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil || p.closing)) {
 			taskBusy = true
 		}
 	}
@@ -250,8 +289,14 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if blocked[item.SessionKey] {
 			continue
 		}
-		blocked[item.SessionKey] = true
-		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing)) || (item.Lane == "task" && taskBusy) {
+		rest := item.Payload.Procedure == "rest"
+		if rest && (queuedWork[item.SessionKey] || taskBusy || (p != nil && !p.idle())) {
+			continue
+		}
+		if !rest {
+			blocked[item.SessionKey] = true
+		}
+		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing || p.resting())) || (item.Lane == "task" && taskBusy) {
 			continue
 		}
 		at := item.ReadyAt
@@ -281,11 +326,25 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if !claimed {
 			continue
 		}
-		if p == nil {
-			saved, err := r.sessions.Get(ctx, item.SessionKey)
+		blocked[item.SessionKey] = true
+		var saved domain.Session
+		if p == nil || rest {
+			saved, err = r.sessions.Get(ctx, item.SessionKey)
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return 0, err
 			}
+			if errors.Is(err, domain.ErrNotFound) {
+				saved = domain.Session{Key: item.SessionKey, Context: &item.Payload.Context}
+			}
+		}
+		if rest && saved.ResumeToken == "" {
+			if err := r.inbox.Delivered(ctx, item.ID, saved); err != nil {
+				return 0, err
+			}
+			r.Notify()
+			continue
+		}
+		if p == nil {
 			endpoint, err := r.hub.OpenSession(item.SessionKey)
 			if err != nil {
 				if err := r.fail(ctx, item, err); err != nil {
@@ -304,12 +363,32 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		p.delivering = &item
 		p.last = now
 		p.inputs <- item
-		if item.Lane == "task" {
+		if item.Lane == "task" || rest {
 			taskBusy = true
 		}
 		due(item.Deadline)
 	}
 	return delay, nil
+}
+
+func (p *process) idle() bool {
+	return !p.closing && p.delivering == nil && len(p.unstarted) == 0 && p.turn == nil && p.model != nil && p.model.Idle()
+}
+
+func (p *process) resting() bool {
+	if !p.restDeadline.IsZero() || (p.turn != nil && p.turn.Procedure == "rest") || (p.delivering != nil && p.delivering.Payload.Procedure == "rest") {
+		return true
+	}
+	for _, item := range p.unstarted {
+		if item.Payload.Procedure == "rest" {
+			return true
+		}
+	}
+	return false
+}
+
+func restsSession(procedure string) bool {
+	return procedure == "rest" || procedure == "consolidate"
 }
 
 func (r *Reconciler) timeout(lane string) time.Duration {
@@ -507,6 +586,9 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		}
 		delete(p.unstarted, item.ID)
 		if out.event.Kind == domain.ModelEventInputRefused {
+			if restsSession(item.Payload.Procedure) {
+				p.restDeadline = time.Time{}
+			}
 			if err := r.fail(ctx, item, out.event.Err); err != nil {
 				return err
 			}
@@ -544,18 +626,27 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			p.turn.Failed = true
 		}
 	case domain.ModelEventTurnFinished:
-		if p.turn != nil && !p.turn.Failed && r.config.Completed != nil {
-			if err := r.config.Completed(ctx, p.turn.Procedure, p.last); err != nil {
-				return err
-			}
+		turn := p.turn
+		if turn != nil && !turn.Failed && restsSession(turn.Procedure) {
+			p.restDeadline = turn.Deadline
 		}
 		p.turn = nil
+		if err := r.save(ctx, p); err != nil {
+			return err
+		}
+		if turn != nil && !turn.Failed && r.config.Completed != nil {
+			return r.config.Completed(ctx, turn.Procedure, p.last)
+		}
+		return nil
 	}
 	return r.save(ctx, p)
 }
 func (r *Reconciler) state(p *process) domain.Session {
 	s := domain.Session{Key: p.key, ResumeToken: p.token, Context: &p.info, Turn: p.turn}
-	if p.model != nil {
+	if !p.restDeadline.IsZero() {
+		s.ResumeToken = ""
+		s.Turn = nil
+	} else if p.model != nil {
 		if token := p.model.ResumeToken(); token != "" {
 			p.token = token
 			s.ResumeToken = token

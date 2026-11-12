@@ -25,6 +25,27 @@ func (r *sessionRepository) Get(ctx context.Context, key domain.SessionKey) (dom
 	return session, errors.Join(json.Unmarshal([]byte(raw), &session.Context), json.Unmarshal([]byte(turn), &session.Turn))
 }
 
+func (r *sessionRepository) List(ctx context.Context) ([]domain.Session, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT key, resume_token, context_json FROM sessions ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []domain.Session
+	for rows.Next() {
+		var session domain.Session
+		var raw string
+		if err := rows.Scan(&session.Key, &session.ResumeToken, &raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(raw), &session.Context); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
 func (r *sessionRepository) Save(ctx context.Context, session domain.Session) error {
 	return saveSession(ctx, r.db, session)
 }

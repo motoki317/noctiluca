@@ -52,7 +52,7 @@ func TestSeedDefaultProcedures(t *testing.T) {
 	dir := t.TempDir()
 	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
 	require.NoError(t, err)
-	for _, name := range []string{"procedures/consolidate.md", "procedures/hillclimb.md"} {
+	for _, name := range []string{"procedures/consolidate.md", "procedures/hillclimb.md", "procedures/rest.md"} {
 		want, err := consolidate.Procedures.ReadFile(name)
 		require.NoError(t, err)
 		got, err := os.ReadFile(filepath.Join(dir, name))
@@ -86,8 +86,8 @@ func TestSeedingPreservesExistingFilesAndIndex(t *testing.T) {
 	require.NoError(t, err)
 	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
 	require.NoError(t, err)
-	require.Equal(t, "2\n", git(t, dir, "rev-list", "--count", "HEAD"))
-	require.Equal(t, "procedures/hillclimb.md\n", git(t, dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))
+	require.Equal(t, "3\n", git(t, dir, "rev-list", "--count", "HEAD"))
+	require.Equal(t, "procedures/rest.md\n", git(t, dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))
 	for _, name := range []string{"procedures/consolidate.md", "topics/other.md"} {
 		require.Equal(t, "staged", git(t, dir, "show", ":"+name))
 		data, err := os.ReadFile(filepath.Join(dir, name))

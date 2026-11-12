@@ -39,6 +39,7 @@ func (m *modelFake) Open(ctx context.Context, c domain.ModelSessionConfig) (doma
 type sessionFake struct {
 	manualAck bool
 	idle      bool
+	busy      atomic.Bool
 	send      func(context.Context, domain.UserInput) error
 	config    domain.ModelSessionConfig
 	closeWait <-chan struct{}
@@ -69,7 +70,7 @@ func (s *sessionFake) Send(ctx context.Context, in domain.UserInput) (err error)
 }
 func (s *sessionFake) Events() <-chan domain.ModelEvent { return s.events }
 func (s *sessionFake) ResumeToken() string              { return "resume-token" }
-func (s *sessionFake) Idle() bool                       { return s.idle }
+func (s *sessionFake) Idle() bool                       { return s.idle && !s.busy.Load() }
 func (s *sessionFake) Close() error {
 	s.once.Do(func() {
 		close(s.closed)

@@ -60,6 +60,7 @@ A row counts as delivered when the model reports that it started on the row's in
 - Chat and watch/wake inputs name the place, sender, and local time, with ordering context. The header ends with `refs: conversation=<ref>` and any refs the messaging adapter names for the input, such as Slack's `thread`. The adapter's notes say which ref to post at. `reply` always takes an explicit ref.
 - A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
+- With consolidation enabled, sessions start fresh after each run. When it fires, each session with a resume token, except the consolidation's own, first gets a rest turn with `procedures/rest.md` as input, to write down what only its context knows. Rest turns take the slot that scheduled tasks share, so they run one at a time, and the consolidation waits for every rest turn that can start. A busy session rests once it is idle, possibly after the consolidation, and its later inputs are not held back while its rest waits. When a rest or consolidation turn succeeds, the session drops its resume token and takes no new input. It closes as soon as it is idle, and its next input opens a new model session.
 
 ## Work and failure
 
@@ -113,7 +114,7 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 | Where | What |
 |---|---|
 | SQLite | events and sends (with full-text search), inbox, sessions and resume tokens, schedules, watches, OAuth tokens |
-| memory Git repo | `owner/` (the owner's handwritten files) and the agent's `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. The heartbeat and consolidation send `procedures/heartbeat.md` and `procedures/consolidate.md` as their input. |
+| memory Git repo | `owner/` (the owner's handwritten files) and the agent's `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. noctiluca sends `procedures/heartbeat.md`, `procedures/consolidate.md`, and `procedures/rest.md` as the input of the heartbeat, the consolidation, and each rest turn. |
 
 ## Trust model
 

@@ -82,6 +82,7 @@ type SessionRepository interface {
 	Recover(context.Context) error
 	Interrupt(context.Context, SessionKey, string) error
 	Get(ctx context.Context, key SessionKey) (Session, error)
+	List(context.Context) ([]Session, error)
 	Save(ctx context.Context, session Session) error
 }
 
