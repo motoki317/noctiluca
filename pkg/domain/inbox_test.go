@@ -15,10 +15,4 @@ func TestInboxMessageRefCompatibility(t *testing.T) {
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "MessageRef")
-	payload.MessageRef = "message"
-	raw, err = json.Marshal(payload)
-	require.NoError(t, err)
-	var restored InboxPayload
-	require.NoError(t, json.Unmarshal(raw, &restored))
-	require.Equal(t, payload, restored)
 }

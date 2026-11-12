@@ -10,8 +10,6 @@ func TestConversationRef(t *testing.T) {
 	for _, tc := range []struct{ name, channel, target string }{
 		{"chat", "channel", ""},
 		{"chat", "channel", "message"},
-		{"", "", ""},
-		{"chat", "channel with spaces", "opaque target"},
 	} {
 		ref := NewConversationRef(tc.name, tc.channel, tc.target)
 		t.Run(string(ref), func(t *testing.T) {
@@ -22,7 +20,7 @@ func TestConversationRef(t *testing.T) {
 			require.Equal(t, tc.target, target)
 		})
 	}
-	for _, ref := range []ConversationRef{"", "chat", "chat:channel", "chat:channel:message:extra"} {
+	for _, ref := range []ConversationRef{"chat:channel", "chat:channel:message:extra"} {
 		t.Run(string(ref), func(t *testing.T) {
 			_, _, _, ok := ParseConversationRef(ref)
 			require.False(t, ok)

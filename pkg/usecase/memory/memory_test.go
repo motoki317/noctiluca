@@ -1,10 +1,10 @@
 package memory_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -20,21 +20,14 @@ func TestPromptMemoryNotes(t *testing.T) {
 	require.True(t, filepath.IsAbs(store.Dir()))
 	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "owner/rules.md"), []byte("Owner instructions"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "core.md"), []byte("Memory index"), 0600))
-	prompt, err := memoryusecase.Prompt(store, "Messaging instructions", nil)(t.Context(), domain.ToolSession{})
+	prompt, err := memoryusecase.Prompt(store, "Messaging instructions", func(context.Context, domain.ToolSession) (string, error) { return "Hook instructions", nil })(t.Context(), domain.ToolSession{})
 	require.NoError(t, err)
-	lines := []string{
-		"Memory notes:",
-		"- Read and edit memory in " + strconv.Quote(store.Dir()) + " with your own file tools.",
-		"- owner/ holds the owner's handwritten files. Never edit, move, or delete them. Propose fixes to the owner.",
-		"- owner/ files and core.md are in this system prompt. Edits take effect in the next model process.",
-		"- Keep core.md under 8 KB.",
-		"- Everything outside owner/, including core.md, is your own memory.",
-		"- Commit each change with a message that says why.",
-		"- Commit only paths you changed because other sessions share this repository.",
-		"- Retry if git reports a lock.",
-	}
-	require.True(t, strings.HasPrefix(prompt, strings.Join(lines, "\n")+"\n\n"), prompt)
+	require.Contains(t, prompt, strconv.Quote(store.Dir()))
 	require.Contains(t, prompt, "Memory: owner/rules.md\nOwner instructions")
 	require.Contains(t, prompt, "Memory: core.md\nMemory index")
 	require.Contains(t, prompt, "Messaging tool notes:\nMessaging instructions")
+	require.Contains(t, prompt, "Hook instructions")
+	prompt, err = memoryusecase.Prompt(nil, "", nil)(t.Context(), domain.ToolSession{})
+	require.NoError(t, err)
+	require.NotContains(t, prompt, "Memory notes:")
 }

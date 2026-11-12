@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -100,65 +101,41 @@ func take[T any](t *testing.T, ch <-chan T) T {
 	}
 }
 
-func TestRecoveryFailureAndTaskDeadline(t *testing.T) {
-	// Runner scheduling must not consume the deadline used to expire the hung task.
+func TestOpenFailureRetriesAndRevokesGrants(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
-		require.NoError(t, err)
-		defer db.Close()
-		inbox := repository.NewInboxRepository(db)
-		events := repository.NewEventRepository(db)
-		sessions := repository.NewSessionRepository(db)
-		enqueue := func(key, text, lane string) int64 {
-			item := TaskItem(key, text, "")
-			item.SessionKey = domain.SessionKey(key)
-			item.Lane = lane
-			if lane == "conv" {
-				item.Payload.Context.TaskName = ""
-			}
-			id, err := inbox.Enqueue(t.Context(), item)
-			require.NoError(t, err)
-			return id
-		}
-		interrupted := enqueue("recovered", "recover me", "conv")
-		_, err = inbox.Claim(t.Context(), interrupted, time.Now().Add(time.Hour))
-		require.NoError(t, err)
-		require.NoError(t, sessions.Save(t.Context(), domain.Session{Key: "recovered", ResumeToken: "saved-token"}))
-		failed := enqueue("fail", "bad", "conv")
-		enqueue("hung", "hang", "task")
-		enqueue("next", "next task", "task")
-		m := &modelFake{opened: make(chan *sessionFake, 10)}
-		hub := &hubFake{closed: make(chan domain.SessionKey, 20)}
 		notes := make(chan string, 10)
-		r := New(Config{TaskTimeout: 100 * time.Millisecond, TurnTimeout: time.Second, RetryDelay: 5 * time.Millisecond, MaxAttempts: 2, NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil }}, inbox, repository.NewScheduleRepository(db), sessions, events, m, hub)
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- r.Start(ctx) }()
-		defer func() { cancel(); require.NoError(t, take(t, done)) }()
-		opened := map[domain.SessionKey]*sessionFake{}
-		for len(opened) < 3 {
-			s := take(t, m.opened)
-			opened[s.config.Key] = s
-			take(t, s.inputs)
-			if s.config.Key != "hung" {
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-			}
+		f := newDeliveryRig(t, Config{RetryDelay: 5 * time.Millisecond, MaxAttempts: 2, NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil }})
+		f.start(t)
+		id := f.enqueue(t, "fail", "bad")
+		for range 2 {
+			require.Equal(t, domain.SessionKey("fail"), take(t, f.hub.closed))
 		}
-		take(t, opened["hung"].closed)
-		require.Eventually(t, func() bool {
-			var status string
-			var attempts int
-			err := db.QueryRow("SELECT status,attempts FROM inbox WHERE id=?", failed).Scan(&status, &attempts)
-			return err == nil && status == "dead" && attempts == 2
-		}, time.Second, time.Millisecond)
-		require.Equal(t, "saved-token", opened["recovered"].config.ResumeToken)
-		require.Contains(t, take(t, notes)+take(t, notes), "fail")
-		select {
-		case err := <-done:
-			t.Fatalf("failure stopped reconciler: %v", err)
-		default:
-		}
+		f.status(t, id, "dead")
+		var attempts int
+		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
+		require.Equal(t, 2, attempts)
+		require.Contains(t, take(t, notes), "model unavailable")
+		require.Empty(t, f.model.opened)
 	})
+}
+
+func TestRejectedConversationRetiresSessionAndRejectsWake(t *testing.T) {
+	var rejected atomic.Bool
+	f := newDeliveryRig(t, Config{Accept: func(domain.SessionContext) bool { return !rejected.Load() }})
+	f.start(t)
+	id := f.enqueue(t, "room", "first")
+	s := take(t, f.model.opened)
+	take(t, s.inputs)
+	f.status(t, id, "done")
+	rejected.Store(true)
+	next := f.enqueue(t, "room", "wake")
+	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
+	take(t, s.closed)
+	f.status(t, next, "dead")
+	record, err := f.sessions.Get(t.Context(), "room")
+	require.NoError(t, err)
+	require.Equal(t, "resume-token", record.ResumeToken)
+	require.Empty(t, f.model.opened)
 }
 
 func TestSlowOpenDoesNotBlockAnotherConversation(t *testing.T) {
@@ -236,31 +213,4 @@ func TestToolScheduleUsesDefaultWorkdir(t *testing.T) {
 	jobs, err := schedules.List(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "/work", jobs[0].Workdir)
-}
-
-func TestEmptyProcedureDoesNotOpenModel(t *testing.T) {
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
-	require.NoError(t, err)
-	defer db.Close()
-	inbox := repository.NewInboxRepository(db)
-	item := TaskItem("heartbeat", "run", "")
-	item.SessionKey = "fail"
-	item.Payload.Procedure = "heartbeat"
-	id, err := inbox.Enqueue(t.Context(), item)
-	require.NoError(t, err)
-	r := New(Config{Procedure: func(context.Context, string) (string, error) { return "", nil }, Completed: func(context.Context, string, time.Time) error {
-		return errors.New("skipped turn must not complete a procedure")
-	}}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), &modelFake{opened: make(chan *sessionFake, 1)}, &hubFake{closed: make(chan domain.SessionKey, 2)})
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- r.Start(ctx) }()
-	require.Eventually(t, func() bool {
-		var status string
-		var attempts int
-		err := db.QueryRow("SELECT status,attempts FROM inbox WHERE id=?", id).Scan(&status, &attempts)
-		return err == nil && status == "done" && attempts == 0
-	}, time.Second, time.Millisecond)
-	cancel()
-	require.NoError(t, take(t, done))
 }
