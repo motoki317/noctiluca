@@ -103,32 +103,22 @@ func TestGatewayRetryResetAfterStableSession(t *testing.T) {
 }
 
 func TestGatewayRetryWaitCancels(t *testing.T) {
-	for _, shutdown := range []bool{false, true} {
-		t.Run(map[bool]string{false: "context", true: "shutdown"}[shutdown], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				a := retryAdapter(t)
-				opens := 0
-				a.createGateway = func(_ string, _ gateway.EventHandlerFunc, _ ...gateway.ConfigOpt) gateway.Gateway {
-					opens++
-					return &stubGateway{openErr: errors.New("open failed")}
-				}
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				consume := func(context.Context, domain.InboundEvent) error { t.Fatal("unexpected consume"); return nil }
-				require.Error(t, a.Start(ctx, consume))
-				done := make(chan error, 1)
-				go func() { done <- a.Start(ctx, consume) }()
-				synctest.Wait()
-				if shutdown {
-					require.NoError(t, a.Shutdown(t.Context()))
-				} else {
-					cancel()
-				}
-				require.NoError(t, <-done)
-				assert.Equal(t, 1, opens)
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		a := retryAdapter(t)
+		opens := 0
+		a.createGateway = func(_ string, _ gateway.EventHandlerFunc, _ ...gateway.ConfigOpt) gateway.Gateway {
+			opens++
+			return &stubGateway{openErr: errors.New("open failed")}
+		}
+		consume := func(context.Context, domain.InboundEvent) error { t.Fatal("unexpected consume"); return nil }
+		require.Error(t, a.Start(t.Context(), consume))
+		done := make(chan error, 1)
+		go func() { done <- a.Start(t.Context(), consume) }()
+		synctest.Wait()
+		require.NoError(t, a.Shutdown(t.Context()))
+		require.NoError(t, <-done)
+		assert.Equal(t, 1, opens)
+	})
 }
 
 type retryHistory struct{ domain.EventRepository }

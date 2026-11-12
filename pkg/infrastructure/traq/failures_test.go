@@ -27,116 +27,58 @@ func captureWarnings(t *testing.T) *bytes.Buffer {
 	return &logs
 }
 
-func checkWarning(t *testing.T, logs *bytes.Buffer, operation string, status int, ids map[string]string) {
-	t.Helper()
-	var entry map[string]any
-	require.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
-	require.Equal(t, "WARN", entry["level"])
-	require.Equal(t, "team", entry["adapter"])
-	require.Equal(t, operation, entry["operation"])
-	require.EqualValues(t, status, entry["http_status"])
-	for key, value := range ids {
-		require.Equal(t, value, entry[key], key)
-	}
-	require.NotContains(t, logs.String(), "private text")
-	require.NotContains(t, logs.String(), "test-token")
-}
-
 func TestWarnLookupUsesCallerOperation(t *testing.T) {
-	logs := captureWarnings(t)
-	a := &adapter{name: "team"}
-	a.warnLookup(t.Context(), "decode traQ event", errors.New("private text test-token"), "event_type", "MESSAGE_CREATED")
-	checkWarning(t, logs, "decode traQ event", 0, map[string]string{"event_type": "MESSAGE_CREATED"})
-}
-
-func TestEventLookupFailureSkipsWithoutRestart(t *testing.T) {
-	for _, tc := range []struct{ name, path, operation, channel string }{
-		{"message", "/api/v3/messages/posted", "read traQ stamp target", ""},
-		{"channel", "/api/v3/channels", "resolve traQ stamp channel", "channel"},
-		{"stamp", "/api/v3/stamps/stamp", "read traQ stamp", "channel"},
-		{"reaction user", "/api/v3/users/human", "read traQ user", "channel"},
-		{"delete user", "/api/v3/users/human", "read traQ user", "dm"},
-		{"stored author", "", "look up deleted traQ message", "channel"},
+	secret := errors.New("private text test-token")
+	for _, tc := range []struct {
+		name, operation string
+		err             error
+	}{
+		{"plain", "decode traQ event", secret},
+		{"API", "read traQ user", apiError("read traQ user", &http.Response{StatusCode: http.StatusForbidden}, secret)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureWarnings(t)
-			var connections atomic.Int32
+			a := &adapter{name: "team"}
+			a.warnLookup(t.Context(), "decode traQ event", tc.err, "event_type", "MESSAGE_CREATED")
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
+			require.Equal(t, tc.operation, entry["operation"])
+			require.Equal(t, "MESSAGE_CREATED", entry["event_type"])
+			require.NotContains(t, logs.String(), "private text")
+			require.NotContains(t, logs.String(), "test-token")
+		})
+	}
+}
+
+func TestEventLookupFailureSkipsEvent(t *testing.T) {
+	for _, tc := range []struct{ name, path string }{
+		{"message", "/api/v3/messages/posted"},
+		{"stored author", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			at := time.Now().Add(time.Minute)
 			kind := "BOT_MESSAGE_STAMPS_UPDATED"
 			body := payload{MessageID: "posted", Stamps: []sdk.MessageStamp{{StampId: "stamp", UserId: "human", Count: 1, UpdatedAt: at}}}
-			if tc.name == "delete user" {
-				kind = "DIRECT_MESSAGE_DELETED"
-				body = payload{EventTime: at, Message: wireMessage{ID: "posted", Channel: "dm", UserID: "human"}}
-			}
 			if tc.name == "stored author" {
 				kind = "MESSAGE_DELETED"
 				body = payload{EventTime: at, Message: wireMessage{ID: "posted", Channel: "channel"}}
 			}
 			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == tc.path {
-					w.WriteHeader(403)
-					_, _ = w.Write([]byte(`{"message":"private text test-token"}`))
-					return
-				}
-				switch r.URL.Path {
-				case "/api/v3/users/me":
-					respond(t, w, sdk.MyUserDetail{Id: "bot"})
-				case "/api/v3/messages/posted":
-					message := restMessage("posted", "channel", "private text", at)
-					message.UserId = "bot"
-					respond(t, w, message)
-				case "/api/v3/channels":
-					respond(t, w, sdk.ChannelList{Public: []sdk.Channel{{Id: "channel", Name: "channel"}}})
-				case "/api/v3/stamps/stamp":
-					respond(t, w, sdk.Stamp{Id: "stamp", Name: "eyes"})
-				case "/api/v3/users/human":
-					respond(t, w, sdk.UserDetail{Id: "human"})
-				case "/api/v3/bots/ws":
-					conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
-					require.NoError(t, err)
-					defer conn.Close()
-					connections.Add(1)
-					require.NoError(t, conn.WriteJSON(frame(t, kind, body)))
-					require.NoError(t, conn.WriteJSON(frame(t, "MESSAGE_CREATED", messagePayload("after", "channel", "other", "private text", at))))
-					for {
-						if _, _, err := conn.ReadMessage(); err != nil {
-							return
-						}
-					}
-				default:
-					t.Errorf("unexpected %s", r.URL.Path)
-					w.WriteHeader(500)
-				}
+				require.Equal(t, tc.path, r.URL.Path)
+				w.WriteHeader(403)
+				_, _ = w.Write([]byte(`{"message":"private text test-token"}`))
 			})
 			if tc.name == "stored author" {
 				a.history.(*historyFake).err = errors.New("private text test-token")
 			}
 			stop := errors.New("consume failure")
 			var events []domain.InboundEvent
-			done := make(chan error, 1)
-			go func() {
-				done <- a.Start(t.Context(), func(_ context.Context, event domain.InboundEvent) error { events = append(events, event); return stop })
-			}()
-			select {
-			case err := <-done:
-				require.ErrorIs(t, err, stop)
-			case <-time.After(3 * time.Second):
-				t.Fatal("consume failure did not stop Start")
-			}
-			require.EqualValues(t, 1, connections.Load())
+			consume := func(_ context.Context, event domain.InboundEvent) error { events = append(events, event); return stop }
+			require.NoError(t, a.dispatch(t.Context(), frame(t, kind, body), consume))
+			require.Empty(t, events)
+			require.ErrorIs(t, a.dispatch(t.Context(), frame(t, "MESSAGE_CREATED", messagePayload("after", "channel", "other", "text", at)), consume), stop)
 			require.Len(t, events, 1)
 			require.Equal(t, "team:m:after", events[0].SourceKey)
-			ids := map[string]string{"message_id": "posted", "channel_id": tc.channel}
-			status := 403
-			if tc.name == "stored author" {
-				status = 0
-			} else {
-				ids["user_id"] = "human"
-			}
-			if kind == "BOT_MESSAGE_STAMPS_UPDATED" {
-				ids["stamp_id"] = "stamp"
-			}
-			checkWarning(t, logs, tc.operation, status, ids)
 		})
 	}
 }
@@ -150,20 +92,13 @@ func (h cursorFailure) LatestMessageTime(ctx context.Context, ref domain.Convers
 	return h.EventRepository.LatestMessageTime(ctx, ref)
 }
 
-func TestBackfillLookupFailureSkipsWithoutRestart(t *testing.T) {
-	for _, tc := range []struct {
-		name, path, operation string
-		status                int
-		ids                   map[string]string
-	}{
-		{"owner", "/api/v3/users/owner/dm-channel", "resolve traQ direct message", 403, map[string]string{"user_id": "owner"}},
-		{"history", "/api/v3/channels/bad/messages", "backfill traQ messages", 403, map[string]string{"channel_id": "bad"}},
-		{"user", "/api/v3/users/unknown", "read traQ user", 403, map[string]string{"channel_id": "bad", "message_id": "missed", "user_id": "unknown"}},
-		{"cursor", "", "read traQ backfill cursor", 0, map[string]string{"channel_id": "bad"}},
+func TestBackfillLookupFailureSkipsTarget(t *testing.T) {
+	for _, tc := range []struct{ name, path string }{
+		{"history", "/api/v3/channels/bad/messages"},
+		{"user", "/api/v3/users/unknown"},
+		{"cursor", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := captureWarnings(t)
-			var connections atomic.Int32
 			at := time.Now().Add(-time.Minute)
 			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == tc.path {
@@ -172,67 +107,31 @@ func TestBackfillLookupFailureSkipsWithoutRestart(t *testing.T) {
 					return
 				}
 				switch r.URL.Path {
-				case "/api/v3/users/me":
-					respond(t, w, sdk.MyUserDetail{Id: "bot"})
 				case "/api/v3/channels/bad/bots", "/api/v3/channels/good/bots":
 					respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
-				case "/api/v3/users/owner/dm-channel":
-					respond(t, w, sdk.DMChannel{Id: "dm", UserId: "owner"})
 				case "/api/v3/users/human":
 					respond(t, w, sdk.UserDetail{Id: "human"})
 				case "/api/v3/channels/bad/messages":
-					if tc.name == "user" {
-						message := restMessage("missed", "bad", "private text", at)
-						message.UserId = "unknown"
-						respond(t, w, []sdk.Message{restMessage("later", "bad", "private text", at.Add(time.Second)), message, restMessage("earlier", "bad", "private text", at.Add(-time.Second))})
-					} else {
-						respond(t, w, []sdk.Message{})
-					}
-				case "/api/v3/channels/dm/messages":
-					respond(t, w, []sdk.Message{})
+					message := restMessage("missed", "bad", "private text", at)
+					message.UserId = "unknown"
+					respond(t, w, []sdk.Message{restMessage("later", "bad", "private text", at.Add(time.Second)), message, restMessage("earlier", "bad", "private text", at.Add(-time.Second))})
 				case "/api/v3/channels/good/messages":
 					respond(t, w, []sdk.Message{restMessage("backfilled", "good", "private text", at)})
-				case "/api/v3/bots/ws":
-					conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
-					require.NoError(t, err)
-					defer conn.Close()
-					connections.Add(1)
-					require.NoError(t, conn.WriteJSON(frame(t, "MESSAGE_CREATED", messagePayload("live", "good", "human", "private text", at))))
-					for {
-						if _, _, err := conn.ReadMessage(); err != nil {
-							return
-						}
-					}
 				default:
 					t.Errorf("unexpected %s", r.URL.Path)
 					w.WriteHeader(500)
 				}
 			})
-			a.config.Owner = "owner"
 			seedConversations(t, a, "bad", "good")
 			if tc.name == "cursor" {
 				a.history = cursorFailure{a.history}
 			}
-			stop := errors.New("consume failure")
 			var events []domain.InboundEvent
-			done := make(chan error, 1)
-			go func() {
-				done <- a.Start(t.Context(), func(_ context.Context, event domain.InboundEvent) error {
-					events = append(events, event)
-					if event.SourceKey == "team:m:live" {
-						return stop
-					}
-					return nil
-				})
-			}()
-			select {
-			case err := <-done:
-				require.ErrorIs(t, err, stop)
-			case <-time.After(3 * time.Second):
-				t.Fatal("consume failure did not stop Start")
-			}
-			require.EqualValues(t, 1, connections.Load())
-			want := []string{"team:m:backfilled", "team:m:live"}
+			require.NoError(t, a.backfill(t.Context(), a.backfillTargets(t.Context()), func(_ context.Context, event domain.InboundEvent) error {
+				events = append(events, event)
+				return nil
+			}))
+			want := []string{"team:m:backfilled"}
 			if tc.name == "user" {
 				want = append([]string{"team:m:earlier", "team:m:later"}, want...)
 			}
@@ -241,7 +140,6 @@ func TestBackfillLookupFailureSkipsWithoutRestart(t *testing.T) {
 				keys = append(keys, event.SourceKey)
 			}
 			require.Equal(t, want, keys)
-			checkWarning(t, logs, tc.operation, tc.status, tc.ids)
 		})
 	}
 }

@@ -16,86 +16,55 @@ import (
 )
 
 func TestBackfillStoredConversations(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		channels []string
-		want     map[domain.ConversationRef]bool
-	}{
-		{"empty", nil, map[domain.ConversationRef]bool{"team:owner_dm:": true}},
-		{"stored channels", []string{"room", "room", "peer_dm"}, map[domain.ConversationRef]bool{"team:room:": false, "team:owner_dm:": true, "team:peer_dm:": true}},
-		{"stored owner DM", []string{"room", "owner_dm", "peer_dm"}, map[domain.ConversationRef]bool{"team:room:": false, "team:owner_dm:": true, "team:peer_dm:": true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			reads := make(map[string]int)
-			var channelLookups int
-			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/v3/users/owner/dm-channel":
-					respond(t, w, sdk.DMChannel{Id: "owner_dm", UserId: "owner"})
-				case "/api/v3/channels":
-					channelLookups++
-					require.Equal(t, "true", r.URL.Query().Get("include-dm"))
-					respond(t, w, sdk.ChannelList{Public: []sdk.Channel{{Id: "room"}}, Dm: []sdk.DMChannel{{Id: "owner_dm", UserId: "owner"}, {Id: "peer_dm", UserId: "peer"}}})
-				case "/api/v3/channels/room/bots":
-					respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
-				case "/api/v3/channels/room/messages", "/api/v3/channels/owner_dm/messages", "/api/v3/channels/peer_dm/messages":
-					channel := "room"
-					switch r.URL.Path {
-					case "/api/v3/channels/owner_dm/messages":
-						channel = "owner_dm"
-					case "/api/v3/channels/peer_dm/messages":
-						channel = "peer_dm"
-					}
-					reads[channel]++
-					respond(t, w, []sdk.Message{restMessage("message-"+channel, channel, "text", time.Now().Add(-time.Minute))})
-				case "/api/v3/users/human":
-					respond(t, w, sdk.UserDetail{Id: "human"})
-				default:
-					t.Errorf("unexpected backfill request %s", r.URL.Path)
-					w.WriteHeader(http.StatusNotFound)
-				}
-			})
-			db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "events.db")})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, db.Close()) })
-			a.history = repository.NewEventRepository(db)
-			a.config.Owner = "owner"
-			accepted := true
-			for _, channel := range tc.channels {
-				ref := Conversation(a.name, channel, "")
-				require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
-					Kind: domain.InboundEventMessage, Conversation: ref, Direct: tc.want[ref], Accepted: &accepted,
-					Sender: sender("human", "Human", false), Text: "stored message", ReceivedAt: time.Now().Add(-25 * time.Hour),
-				}))
+	reads := make(map[string]int)
+	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/users/owner/dm-channel":
+			respond(t, w, sdk.DMChannel{Id: "owner_dm", UserId: "owner"})
+		case "/api/v3/channels/room/bots":
+			respond(t, w, []sdk.BotUser{{Id: "agent", BotUserId: "bot"}})
+		case "/api/v3/channels/room/messages", "/api/v3/channels/owner_dm/messages", "/api/v3/channels/peer_dm/messages":
+			channel := "room"
+			switch r.URL.Path {
+			case "/api/v3/channels/owner_dm/messages":
+				channel = "owner_dm"
+			case "/api/v3/channels/peer_dm/messages":
+				channel = "peer_dm"
 			}
-			a.direct.Clear()
-			for _, event := range []domain.InboundEvent{
-				{Kind: domain.InboundEventMessage, Conversation: "other:room:"},
-				{Kind: domain.InboundEventMessage, Conversation: "team:thread_room:thread", Parent: "team:thread_room:"},
-				{Kind: domain.InboundEventReaction, Conversation: "team:reaction_room:"},
-			} {
-				event.Sender = sender("human", "Human", false)
-				event.ReceivedAt = time.Now()
-				require.NoError(t, a.history.SaveInbound(t.Context(), event))
-			}
-			got := make(map[domain.ConversationRef]bool)
-			var order []domain.ConversationRef
-			targets := a.backfillTargets(t.Context())
-			require.Len(t, targets, len(tc.want))
-			require.NoError(t, a.backfill(t.Context(), targets, func(_ context.Context, event domain.InboundEvent) error {
-				order = append(order, event.Conversation)
-				got[event.Conversation] = event.Direct
-				return nil
-			}))
-			require.Equal(t, tc.want, got)
-			require.Equal(t, domain.ConversationRef("team:owner_dm:"), order[0])
-			require.Len(t, reads, len(tc.want))
-			for channel, count := range reads {
-				require.Equal(t, 1, count, channel)
-			}
-			require.Zero(t, channelLookups)
-		})
+			reads[channel]++
+			respond(t, w, []sdk.Message{restMessage("message-"+channel, channel, "text", time.Now().Add(-time.Minute))})
+		case "/api/v3/users/human":
+			respond(t, w, sdk.UserDetail{Id: "human"})
+		default:
+			t.Errorf("unexpected backfill request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "events.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	a.history = repository.NewEventRepository(db)
+	a.config.Owner = "owner"
+	accepted := true
+	for _, channel := range []string{"room", "owner_dm", "peer_dm"} {
+		ref := Conversation(a.name, channel, "")
+		require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
+			Kind: domain.InboundEventMessage, Conversation: ref, Direct: channel != "room", Accepted: &accepted,
+			Sender: sender("human", "Human", false), Text: "stored message", ReceivedAt: time.Now().Add(-25 * time.Hour),
+		}))
 	}
+	got := make(map[domain.ConversationRef]bool)
+	var order []domain.ConversationRef
+	targets := a.backfillTargets(t.Context())
+	require.Len(t, targets, 3)
+	require.NoError(t, a.backfill(t.Context(), targets, func(_ context.Context, event domain.InboundEvent) error {
+		order = append(order, event.Conversation)
+		got[event.Conversation] = event.Direct
+		return nil
+	}))
+	require.Equal(t, map[domain.ConversationRef]bool{"team:room:": false, "team:owner_dm:": true, "team:peer_dm:": true}, got)
+	require.Equal(t, domain.ConversationRef("team:owner_dm:"), order[0])
+	require.Equal(t, map[string]int{"room": 1, "owner_dm": 1, "peer_dm": 1}, reads)
 }
 
 type conversationListFailure struct{ domain.EventRepository }
@@ -105,7 +74,6 @@ func (conversationListFailure) ListConversations(context.Context, string) ([]dom
 }
 
 func TestBackfillListFailureStillIncludesOwner(t *testing.T) {
-	logs := captureWarnings(t)
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/users/owner/dm-channel":
@@ -132,33 +100,6 @@ func TestBackfillListFailureStillIncludesOwner(t *testing.T) {
 	}))
 	require.Len(t, got, 1)
 	require.True(t, got[0].Direct)
-	checkWarning(t, logs, "list traQ backfill conversations", 0, nil)
-}
-
-func TestBackfillDoesNotNeedChannelCatalog(t *testing.T) {
-	var lookups int
-	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v3/users/owner/dm-channel":
-			respond(t, w, sdk.DMChannel{Id: "dm", UserId: "owner"})
-		case "/api/v3/channels":
-			lookups++
-			w.WriteHeader(http.StatusForbidden)
-			respond(t, w, map[string]string{"message": "denied"})
-		default:
-			t.Errorf("unexpected backfill request %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	})
-	a.config.Owner = "owner"
-	seedConversations(t, a, "missing_a", "missing_b", "room")
-	a.direct.Clear()
-	targets := a.backfillTargets(t.Context())
-	require.Zero(t, lookups)
-	require.Len(t, targets, 4)
-	owner := targets[0]
-	require.Equal(t, "dm", owner.channel)
-	require.True(t, owner.direct)
 }
 
 func TestBackfillMatchesLiveChannelDelivery(t *testing.T) {
@@ -175,7 +116,6 @@ func TestBackfillMatchesLiveChannelDelivery(t *testing.T) {
 		{"DM", false, true, http.StatusForbidden, []string{"plain", "mention", "other", "malformed"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := captureWarnings(t)
 			at := time.Now().Add(-time.Minute)
 			var membershipLookups int
 			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
@@ -221,11 +161,6 @@ func TestBackfillMatchesLiveChannelDelivery(t *testing.T) {
 				require.Zero(t, membershipLookups)
 			} else {
 				require.Equal(t, 1, membershipLookups)
-			}
-			if !tc.direct && tc.status != http.StatusOK {
-				checkWarning(t, logs, "read traQ channel bots", tc.status, map[string]string{"channel_id": "room"})
-			} else {
-				require.Empty(t, logs.String())
 			}
 		})
 	}

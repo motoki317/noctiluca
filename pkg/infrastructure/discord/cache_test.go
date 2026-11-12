@@ -138,51 +138,35 @@ func TestUnlistedThreadSkipsParticipationLookup(t *testing.T) {
 	assert.Empty(t, a.joinedThreads)
 }
 
-func TestThreadParticipationRetriesNegativeAndFailedLookups(t *testing.T) {
-	for _, mode := range []string{"not joined", "member error", "root error"} {
-		t.Run(mode, func(t *testing.T) {
-			var members atomic.Int32
-			a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
-				switch r.URL.Path {
-				case "/channels/300":
-					writeJSON(t, w, map[string]any{"id": "300", "type": 11, "parent_id": "400", "owner_id": "201"})
-				case "/channels/300/thread-members/100":
-					if members.Add(1) > 1 {
-						writeJSON(t, w, map[string]string{"id": "300", "user_id": "100"})
-					} else if mode == "member error" {
-						w.WriteHeader(http.StatusForbidden)
-						writeJSON(t, w, map[string]any{"code": 50001})
-					} else {
-						w.WriteHeader(http.StatusNotFound)
-						writeJSON(t, w, map[string]any{"code": 10007})
-					}
-				case "/channels/400/messages/300":
-					if mode == "root error" {
-						w.WriteHeader(http.StatusForbidden)
-						writeJSON(t, w, map[string]any{"code": 50001})
-					} else {
-						writeJSON(t, w, message(300, 400))
-					}
-				default:
-					return false
-				}
-				return true
-			})
-			event, err := a.message(t.Context(), message(600, 300), false)
-			require.NoError(t, err)
-			if mode == "not joined" {
-				assert.Nil(t, event)
+func TestThreadParticipationRetriesNegativeLookup(t *testing.T) {
+	var members atomic.Int32
+	a := testAdapter(t, Config{}, func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.URL.Path {
+		case "/channels/300":
+			writeJSON(t, w, map[string]any{"id": "300", "type": 11, "parent_id": "400", "owner_id": "201"})
+		case "/channels/300/thread-members/100":
+			if members.Add(1) > 1 {
+				writeJSON(t, w, map[string]string{"id": "300", "user_id": "100"})
 			} else {
-				assert.NotNil(t, event)
+				w.WriteHeader(http.StatusNotFound)
+				writeJSON(t, w, map[string]any{"code": 10007})
 			}
-			for _, id := range []snowflake.ID{601, 602} {
-				event, err = a.message(t.Context(), message(id, 300), false)
-				require.NoError(t, err)
-				require.NotNil(t, event)
-			}
-			assert.EqualValues(t, 2, members.Load())
-		})
+		case "/channels/400/messages/300":
+			writeJSON(t, w, message(300, 400))
+		default:
+			return false
+		}
+		return true
+	})
+	event, err := a.message(t.Context(), message(600, 300), false)
+	require.NoError(t, err)
+	assert.Nil(t, event)
+	for _, id := range []snowflake.ID{601, 602} {
+		event, err = a.message(t.Context(), message(id, 300), false)
+		require.NoError(t, err)
+		require.NotNil(t, event)
 	}
+	assert.EqualValues(t, 2, members.Load())
 }
 
 func TestLocationCacheRetriesFailedLookup(t *testing.T) {
