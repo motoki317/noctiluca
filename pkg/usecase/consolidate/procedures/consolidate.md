@@ -1,30 +1,37 @@
-<!-- Original text: MIT (LICENSE). Research ideas: ACE, Reflexion, ReasoningBank and Letta. Sources retain their own licenses. See THIRD_PARTY_NOTICES.md. -->
+<!-- Original text: MIT (LICENSE). Research ideas: ACE, Reflexion, ReasoningBank, Letta, and Mem0. Sources retain their own licenses. See THIRD_PARTY_NOTICES.md. -->
 # Consolidate memory
 
-Read recent episodes with `episodes_since`. Omit `since` to use the previous successful run.
-Treat correction keywords, reactions, repeated calls, and tool errors as clues to inspect, not proof.
-Treat ambiguous and context-only episodes as context rather than evidence of a specific turn.
+Consolidation restructures memory; it does not pile up entries.
 
-## Learn from the episodes
+## Read
 
-Record facts the owner taught and clear factual corrections.
-When several episodes show the same lesson, write it once as a general rule in the topic or procedure where it applies. Do not infer a rule from one failed conversation.
+Read recent episodes with `episodes_since`, and `short-term.md` in full.
+Treat correction keywords, reactions, repeated calls, edits, deletions, and tool errors as clues to inspect, not proof.
 
-## Tidy the memory you maintain
+## Give each item one home
 
-Everything outside `owner/` is your own memory. Keep it short, current, and easy to find:
+Take each lesson from the episodes and each short-term entry:
 
-- Delete what no longer matters: finished todo items, logs of past reports, superseded facts.
-- Replace a running log with its latest state. A todo item keeps its request, link, done condition, and current status, not a history of every check.
-- Merge duplicates. Generalize several specific notes into one rule when they say the same thing.
-- Move a fact to the file where a reader would look for it. Split a file that mixes topics. Keep `core.md` to what every turn needs.
+- Open work stays in short-term memory: its request, the ref to post the result at, its done condition, and its latest status, not a history of checks.
+- A rule the owner taught, or one that several episodes or days confirm, goes to long-term memory, stated generally.
+- A specific fact or procedure goes to external memory under its theme, including facts the owner taught or corrected.
+- Delete everything else: finished work, logs of past reports, superseded facts.
 
-Make each change a separate commit.
-Do not rewrite a whole document in one edit: whole rewrites lose detail.
+Read the destination file or page in full first. Then make one of four edits: add the item, update the entry that covers it, delete the entries it makes obsolete, or change nothing.
 
-## Propose the rest
+## Restructure
 
-Send changes to `owner/`, to tools, and to the harness to the owner as proposals. Do not implement them here.
-For a requested behavior experiment, read `procedures/hillclimb.md` in a separate owner-requested turn.
+- Organize external memory by theme, so that anyone can find a fact by its topic. Give a theme with several pages a hub page that links them. Merge duplicates. When a page someone else wrote obviously duplicates one of yours, merge the two into one page. Propose any other change to their pages to the owner.
+- Keep long-term memory general: merge rules that say the same thing, move a rule that only one procedure needs into that procedure, and delete rules that no longer hold.
+- Measure files with `wc -c`. Split a long-term or external file over 8 KB by theme. Shorten `core.md` or `short-term.md` over 8 KB by moving detail to where it belongs.
+- Make each change a separate commit. Do not rewrite a whole document in one edit: whole rewrites lose detail.
 
-If you have proposals that you have not sent before, call `reply` with `target: "owner"` and send only those. Record each sent proposal in memory as an open item, and keep it until the owner decides or it no longer applies. Do not send an open proposal again. With no new proposal, post nothing. Then end the turn.
+## Check
+
+Read the diff of the commits you made in this run and the external pages you changed. Every deleted open item must be done or moved, and every deleted fact must be obsolete or kept elsewhere. Restore anything else.
+
+## Report
+
+Propose changes to `owner/`, to tools, and to the harness to the owner instead of making them. Do not run a behavior experiment (`procedures/hillclimb.md`) here; it needs the owner's request.
+
+If you merged pages that other people wrote, or have proposals that you have not sent before, call `reply` with `target: "owner"` and send only those, briefly. Record each sent proposal in short-term memory until the owner decides or it no longer applies. With nothing new, post nothing. Then end the turn.
