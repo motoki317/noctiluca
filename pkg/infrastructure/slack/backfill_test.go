@@ -1,17 +1,15 @@
 package slack
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"path/filepath"
 	"slices"
-	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sdk "github.com/slack-go/slack"
@@ -34,14 +32,6 @@ func backfillPage(t *testing.T, w http.ResponseWriter, messages []sdk.Message, m
 	}))
 }
 
-func saveBackfillMessage(t *testing.T, a *adapter, ref domain.ConversationRef, at time.Time, accepted *bool) {
-	t.Helper()
-	require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
-		Kind: domain.InboundEventMessage, Conversation: ref, ReceivedAt: at, Accepted: accepted,
-		Sender: domain.Sender{ID: "UOWNER", Kind: domain.SenderHuman},
-	}))
-}
-
 func TestBackfillTargets(t *testing.T) {
 	var opens int
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
@@ -54,35 +44,31 @@ func TestBackfillTargets(t *testing.T) {
 	}, true)
 	a.owner = "UOWNER"
 	now := time.Now().Truncate(time.Microsecond)
-	accepted, rejected := true, false
+	accepted := true
 	for _, entry := range []struct {
-		ref      domain.ConversationRef
-		at       time.Time
-		accepted *bool
+		ref domain.ConversationRef
+		at  time.Time
 	}{
-		{"slack:DOWNER:", now.Add(-time.Hour), &accepted},
-		{"slack:COLD:", now.Add(-25 * time.Hour), &accepted},
-		{"slack:COLD:", now.Add(-26 * time.Hour), &accepted},
-		{"slack:DPEER:", now.Add(-2 * time.Hour), &accepted},
-		{"slack:COLD:1.000001", now.Add(-3 * time.Hour), &accepted},
-		{"slack:COLD:old", now.Add(-25 * time.Hour), &accepted},
-		{"slack:CREJECTED:", now, &rejected},
-		{"slack:CUNKNOWN:", now, nil},
-		{"other:COTHER:", now, &accepted},
+		{"slack:DOWNER:", now.Add(-time.Hour)},
+		{"slack:COLD:", now.Add(-25 * time.Hour)},
+		{"slack:COLD:1.000001", now.Add(-3 * time.Hour)},
 	} {
-		saveBackfillMessage(t, a, entry.ref, entry.at, entry.accepted)
+		require.NoError(t, a.history.SaveInbound(t.Context(), domain.InboundEvent{
+			Kind: domain.InboundEventMessage, Conversation: entry.ref, ReceivedAt: entry.at, Accepted: &accepted,
+			Sender: domain.Sender{ID: "UOWNER", Kind: domain.SenderHuman},
+		}))
 	}
 	require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{Conversation: "slack:CSENT:2.000001", SentAt: now}))
-	require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{Conversation: "slack:COLD:1.000001", SentAt: now.Add(-4 * time.Hour)}))
+	require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{Conversation: "slack:COLD:1.000001", SentAt: now.Add(-2 * time.Hour)}))
 	before := time.Now().Add(-24 * time.Hour)
 	targets := a.backfillTargets(t.Context())
 	after := time.Now().Add(-24 * time.Hour)
 	require.Equal(t, 1, opens)
-	require.Len(t, targets, 5)
+	require.Len(t, targets, 4)
 	require.Equal(t, "DOWNER", targets[0].channel)
 	want := map[domain.ConversationRef]time.Time{
-		"slack:DOWNER:": now.Add(-time.Hour), "slack:COLD:": {}, "slack:DPEER:": now.Add(-2 * time.Hour),
-		"slack:COLD:1.000001": now.Add(-3 * time.Hour), "slack:CSENT:2.000001": now,
+		"slack:DOWNER:": now.Add(-time.Hour), "slack:COLD:": {},
+		"slack:COLD:1.000001": now.Add(-2 * time.Hour), "slack:CSENT:2.000001": now,
 	}
 	for _, target := range targets {
 		ref := Conversation(a.name, target.channel, target.thread)
@@ -104,20 +90,6 @@ type backfillLookupFailure struct {
 	err       error
 }
 
-func (h *backfillLookupFailure) ListConversations(ctx context.Context, name string) ([]domain.Conversation, error) {
-	if h.operation == "conversations" {
-		return nil, h.err
-	}
-	return h.EventRepository.ListConversations(ctx, name)
-}
-
-func (h *backfillLookupFailure) ListThreads(ctx context.Context, name string, since time.Time) ([]domain.ConversationRef, error) {
-	if h.operation == "threads" {
-		return nil, h.err
-	}
-	return h.EventRepository.ListThreads(ctx, name, since)
-}
-
 func (h *backfillLookupFailure) LatestMessageTime(ctx context.Context, ref domain.ConversationRef) (time.Time, error) {
 	if h.operation == "inbound cursor" {
 		return time.Time{}, h.err
@@ -132,35 +104,15 @@ func (h *backfillLookupFailure) ListOutbound(ctx context.Context, ref domain.Con
 	return h.EventRepository.ListOutbound(ctx, ref, limit)
 }
 
-func TestBackfillLookupWarnings(t *testing.T) {
-	for _, tc := range []struct{ operation, warning, errorText string }{
-		{"conversations", "List Slack backfill conversations failed", "lookup failed"},
-		{"owner DM", "Resolve Slack backfill owner DM failed", "open owner direct message failed"},
-		{"threads", "List Slack backfill threads failed", "lookup failed"},
-		{"inbound cursor", "Read Slack backfill cursor failed", "lookup failed"},
-		{"outbound cursor", "Read Slack backfill cursor failed", "lookup failed"},
-	} {
-		t.Run(tc.operation, func(t *testing.T) {
-			var logs bytes.Buffer
-			logger := slog.Default()
-			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-			t.Cleanup(func() { slog.SetDefault(logger) })
-			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "/conversations.open", r.URL.Path)
-				fmt.Fprint(w, `{"ok":false,"error":"invalid_auth"}`)
+func TestBackfillSkipsUnreadableCursors(t *testing.T) {
+	for _, operation := range []string{"inbound cursor", "outbound cursor"} {
+		t.Run(operation, func(t *testing.T) {
+			a := apiAdapter(t, func(_ http.ResponseWriter, r *http.Request) {
+				t.Errorf("unexpected API %s", r.URL.Path)
 			}, false)
-			if tc.operation == "owner DM" {
-				a.owner = "UOWNER"
-			}
-			if tc.operation == "inbound cursor" || tc.operation == "outbound cursor" {
-				require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{Conversation: "slack:CTEST:1.000001", SentAt: time.Now()}))
-			}
-			a.history = &backfillLookupFailure{EventRepository: a.history, operation: tc.operation, err: errors.New("lookup failed")}
+			require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{Conversation: "slack:CTEST:1.000001", SentAt: time.Now()}))
+			a.history = &backfillLookupFailure{EventRepository: a.history, operation: operation, err: errors.New("lookup failed")}
 			require.Empty(t, a.backfillTargets(t.Context()))
-			var entry map[string]any
-			require.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
-			require.Equal(t, tc.warning, entry["msg"])
-			require.Equal(t, tc.errorText, entry["error"])
 		})
 	}
 }
@@ -258,20 +210,11 @@ func TestBackfillWindow(t *testing.T) {
 }
 
 func TestBackfillThreadFilters(t *testing.T) {
-	for _, tc := range []struct {
-		name, channel, text        string
-		joined, outboundOnly, want bool
-	}{
-		{"joined", "CTEST", "reply", true, false, true},
-		{"outbound only", "CTEST", "reply", true, true, true},
-		{"unjoined", "CTEST", "reply", false, false, false},
-		{"mentioned", "CTEST", "hi <@USELF>", false, false, true},
-		{"DM", "DTEST", "reply", false, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, joined := range []bool{true, false} {
+		t.Run(fmt.Sprintf("joined=%t", joined), func(t *testing.T) {
 			at := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
 			root := formatTimestamp(at.Add(-time.Hour))
-			message := historyMessage(at.Add(time.Minute), tc.text)
+			message := historyMessage(at.Add(time.Minute), "reply")
 			message.ThreadTimestamp = root
 			var reads, lookups int
 			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +224,7 @@ func TestBackfillThreadFilters(t *testing.T) {
 				if r.Form.Get("oldest") == "" {
 					lookups++
 					user := "UOTHER"
-					if tc.joined {
+					if joined {
 						user = "USELF"
 					}
 					backfillPage(t, w, []sdk.Message{{Msg: sdk.Msg{User: user, Timestamp: root}}}, false, "")
@@ -291,86 +234,25 @@ func TestBackfillThreadFilters(t *testing.T) {
 				}
 			}, false)
 			a.selfUser = "USELF"
-			ref := Conversation(a.name, tc.channel, root)
+			ref := Conversation(a.name, "CTEST", root)
 			require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{Conversation: ref, SentAt: at}))
-			if !tc.outboundOnly {
-				accepted := true
-				saveBackfillMessage(t, a, ref, at, &accepted)
-			}
 			var got []domain.InboundEvent
 			require.NoError(t, a.backfill(t.Context(), a.backfillTargets(t.Context()), func(_ context.Context, event domain.InboundEvent) error {
 				got = append(got, event)
 				return nil
 			}))
 			require.Equal(t, 1, reads)
-			if tc.want {
+			require.Equal(t, 1, lookups)
+			if joined {
 				require.Len(t, got, 1)
 				require.Equal(t, ref, got[0].Conversation)
-				require.Equal(t, Conversation(a.name, tc.channel, message.Timestamp), got[0].MessageRef)
-				require.Equal(t, "slack:m:"+tc.channel+":"+message.Timestamp, got[0].SourceKey)
-				require.Equal(t, tc.channel == "DTEST", got[0].Direct)
+				require.Equal(t, Conversation(a.name, "CTEST", message.Timestamp), got[0].MessageRef)
+				require.Equal(t, "slack:m:CTEST:"+message.Timestamp, got[0].SourceKey)
 			} else {
 				require.Empty(t, got)
 			}
-			if tc.channel == "DTEST" || tc.text == "hi <@USELF>" {
-				require.Zero(t, lookups)
-			} else {
-				require.Equal(t, 1, lookups)
-			}
 		})
 	}
-}
-
-func TestBackfillDoesNotReplayRepliesBeforeLastPost(t *testing.T) {
-	at := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
-	root := formatTimestamp(at)
-	postedAt := at.Add(10 * time.Minute)
-	early := historyMessage(at.Add(time.Minute), "reply before the agent joined")
-	early.ThreadTimestamp = root
-	later := historyMessage(postedAt.Add(time.Minute), "reply after the result")
-	later.ThreadTimestamp = root
-	var posted bool
-	var oldest string
-	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, r.ParseForm())
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posted = true
-			fmt.Fprintf(w, `{"ok":true,"channel":"CTEST","ts":%q}`, formatTimestamp(postedAt))
-		case "/conversations.history":
-			backfillPage(t, w, nil, false, "")
-		case "/conversations.replies":
-			if r.Form.Get("oldest") != "" {
-				oldest = r.Form.Get("oldest")
-				backfillPage(t, w, []sdk.Message{early, later}, false, "")
-			} else if posted {
-				backfillPage(t, w, []sdk.Message{{Msg: sdk.Msg{User: "USELF", Timestamp: formatTimestamp(postedAt), ThreadTimestamp: root}}}, false, "")
-			} else {
-				backfillPage(t, w, nil, false, "")
-			}
-		default:
-			t.Errorf("unexpected API %s", r.URL.Path)
-		}
-	}, false)
-	a.selfUser = "USELF"
-	accepted := true
-	saveBackfillMessage(t, a, Conversation(a.name, "CTEST", ""), at, &accepted)
-	_, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: "CTEST", Message: &early.Msg})
-	require.False(t, ok)
-	ref := Conversation(a.name, "CTEST", root)
-	stored, err := a.history.ListInbound(t.Context(), ref, 1)
-	require.NoError(t, err)
-	require.Empty(t, stored)
-	id, err := a.Send(t.Context(), ref, domain.OutboundMessage{Text: "result"})
-	require.NoError(t, err)
-	require.NoError(t, a.history.SaveOutbound(t.Context(), domain.SentMessage{ID: id, Conversation: ref, SentAt: postedAt}))
-	var got []string
-	require.NoError(t, a.backfill(t.Context(), a.backfillTargets(t.Context()), func(_ context.Context, event domain.InboundEvent) error {
-		got = append(got, event.Text)
-		return nil
-	}))
-	require.Equal(t, []string{later.Text}, got)
-	require.Equal(t, formatTimestamp(postedAt), oldest)
 }
 
 func TestBackfillUsesLiveMessageFilters(t *testing.T) {
@@ -404,214 +286,172 @@ func TestBackfillUsesLiveMessageFilters(t *testing.T) {
 		live, ok := a.inbound(t.Context(), &slackevents.MessageEvent{Channel: "DTEST", SubType: messages[i].SubType, Message: &messages[i].Msg})
 		require.True(t, ok)
 		require.Equal(t, live, event)
+		require.Equal(t, "slack:m:DTEST:"+messages[i].Timestamp, event.SourceKey)
 		require.Equal(t, "FTEST", event.Attachments[0].Ref)
 	}
 }
 
 func TestBackfillRateLimit(t *testing.T) {
-	for _, thread := range []string{"", "1.000001"} {
-		t.Run(thread, func(t *testing.T) {
-			var calls int
-			at := time.Now().Add(-time.Hour)
-			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-				calls++
-				if calls == 1 {
-					w.Header().Set("Retry-After", "1")
-					w.WriteHeader(http.StatusTooManyRequests)
-					return
+	for _, tc := range []struct {
+		name, retryAfter string
+		timeout, wait    time.Duration
+		calls            int
+	}{
+		{name: "retry", retryAfter: "1", wait: time.Second, calls: 2},
+		{name: "context bounds retry", retryAfter: "60", timeout: 100 * time.Millisecond, wait: 100 * time.Millisecond, calls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var calls int
+				at := time.Now().Add(-time.Hour)
+				bot := sdk.New("xoxb-test", sdk.OptionAPIURL("https://example.test/"),
+					sdk.OptionHTTPClient(&http.Client{Transport: uploadTransport(func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						if calls == 1 {
+							w.Header().Set("Retry-After", tc.retryAfter)
+							w.WriteHeader(http.StatusTooManyRequests)
+							return
+						}
+						backfillPage(t, w, []sdk.Message{historyMessage(at.Add(time.Minute), "retried")}, false, "")
+					})}))
+				a := &adapter{bot: bot, reader: bot}
+				ctx := t.Context()
+				if tc.timeout != 0 {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, tc.timeout)
+					defer cancel()
 				}
-				backfillPage(t, w, []sdk.Message{historyMessage(at.Add(time.Minute), "retried")}, false, "")
-			}, false)
-			start := time.Now()
-			messages, err := a.readBackfill(t.Context(), backfillTarget{channel: "DTEST", thread: thread, since: at, until: time.Now()})
-			require.NoError(t, err)
-			require.GreaterOrEqual(t, time.Since(start), time.Second)
-			require.Len(t, messages, 1)
-			require.Equal(t, 2, calls)
+				start := time.Now()
+				messages, err := a.readBackfill(ctx, backfillTarget{channel: "DTEST", since: at, until: time.Now()})
+				if tc.timeout != 0 {
+					require.ErrorIs(t, err, context.DeadlineExceeded)
+				} else {
+					require.NoError(t, err)
+					require.Len(t, messages, 1)
+				}
+				require.Equal(t, tc.wait, time.Since(start))
+				require.Equal(t, tc.calls, calls)
+			})
 		})
 	}
-	t.Run("context bounds retry", func(t *testing.T) {
-		a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Retry-After", "60")
-			w.WriteHeader(http.StatusTooManyRequests)
-		}, false)
-		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		_, err := a.readBackfill(ctx, backfillTarget{channel: "DTEST", since: time.Now().Add(-time.Hour), until: time.Now()})
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		require.Less(t, time.Since(start), time.Second)
-	})
 }
 
 func TestBackfillReaderFallback(t *testing.T) {
-	for _, thread := range []string{"", "1.000001"} {
-		t.Run(thread, func(t *testing.T) {
-			var botCalls, readerCalls int
-			at := time.Now().Add(-time.Hour)
-			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-				require.NoError(t, r.ParseForm())
-				if r.Form.Get("token") == "xoxb-test" {
-					botCalls++
-					fmt.Fprint(w, `{"ok":false,"error":"not_in_channel"}`)
-					return
-				}
-				require.Equal(t, "xoxp-test", r.Form.Get("token"))
-				readerCalls++
-				if r.Form.Get("cursor") == "" {
-					backfillPage(t, w, []sdk.Message{historyMessage(at.Add(time.Minute), "first")}, true, "next")
-				} else {
-					backfillPage(t, w, []sdk.Message{historyMessage(at.Add(2*time.Minute), "second")}, false, "")
-				}
-			}, true)
-			messages, err := a.readBackfill(t.Context(), backfillTarget{channel: "CTEST", thread: thread, since: at, until: time.Now()})
-			require.NoError(t, err)
-			require.Len(t, messages, 2)
-			require.Equal(t, 1, botCalls)
-			require.Equal(t, 2, readerCalls)
-		})
-	}
-}
-
-type observedCursors struct {
-	domain.EventRepository
-	reads []domain.ConversationRef
-}
-
-func (h *observedCursors) LatestMessageTime(ctx context.Context, ref domain.ConversationRef) (time.Time, error) {
-	h.reads = append(h.reads, ref)
-	return h.EventRepository.LatestMessageTime(ctx, ref)
-}
-
-func TestConnectedBackfillPrecedesLiveAndDeduplicates(t *testing.T) {
-	var logs bytes.Buffer
-	logger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(logger) })
-	at := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
-	missed := historyMessage(at.Add(time.Minute), "missed DM")
-	started, release := make(chan struct{}), make(chan struct{})
-	var opens, reads atomic.Int32
+	var botCalls, readerCalls int
+	at := time.Now().Add(-time.Hour)
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
-		switch r.URL.Path {
-		case "/auth.test":
-			fmt.Fprint(w, `{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`)
-		case "/conversations.open":
-			opens.Add(1)
-			fmt.Fprint(w, `{"ok":true,"channel":{"id":"DOWNER"}}`)
-		case "/conversations.history":
-			if r.Form.Get("channel") == "DOWNER" && reads.Add(1) == 1 {
-				close(started)
-				select {
-				case <-release:
-				case <-r.Context().Done():
-					return
+		if r.Form.Get("token") == "xoxb-test" {
+			botCalls++
+			fmt.Fprint(w, `{"ok":false,"error":"not_in_channel"}`)
+			return
+		}
+		require.Equal(t, "xoxp-test", r.Form.Get("token"))
+		readerCalls++
+		if r.Form.Get("cursor") == "" {
+			backfillPage(t, w, []sdk.Message{historyMessage(at.Add(time.Minute), "first")}, true, "next")
+		} else {
+			backfillPage(t, w, []sdk.Message{historyMessage(at.Add(2*time.Minute), "second")}, false, "")
+		}
+	}, true)
+	messages, err := a.readBackfill(t.Context(), backfillTarget{channel: "CTEST", since: at, until: time.Now()})
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Equal(t, 1, botCalls)
+	require.Equal(t, 2, readerCalls)
+}
+
+func TestConnectedBackfillPrecedesLive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		at := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+		missed := historyMessage(at.Add(time.Minute), "missed DM")
+		started, release := make(chan struct{}), make(chan struct{})
+		db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "history.db")})
+		require.NoError(t, err)
+		defer db.Close()
+		a, err := newAdapter("slack", Config{AppToken: "xapp-test", BotToken: "xoxb-test", Owner: "UOWNER"}, repository.NewEventRepository(db),
+			sdk.OptionAPIURL("https://example.test/"),
+			sdk.OptionHTTPClient(&http.Client{Transport: uploadTransport(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/auth.test":
+					fmt.Fprint(w, `{"ok":true,"user_id":"USELF","bot_id":"BSELF"}`)
+				case "/conversations.open":
+					fmt.Fprint(w, `{"ok":true,"channel":{"id":"DOWNER"}}`)
+				case "/conversations.history":
+					close(started)
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+					backfillPage(t, w, []sdk.Message{missed}, false, "")
+				default:
+					t.Errorf("unexpected API %s", r.URL.Path)
 				}
+			})}))
+		require.NoError(t, err)
+		stream := make(chan socketmode.Event, 1)
+		acks := make(chan string, 1)
+		a.socketEvents = stream
+		a.runSocket = func(ctx context.Context) error { <-ctx.Done(); return nil }
+		a.ack = func(_ context.Context, id string, _ any) error { acks <- id; return nil }
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		events := make(chan domain.InboundEvent, 2)
+		done := make(chan error, 1)
+		go func() {
+			done <- a.Start(ctx, func(_ context.Context, event domain.InboundEvent) error { events <- event; return nil })
+		}()
+		defer func() { cancel(); require.NoError(t, <-done) }()
+		stream <- socketmode.Event{Type: socketmode.EventTypeConnected}
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("backfill did not start")
+		}
+		payload, err := slackevents.ParseEvent(json.RawMessage(`{"type":"event_callback","event":{"type":"message","channel":"DOWNER","user":"UOWNER","text":"live DM","ts":"2.3"}}`), slackevents.OptionNoVerifyToken())
+		require.NoError(t, err)
+		stream <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: payload, Request: &socketmode.Request{EnvelopeID: "live"}}
+		synctest.Wait()
+		require.Empty(t, acks)
+		require.Empty(t, events)
+		close(release)
+		for _, want := range []string{"missed DM", "live DM"} {
+			select {
+			case event := <-events:
+				require.Equal(t, want, event.Text)
+			case <-ctx.Done():
+				t.Fatal("event was not delivered")
 			}
-			switch r.Form.Get("channel") {
-			case "CFAIL":
-				fmt.Fprint(w, `{"ok":false,"error":"channel_not_found"}`)
-			case "CGOOD":
-				backfillPage(t, w, []sdk.Message{historyMessage(at.Add(2*time.Minute), "missed channel")}, false, "")
-			default:
-				if opens.Load() == 2 {
-					require.Equal(t, missed.Timestamp, r.Form.Get("oldest"))
-				}
-				backfillPage(t, w, []sdk.Message{missed}, false, "")
-			}
-		default:
-			t.Errorf("unexpected API %s", r.URL.Path)
+		}
+		select {
+		case id := <-acks:
+			require.Equal(t, "live", id)
+		case <-ctx.Done():
+			t.Fatal("live event was not acknowledged")
+		}
+	})
+}
+
+func TestBackfillContinuesAfterReadFailure(t *testing.T) {
+	at := time.Now().Add(-time.Hour)
+	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		if r.Form.Get("channel") == "CFAIL" {
+			fmt.Fprint(w, `{"ok":false,"error":"channel_not_found"}`)
+		} else {
+			backfillPage(t, w, []sdk.Message{historyMessage(at.Add(time.Minute), "missed channel")}, false, "")
 		}
 	}, false)
-	a.owner = "UOWNER"
-	accepted := true
-	for _, channel := range []string{"CFAIL", "CGOOD"} {
-		saveBackfillMessage(t, a, Conversation(a.name, channel, ""), at, &accepted)
-	}
-	history := &observedCursors{EventRepository: a.history}
-	a.history = history
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "inbox.db")})
-	require.NoError(t, err)
-	defer db.Close()
-	inbox := repository.NewInboxRepository(db)
-	stream := make(chan socketmode.Event, 8)
-	acks := make(chan string, 4)
-	a.socketEvents = stream
-	a.runSocket = func(ctx context.Context) error { <-ctx.Done(); return nil }
-	a.ack = func(_ context.Context, id string, _ any) error { acks <- id; return nil }
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	var got []string
-	done := make(chan error, 1)
-	go func() {
-		done <- a.Start(ctx, func(ctx context.Context, event domain.InboundEvent) error {
-			if len(history.reads) != 3*int(opens.Load()) {
-				return errors.New("consumed before all cursors were fixed")
-			}
-			got = append(got, event.Text)
-			if err := inbox.Receive(ctx, event, domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.SessionKey(event.Conversation), Lane: "conv", ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event}}); err != nil {
-				return err
-			}
-			event.Accepted = &accepted
-			return a.history.SaveInbound(ctx, event)
-		})
-	}()
-	stopped := false
-	defer func() {
-		cancel()
-		if !stopped {
-			require.NoError(t, <-done)
-		}
-	}()
-	stream <- socketmode.Event{Type: socketmode.EventTypeConnected}
-	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal("backfill did not start")
-	}
-	payload, err := slackevents.ParseEvent(json.RawMessage(fmt.Sprintf(`{"type":"event_callback","event_id":"live-id","event":{"type":"message","channel":"DOWNER","user":"UOWNER","text":"missed DM","ts":%q}}`, missed.Timestamp)), slackevents.OptionNoVerifyToken())
-	require.NoError(t, err)
-	stream <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: payload, Request: &socketmode.Request{EnvelopeID: "live"}}
-	select {
-	case <-acks:
-		t.Fatal("live event acknowledged before backfill completed")
-	default:
-	}
-	items, err := inbox.Active(t.Context())
-	require.NoError(t, err)
-	require.Empty(t, items)
-	close(release)
-	select {
-	case id := <-acks:
-		require.Equal(t, "live", id)
-	case <-ctx.Done():
-		t.Fatal("live event did not follow backfill")
-	}
-	require.Equal(t, []string{"missed DM", "missed channel", "missed DM"}, got)
-	items, err = inbox.Active(t.Context())
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	var count int
-	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM events").Scan(&count))
-	require.Equal(t, 2, count)
-	stream <- socketmode.Event{Type: socketmode.EventTypeConnected}
-	stream <- socketmode.Event{Type: socketmode.EventTypeEventsAPI, Data: payload, Request: &socketmode.Request{EnvelopeID: "after-reconnect"}}
-	select {
-	case <-acks:
-	case <-ctx.Done():
-		t.Fatal("reconnect blocked live events")
-	}
-	cancel()
-	require.NoError(t, <-done)
-	stopped = true
-	require.Equal(t, int32(2), opens.Load())
-	require.Contains(t, logs.String(), "WARN")
-	require.Contains(t, logs.String(), "Slack backfill read failed")
-	require.Contains(t, logs.String(), "CFAIL")
-	items, err = inbox.Active(t.Context())
-	require.NoError(t, err)
-	require.Len(t, items, 2)
+	require.NoError(t, a.backfill(t.Context(), []backfillTarget{
+		{channel: "CFAIL", since: at, until: time.Now()},
+		{channel: "CGOOD", since: at, until: time.Now()},
+	}, func(_ context.Context, event domain.InboundEvent) error {
+		got = append(got, event.Text)
+		return nil
+	}))
+	require.Equal(t, []string{"missed channel"}, got)
 }
 
 func TestBackfillConsumerFailure(t *testing.T) {

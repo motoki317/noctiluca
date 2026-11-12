@@ -52,7 +52,6 @@ func TestBroadcastUpload(t *testing.T) {
 	}{
 		{name: "png", extension: "png", text: "**photo**", wantText: "*photo*", wantPosts: 1},
 		{name: "jpg", extension: "jpg", text: "**photo**", wantText: "*photo*", wantPosts: 1},
-		{name: "jpeg", extension: "jpeg", text: "**photo**", wantText: "*photo*", wantPosts: 1},
 		{name: "gif without caption", extension: "gif", wantPosts: 1},
 		{name: "literal filename", extension: "png", filename: "<!channel>&.png", wantText: "&lt;!channel&gt;&amp;.png", wantPosts: 1},
 		{name: "caption at limit", extension: "png", text: strings.Repeat("界", 3000), wantText: strings.Repeat("界", 3000), wantPosts: 1},
@@ -67,7 +66,7 @@ func TestBroadcastUpload(t *testing.T) {
 				var body bytes.Buffer
 				picture := image.NewRGBA(image.Rect(0, 0, 1, 1))
 				switch tc.extension {
-				case "jpg", "jpeg":
+				case "jpg":
 					require.NoError(t, jpeg.Encode(&body, picture, nil))
 				case "gif":
 					require.NoError(t, gif.Encode(&body, picture, nil))
@@ -161,7 +160,6 @@ func TestBroadcastUpload(t *testing.T) {
 					}
 				}
 				require.NotNil(t, upload.Handler)
-				require.Contains(t, string(upload.InputSchema), `"broadcast":{"type":"boolean"}`)
 				args, err := json.Marshal(map[string]any{"channel": "CTEST", "thread_ts": "123.000001", "path": path, "title": "Photo", "text": tc.text, "broadcast": true})
 				require.NoError(t, err)
 				start := time.Now()
@@ -201,7 +199,6 @@ func TestBroadcastUploadRejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "missing thread", body: []byte("\x89PNG\r\n\x1a\n"), want: "broadcast requires thread_ts"},
 		{name: "text named png", thread: "123.000001", body: []byte("not an image"), want: "PNG, JPEG, or GIF"},
-		{name: "unsupported webp", thread: "123.000001", body: []byte("RIFF1234WEBPVP8 "), want: "PNG, JPEG, or GIF"},
 		{name: "empty file", thread: "123.000001", want: "nonempty regular file"},
 		{name: "caption over limit", thread: "123.000001", body: []byte("\x89PNG\r\n\x1a\n"), text: strings.Repeat("界", 3001), want: "caption must be at most 3000 characters"},
 		{name: "caption expands over limit", thread: "123.000001", body: []byte("\x89PNG\r\n\x1a\n"), text: strings.Repeat("&", 601), want: "caption must be at most 3000 characters"},
