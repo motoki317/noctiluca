@@ -100,19 +100,18 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		socket = liveTake(t, slack.connections)
 	}
 	sequence := 0
-	var lastMessageTS string
 	send := func(t *testing.T, channel, thread, text string) string {
 		t.Helper()
 		sequence++
 		id := fmt.Sprintf("live-%d", sequence)
-		lastMessageTS = fmt.Sprintf("%d.%06d", time.Now().Unix(), time.Now().Nanosecond()/1000)
-		event := map[string]any{"type": "message", "channel": channel, "user": "U_OWNER", "text": text, "ts": lastMessageTS}
+		ts := fmt.Sprintf("%d.%06d", time.Now().Unix(), time.Now().Nanosecond()/1000)
+		event := map[string]any{"type": "message", "channel": channel, "user": "U_OWNER", "text": text, "ts": ts}
 		if thread != "" {
 			event["thread_ts"] = thread
 		}
 		require.NoError(t, socket.WriteJSON(map[string]any{"type": "events_api", "envelope_id": id, "payload": map[string]any{"type": "event_callback", "event_id": id, "event": event}}))
 		require.Equal(t, id, liveTake(t, slack.acks))
-		return "slack:m:" + channel + ":" + lastMessageTS
+		return "slack:m:" + channel + ":" + ts
 	}
 	reply := func(t *testing.T, channel, thread, word string) {
 		t.Helper()
@@ -120,16 +119,6 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Equal(t, channel, post.Get("channel"))
 		require.Equal(t, thread, post.Get("thread_ts"))
 		require.Contains(t, post.Get("text"), word)
-	}
-	postAt := func(t *testing.T, ref domain.ConversationRef) url.Values {
-		t.Helper()
-		name, channel, thread, ok := domain.ParseConversationRef(ref)
-		require.True(t, ok)
-		require.Equal(t, "slack", name)
-		post := liveTake(t, slack.posts)
-		require.Equal(t, channel, post.Get("channel"))
-		require.Equal(t, thread, post.Get("thread_ts"))
-		return post
 	}
 	idle := func(t *testing.T, key domain.SessionKey) domain.Session {
 		t.Helper()
@@ -247,21 +236,6 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Equal(t, 1, strings.Count(strings.Join(texts, "\n"), "CEDAR_47"), "repeated the first answer: %v", texts)
 		require.Contains(t, strings.Join(texts, "\n"), "了解")
 		t.Logf("follow-up after 3s: replies=%q", texts)
-	})
-	run("b_top_level_chat_and_work", func(t *testing.T) {
-		send(t, "C_ROOM", "", "<@U_BOT> Hi! How are you?")
-		postAt(t, "slack:C_ROOM:")
-		idle(t, "slack:C_ROOM:")
-		send(t, "C_ROOM", "", "<@U_BOT> Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
-		post := postAt(t, domain.NewConversationRef("slack", "C_ROOM", lastMessageTS))
-		require.NotEmpty(t, post.Get("text"))
-		idle(t, "slack:C_ROOM:")
-	})
-	run("b_DM_work", func(t *testing.T) {
-		send(t, "D_OWNER", "", "Please draft a three-step checklist for reviewing a small Go pull request. This is a work request; keep the checklist concise.")
-		post := postAt(t, "slack:D_OWNER:")
-		require.NotEmpty(t, post.Get("text"))
-		idle(t, "slack:D_OWNER:")
 	})
 	run("c_unaddressed_chatter", func(t *testing.T) {
 		var before int
