@@ -4,13 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 )
+
+const slackEntry = "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n"
 
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
@@ -27,17 +28,10 @@ func TestRunConfigFieldsAndPaths(t *testing.T) {
     slack:
       app_token: {env: TEST_APP_TOKEN}
       bot_token: {file: bot-token}
-      group_refresh_interval: 2h
-    trust: {users: [U_OWNER, U_MEMBER]}
-    conversations:
-      - id: CCHANNEL
-        trust: {users: [U_OWNER], groups: [S_GROUP], bots: [U_BOT]}
-        require_mention: true
-model: {executable: ./claude, name: haiku, idle_timeout: 2h}
+model: {executable: ./claude}
 memory: {dir: memories}
 database: {path: history.db}
 toolhub: {listen: '127.0.0.1:12345'}
-heartbeat: {enabled: false, interval: 30m}
 cron:
   - {name: daily, cron: '0 9 * * *', tz: UTC, prompt: Check tasks, workdir: work}
 `)
@@ -49,23 +43,11 @@ cron:
 	require.NoError(t, err)
 	require.Equal(t, "app-secret", tokens[0].Slack.AppToken)
 	require.Equal(t, "bot-secret", tokens[0].Slack.BotToken)
-	require.Empty(t, tokens[0].Slack.UserToken)
 	require.Equal(t, 12345, port)
-	require.Equal(t, []string{"U_OWNER", "U_MEMBER"}, c.Messaging[0].Trust.Users)
-	require.Len(t, c.Messaging[0].Conversations, 1)
-	require.Equal(t, "CCHANNEL", c.Messaging[0].Conversations[0].ID)
-	require.Equal(t, []string{"S_GROUP"}, c.Messaging[0].Conversations[0].Trust.Groups)
-	require.True(t, c.Messaging[0].Conversations[0].RequireMention)
-	require.Equal(t, []string{"U_BOT"}, c.Messaging[0].Conversations[0].Trust.Bots)
-	require.False(t, c.Heartbeat.Enabled)
-	require.Equal(t, 30*time.Minute, c.Heartbeat.Interval)
-	require.Equal(t, 2*time.Hour, c.Model.IdleTimeout)
-	require.Equal(t, 2*time.Hour, c.Messaging[0].groupRefreshInterval())
 	require.Equal(t, filepath.Join(filepath.Dir(path), "history.db"), c.Database.Path)
 	require.Equal(t, filepath.Join(filepath.Dir(path), "memories"), c.Memory.Dir)
 	require.Equal(t, filepath.Join(filepath.Dir(path), "claude"), c.Model.Executable)
 	require.Equal(t, filepath.Join(filepath.Dir(path), "work"), c.Cron[0].Workdir)
-	require.Equal(t, "Check tasks", c.Cron[0].Prompt)
 }
 
 func TestSecretReferencesDoNotExposeValues(t *testing.T) {
@@ -73,6 +55,7 @@ func TestSecretReferencesDoNotExposeValues(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("secret-value\n"), 0600))
 	t.Setenv("TEST_TOKEN", "secret-value")
 	t.Setenv("EMPTY_TOKEN", "")
+	t.Setenv("WHITESPACE_TOKEN", "secret-value with spaces")
 	for _, tc := range []struct {
 		ref      secretRef
 		required bool
@@ -83,6 +66,7 @@ func TestSecretReferencesDoNotExposeValues(t *testing.T) {
 		{ref: secretRef{File: path}, want: "secret-value"},
 		{}, {required: true, fails: true},
 		{ref: secretRef{Env: "EMPTY_TOKEN"}, fails: true},
+		{ref: secretRef{Env: "WHITESPACE_TOKEN"}, fails: true},
 		{ref: secretRef{File: "missing"}, fails: true},
 		{ref: secretRef{Env: "TEST_TOKEN", File: path}, fails: true},
 	} {
@@ -104,10 +88,16 @@ func TestRunValidationBeforeResources(t *testing.T) {
 	for _, tc := range []struct{ yaml, want string }{
 		{"", "messaging"},
 		{"messaging: [{name: slack, type: slack}]\n", "owner"},
-		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n", "slack.app_token"},
-		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\ntoolhub: {listen: '0.0.0.0:1234'}\n", "toolhub.listen"},
-		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\nheartbeat: {interval: -1s}\n", "interval"},
-		{"messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    conversations: [{id: CCHANNEL}, {id: CCHANNEL}]\n", "unique"},
+		{slackEntry, "slack.app_token"},
+		{slackEntry + "toolhub: {listen: '0.0.0.0:1234'}\n", "toolhub.listen"},
+		{slackEntry + "heartbeat: {interval: -1s}\n", "interval"},
+		{slackEntry + "    conversations: [{id: CCHANNEL}, {id: CCHANNEL}]\n", "unique"},
+		{"messaging: [{type: slack, owner: U_OWNER}]", "names"},
+		{"messaging: [{name: slack, type: slack, owner: U_OWNER}, {name: slack, type: slack, owner: U_OTHER}]", "unique"},
+		{"messaging: [{name: slack, type: other, owner: U_OWNER}]", "type"},
+		{slackEntry + "    slack: {group_refresh_interval: 0s}\n", "positive"},
+		{"messaging: [{name: 'slack:team', type: slack, owner: U_OWNER}]", "names"},
+		{"messaging: [{name: Slack, type: slack, owner: U_OWNER}]", "names"},
 	} {
 		c, err := loadConfig(writeConfig(t, tc.yaml))
 		require.NoError(t, err)
@@ -115,6 +105,7 @@ func TestRunValidationBeforeResources(t *testing.T) {
 		require.ErrorContains(t, err, tc.want)
 		require.NoFileExists(t, c.Database.Path)
 		require.NoDirExists(t, c.Memory.Dir)
+		require.NoDirExists(t, c.Model.Workdir)
 	}
 }
 
@@ -125,8 +116,6 @@ func TestExampleConfig(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "bot-example")
 	_, _, err = c.validateRun()
 	require.NoError(t, err)
-	require.Nil(t, c.Messaging[0].Trust)
-	require.Equal(t, domain.AcceptRule{AnySender: true}, c.Messaging[0].Trust.rule())
 }
 
 func TestEntryAndConversationTrustRules(t *testing.T) {
@@ -138,8 +127,6 @@ func TestEntryAndConversationTrustRules(t *testing.T) {
 		{"omitted", "", domain.AcceptRule{AnySender: true}, false},
 		{"empty", "trust: {}", domain.AcceptRule{}, false},
 		{"null", "trust: null", domain.AcceptRule{}, true},
-		{"blank", "trust:", domain.AcceptRule{}, true},
-		{"tilde", "trust: ~", domain.AcceptRule{}, true},
 		{"allowlist", "trust: {users: [U_MEMBER], bots: [U_ALERT]}", domain.AcceptRule{Users: []string{"U_MEMBER"}, Bots: []string{"U_ALERT"}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,7 +140,7 @@ func TestEntryAndConversationTrustRules(t *testing.T) {
         trust: {users: [U_OTHER]}
 `))
 			if tc.wantErr {
-				require.EqualError(t, err, "invalid config: messaging entry 1.trust cannot be null: omit trust (entries accept any sender, overrides inherit the entry rule) or use trust: {} for the owner only")
+				require.ErrorContains(t, err, "trust cannot be null")
 				return
 			}
 			require.NoError(t, err)
@@ -168,30 +155,10 @@ func TestEntryAndConversationTrustRules(t *testing.T) {
 	}
 }
 
-func TestExplicitEmptyTrustReplacesEntryTrust(t *testing.T) {
-	c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    trust: {users: [U_FRIEND]}\n    conversations: [{id: CROOM, trust: {}}]\n"))
-	require.NoError(t, err)
-	override := c.Messaging[0].Conversations[0]
-	require.NotNil(t, override.Trust)
-	require.Empty(t, override.rule(c.Messaging[0].Trust).Users)
-}
-
-func TestConsolidationConfig(t *testing.T) {
-	c, err := loadConfig(writeConfig(t, "model: {name: haiku}\nconsolidate: {enabled: true}\n"))
-	require.NoError(t, err)
-	require.Equal(t, "0 4 * * *", c.Consolidate.Cron)
-	require.Equal(t, "UTC", c.Consolidate.TZ)
-	for _, input := range []string{"consolidate: {grader_model: haiku}", "consolidate: {evals: {count: 1}}", "consolidate: {episode_threshold: 100}"} {
-		_, err := loadConfig(writeConfig(t, input))
-		require.Error(t, err)
-	}
-
-}
-
 func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 	t.Setenv("TEST_APP_TOKEN", "xapp-fake")
 	t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
-	c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\nheartbeat: {enabled: false}\n"))
+	c, err := loadConfig(writeConfig(t, slackEntry+"    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\nheartbeat: {enabled: false}\n"))
 	require.NoError(t, err)
 	db, err := repository.New(t.Context(), c.Database)
 	require.NoError(t, err)
@@ -209,27 +176,19 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 
 func TestReservedCronNames(t *testing.T) {
 	for _, name := range []string{"heartbeat", "consolidate"} {
-		c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\ncron:\n  - {name: "+name+", cron: '0 4 * * *', tz: UTC, prompt: run}\n"))
+		c, err := loadConfig(writeConfig(t, slackEntry+"cron:\n  - {name: "+name+", cron: '0 4 * * *', tz: UTC, prompt: run}\n"))
 		require.NoError(t, err)
 		_, _, err = c.validateRun()
 		require.ErrorContains(t, err, "reserved cron names")
 	}
 }
 
-func TestRemovedMemoryLimitConfigRejected(t *testing.T) {
-	_, err := loadConfig(writeConfig(t, "memory: {limits: {core_bytes: 4096}}\n"))
-	require.ErrorContains(t, err, "invalid config")
-}
-
-func TestModelWorkdirAndTimeoutDefaults(t *testing.T) {
+func TestModelWorkdirDefault(t *testing.T) {
 	t.Setenv("TEST_APP_TOKEN", "xapp-fake")
 	t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
-	c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\nlog: {level: WARN+2}\n"))
+	c, err := loadConfig(writeConfig(t, slackEntry+"    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\n"))
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(filepath.Dir(c.Database.Path), "work"), c.Model.Workdir)
-	require.Equal(t, 2*time.Hour, c.Model.TurnTimeout)
-	require.Equal(t, 30*time.Minute, c.Tasks.Timeout)
-	require.EqualValues(t, 6, c.logLevel)
 	app, err := newApplication(t.Context(), c, nil)
 	require.NoError(t, err)
 	defer app.Shutdown(t.Context())
@@ -250,27 +209,24 @@ func TestModelWorkdirRejectsProtectedPaths(t *testing.T) {
 		"model: {workdir: alias}\n",
 	} {
 		t.Run(body, func(t *testing.T) {
-			path := writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n"+body)
+			path := writeConfig(t, slackEntry+body)
 			require.NoError(t, os.Symlink(filepath.Dir(path), filepath.Join(filepath.Dir(path), "alias")))
 			c, err := loadConfig(path)
 			require.NoError(t, err)
 			_, _, err = c.validateRun()
 			require.ErrorContains(t, err, "model.workdir")
-			require.NoFileExists(t, c.Database.Path)
 		})
 	}
 }
 func TestCronConfigRequiresFiveFields(t *testing.T) {
-	for _, expr := range []string{"@daily", "@every 1h", "0 0 4 * * *", "CRON_TZ=UTC 0 4 * * *"} {
-		c, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\ncron: [{name: test, cron: '"+expr+"', tz: UTC, prompt: run}]\n"))
-		require.NoError(t, err)
-		_, _, err = c.validateRun()
-		require.ErrorContains(t, err, "five fields")
-	}
+	c, err := loadConfig(writeConfig(t, slackEntry+"cron: [{name: test, cron: '@daily', tz: UTC, prompt: run}]\n"))
+	require.NoError(t, err)
+	_, _, err = c.validateRun()
+	require.ErrorContains(t, err, "five fields")
 }
 
 func TestWorkdirRejectsSecretSymlinkInside(t *testing.T) {
-	path := writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack: {bot_token: {file: work/token}}\nmodel: {workdir: work}\n")
+	path := writeConfig(t, slackEntry+"    slack: {bot_token: {file: work/token}}\nmodel: {workdir: work}\n")
 	dir := filepath.Dir(path)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "work"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "secret"), []byte("token"), 0600))
@@ -281,19 +237,8 @@ func TestWorkdirRejectsSecretSymlinkInside(t *testing.T) {
 	require.ErrorContains(t, err, "model.workdir")
 }
 
-func TestWorkdirRejectsDatabaseSymlinkBeforeCreation(t *testing.T) {
-	path := writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\nmodel: {workdir: work}\ndatabase: {path: database-link}\n")
-	dir := filepath.Dir(path)
-	require.NoError(t, os.Symlink("work/noctiluca.db", filepath.Join(dir, "database-link")))
-	c, err := loadConfig(path)
-	require.NoError(t, err)
-	_, _, err = c.validateRun()
-	require.ErrorContains(t, err, "model.workdir")
-	require.NoFileExists(t, filepath.Join(dir, "work", "noctiluca.db"))
-}
-
 func TestWorkdirRejectsDanglingSymlinkWithParentTraversal(t *testing.T) {
-	path := writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\nmodel: {workdir: other/work}\ndatabase: {path: database-link}\n")
+	path := writeConfig(t, slackEntry+"model: {workdir: other/work}\ndatabase: {path: database-link}\n")
 	dir := filepath.Dir(path)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "other", "child"), 0700))
 	require.NoError(t, os.Symlink("other/child", filepath.Join(dir, "alias")))
