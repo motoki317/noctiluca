@@ -171,20 +171,27 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	run("2_queued_input", func(t *testing.T) {
 		send(t, "D_OWNER", "", "Reply with exactly QUEUE_FIRST using the reply tool.")
 		liveTake(t, entered)
-		var finished int
-		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:D_OWNER:' AND kind='turn_finished'").Scan(&finished))
+		launches := func() int {
+			data, err := os.ReadFile(filepath.Join(dir, "processes"))
+			require.NoError(t, err)
+			return strings.Count(string(data), "\n")
+		}
+		before := launches()
 		id := send(t, "D_OWNER", "", "Reply with exactly QUEUE_SECOND using the reply tool.")
-		require.Eventually(t, func() bool {
+		status := func() string {
 			var status string
-			return app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status) == nil && status == "done"
-		}, 10*time.Second, 10*time.Millisecond)
-		var after int
-		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:D_OWNER:' AND kind='turn_finished'").Scan(&after))
-		require.Equal(t, finished, after, "second message must reach the running turn")
+			_ = app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status)
+			return status
+		}
+		// Claude starts an input that arrives during a tool call only when the tool returns, so the blocked reply holds it at dispatched.
+		require.Eventually(t, func() bool { return status() == "dispatched" }, 10*time.Second, 10*time.Millisecond)
 		unblock()
 		reply(t, "D_OWNER", "", "QUEUE_FIRST")
 		reply(t, "D_OWNER", "", "QUEUE_SECOND")
 		idle(t, "slack:D_OWNER:")
+		require.Equal(t, "done", status())
+		// Whether Claude answers it in the same turn or the next one is its own choice; it must reach the running process.
+		require.Equal(t, before, launches(), "second message must reach the running process")
 	})
 	run("a_concurrent_threads", func(t *testing.T) {
 		send(t, "C_ROOM", "200.000001", "<@U_BOT> What is 2 + 3? Please answer with just the number.")
@@ -216,12 +223,13 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		// The blocked Slack response keeps the first turn running while the follow-up arrives.
 		time.Sleep(time.Until(started.Add(3 * time.Second)))
 		id := send(t, "C_ROOM", "500.000001", "<@U_BOT> add 了解 at the end")
+		liveTake(t, followEntered)
+		releaseFollow()
+		// Claude starts the follow-up only after the blocked reply returns.
 		require.Eventually(t, func() bool {
 			var status string
 			return app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status) == nil && status == "done"
 		}, 10*time.Second, 10*time.Millisecond)
-		liveTake(t, followEntered)
-		releaseFollow()
 		first := liveTake(t, slack.posts)
 		require.Equal(t, "500.000001", first.Get("thread_ts"))
 		require.Contains(t, first.Get("text"), "CEDAR_47")
