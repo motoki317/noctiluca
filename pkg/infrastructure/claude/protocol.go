@@ -26,8 +26,15 @@ type frame struct {
 	Status          string   `json:"status"`
 	Summary         string   `json:"summary"`
 	TaskID          string   `json:"task_id"`
-	IsBackgrounded  bool     `json:"is_backgrounded"`
-	Tasks           []struct {
+	UUID            string   `json:"uuid"`
+	LocalCommand    string   `json:"local_command"`
+	CompactResult   string   `json:"compact_result"`
+	CompactMetadata struct {
+		PreTokens  int `json:"pre_tokens"`
+		PostTokens int `json:"post_tokens"`
+	} `json:"compact_metadata"`
+	IsBackgrounded bool `json:"is_backgrounded"`
+	Tasks          []struct {
 		TaskID string `json:"task_id"`
 	} `json:"tasks"`
 	IsError   bool   `json:"is_error"`
@@ -41,16 +48,31 @@ type frame struct {
 		RequestID string `json:"request_id"`
 	} `json:"response"`
 	Event struct {
-		Type  string `json:"type"`
-		Delta struct {
+		Type    string  `json:"type"`
+		Message message `json:"message"`
+		Delta   struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"delta"`
 	} `json:"event"`
-	Message struct {
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
+	Message message        `json:"message"`
 	Content []contentBlock `json:"-"`
+}
+
+type message struct {
+	ID      string          `json:"id"`
+	Content json.RawMessage `json:"content"`
+	Usage   *usage          `json:"usage"`
+}
+
+type usage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreation            struct {
+		Ephemeral1HInputTokens int `json:"ephemeral_1h_input_tokens"`
+		Ephemeral5MInputTokens int `json:"ephemeral_5m_input_tokens"`
+	} `json:"cache_creation"`
 }
 
 type contentBlock struct {
@@ -82,12 +104,31 @@ func parseFrame(data []byte) (frame, error) {
 }
 
 type parser struct {
-	active  bool
-	command string
-	tasks   map[string]struct{}
+	active      bool
+	command     string
+	tasks       map[string]struct{}
+	compactUUID string
+	compacting  bool
 }
 
 func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
+	if f.Type == "command_lifecycle" && f.CommandUUID == p.compactUUID && p.compactUUID != "" {
+		if f.State == "started" {
+			p.compacting = true
+		}
+		return nil
+	}
+	if f.Type == "user" && p.compacting {
+		return nil
+	}
+	if f.Type == "result" && f.LocalCommand == "compact" && p.compactUUID != "" {
+		p.compacting = false
+		p.compactUUID = ""
+		return nil
+	}
+	if p.compacting && f.ParentToolUseID == "" && (f.Type == "stream_event" || f.Type == "assistant") {
+		return nil
+	}
 	var events []domain.ModelEvent
 	start := func() {
 		if !p.active {

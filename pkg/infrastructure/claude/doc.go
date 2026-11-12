@@ -16,6 +16,7 @@
 //     CLI then starts a turn by itself, without input. The adapter emits turn_started for that
 //     turn so the reconciler marks the session busy and applies the turn deadline.
 //   - `--resume <session_id>` restores the conversation in a new process.
+//   - Idle sessions with at least 200000 context tokens and a one-hour cache compact internally after 54 minutes.
 //
 // CLI 2.1.316 and 2.1.321 never defer tools with _meta {"anthropic/alwaysLoad": true}, so their schemas survive compaction.
 // A server-level alwaysLoad: false in --mcp-config overrides the tool metadata.

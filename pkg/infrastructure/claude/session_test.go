@@ -19,6 +19,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -145,6 +146,19 @@ func TestCLIHelper(t *testing.T) {
 	}
 	count := 0
 	var held, queued string
+	finishCompact := func(id string) {
+		if mode == "compact-failed" {
+			emit(`{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"private diagnostic"}`)
+		} else {
+			emit(`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":200000,"post_tokens":12345}}`)
+			emit(`{"type":"user","uuid":"summary","isCompactSummary":true,"message":{"content":"summary"}}`)
+			emit(fmt.Sprintf(`{"type":"user","uuid":%q,"isReplay":true,"message":{"content":"/compact"}}`, id))
+			emit(`{"type":"user","uuid":"history","isReplay":true,"message":{"content":[{"type":"tool_result","is_error":true,"content":"old tool error"}]}}`)
+		}
+		emit(`{"type":"result","subtype":"success","result":"","num_turns":0,"local_command":"compact"}`)
+		emit(fmt.Sprintf(`{"type":"command_lifecycle","command_uuid":%q,"state":"completed"}`, id))
+	}
+	var compactID string
 	for scan.Scan() {
 		var f map[string]json.RawMessage
 		if json.Unmarshal(scan.Bytes(), &f) != nil {
@@ -203,6 +217,72 @@ func TestCLIHelper(t *testing.T) {
 				continue
 			}
 			_ = os.WriteFile("input-"+strconv.Itoa(count)+".json", scan.Bytes(), 0o600)
+			if strings.HasPrefix(mode, "compact") {
+				var msg struct{ Content string }
+				_ = json.Unmarshal(f["message"], &msg)
+				if msg.Content == "/compact" {
+					if mode == "compact-task-turn" {
+						lifecycle(id, "queued")
+						emit(`{"type":"system","subtype":"task_notification","task_id":"background","status":"completed","summary":"done"}`)
+						emit(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"task-turn","usage":{"input_tokens":42}}}}`)
+						emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"background text"}}}`)
+						emit(`{"type":"assistant","message":{"id":"task-turn","content":[{"type":"tool_use","id":"background-tool","name":"reply","input":{}}]}}`)
+						emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"background-tool","is_error":true,"content":"background tool failed"}]}}`)
+						emit(`{"type":"result","subtype":"success","result":"background result"}`)
+						compactID = id
+						continue
+					}
+					lifecycle(id, "started")
+					emit(`{"type":"system","subtype":"status","status":"compacting"}`)
+					if mode == "compact-held" {
+						compactID = id
+					} else {
+						finishCompact(id)
+					}
+					continue
+				}
+				if compactID != "" {
+					lifecycle(id, "queued")
+					if mode == "compact-task-turn" {
+						lifecycle(compactID, "started")
+						emit(`{"type":"system","subtype":"status","status":"compacting"}`)
+					}
+					finishCompact(compactID)
+					compactID = ""
+				}
+				if msg.Content == "pending" {
+					lifecycle(id, "queued")
+					emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"queued"}}}`)
+					continue
+				}
+				lifecycle(id, "started")
+				u := `{"input_tokens":10000,"cache_creation_input_tokens":10000,"cache_read_input_tokens":180000,"cache_creation":{"ephemeral_1h_input_tokens":10000,"ephemeral_5m_input_tokens":0}}`
+				switch msg.Content {
+				case "small", "subagent", "aggregate":
+					u = `{"input_tokens":9999,"cache_creation_input_tokens":10000,"cache_read_input_tokens":180000,"cache_creation":{"ephemeral_1h_input_tokens":10000}}`
+				case "five-minute":
+					u = `{"input_tokens":10000,"cache_creation_input_tokens":10000,"cache_read_input_tokens":180000,"cache_creation":{"ephemeral_5m_input_tokens":10000}}`
+				case "read-only":
+					u = `{"input_tokens":20000,"cache_read_input_tokens":180000}`
+				}
+				emit(fmt.Sprintf(`{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"id":"request-%d","usage":%s}}}`, count, u))
+				emit(fmt.Sprintf(`{"type":"assistant","parent_tool_use_id":null,"message":{"id":"request-%d","content":[],"usage":%s}}`, count, u))
+				if msg.Content == "subagent" || msg.Content == "child-five-minute" {
+					childUsage := `{"input_tokens":999999,"cache_creation_input_tokens":10000,"cache_creation":{"ephemeral_5m_input_tokens":10000}}`
+					emit(fmt.Sprintf(`{"type":"stream_event","parent_tool_use_id":"child","event":{"type":"message_start","message":{"id":"child","usage":%s}}}`, childUsage))
+					emit(fmt.Sprintf(`{"type":"assistant","parent_tool_use_id":"child","message":{"id":"child","content":[],"usage":%s}}`, childUsage))
+				}
+				if msg.Content == "active" {
+					emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"active"}}}`)
+					continue
+				}
+				if msg.Content == "background" {
+					emit(`{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"background"}]}`)
+				}
+				emit(`{"type":"result","subtype":"success","result":"reply","usage":{"input_tokens":999999,"cache_creation_input_tokens":999999}}`)
+				lifecycle(id, "completed")
+				continue
+			}
 			switch mode {
 			case "malformed":
 				emit("not-json")
@@ -246,6 +326,315 @@ func TestSessionIdle(t *testing.T) {
 		}
 		require.Equal(t, idle, s.Idle())
 	}
+}
+
+func compactSession(t *testing.T, mode string) (*session, string) {
+	t.Helper()
+	path, dir := fakeCLI(t, mode)
+	opened, err := New(path, "haiku").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
+	require.NoError(t, err)
+	s := opened.(*session)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	s.mu.Lock()
+	s.compactDelay = 100 * time.Millisecond
+	s.mu.Unlock()
+	return s, dir
+}
+
+func compactTurn(t *testing.T, s *session, id int64, text string) {
+	t.Helper()
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: id, Text: text}))
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}, nextEvent(t, s))
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "reply"}, nextEvent(t, s))
+}
+
+func awaitCompactTimer(t *testing.T, s *session) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.compactAt.IsZero() && s.parser.compactUUID == ""
+	}, 5*time.Second, time.Millisecond)
+}
+
+func capturedInputs(t *testing.T, dir string) []frame {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "input-*.json"))
+	require.NoError(t, err)
+	inputs := make([]frame, 0, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		f, err := parseFrame(data)
+		require.NoError(t, err)
+		inputs = append(inputs, f)
+	}
+	return inputs
+}
+
+func TestSessionIdleCompaction(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inputs []string
+	}{
+		{"threshold", []string{"large"}},
+		{"cache-read-keeps-last-write", []string{"large", "read-only"}},
+		{"child-ttl-ignored", []string{"child-five-minute"}},
+		{"exactly-sixty-seconds-late", []string{"large"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, dir := compactSession(t, "compact")
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			for i, text := range tc.inputs {
+				compactTurn(t, s, int64(i+1), text)
+			}
+			if tc.name == "exactly-sixty-seconds-late" {
+				s.mu.Lock()
+				now := s.compactAt.Add(idleCompactMaxLateness)
+				s.now = func() time.Time { return now }
+				s.mu.Unlock()
+			}
+			awaitCompactTimer(t, s)
+			require.True(t, s.Idle())
+			require.NoError(t, s.Close())
+			require.Empty(t, s.events, "internal compaction must emit no core events")
+			inputs := capturedInputs(t, dir)
+			require.Len(t, inputs, len(tc.inputs)+1)
+			last := inputs[len(inputs)-1]
+			require.JSONEq(t, `"/compact"`, string(last.Message.Content))
+			require.NotEmpty(t, last.UUID)
+			require.NotEqual(t, inputs[0].UUID, last.UUID)
+			require.Empty(t, last.ParentToolUseID)
+			require.Equal(t, "test-session", last.SessionID)
+			var record struct {
+				Level      string `json:"level"`
+				PreTokens  int    `json:"pre_tokens"`
+				PostTokens int    `json:"post_tokens"`
+			}
+			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one log per attempt")
+			require.Equal(t, "INFO", record.Level)
+			require.Equal(t, 200000, record.PreTokens)
+			require.Equal(t, 12345, record.PostTokens)
+		})
+	}
+}
+
+func TestSessionIdleCompactionSkipped(t *testing.T) {
+	for _, name := range []string{"small", "five-minute", "active", "background", "pending", "late", "read-only", "subagent", "aggregate", "last-write-five-minute"} {
+		t.Run(name, func(t *testing.T) {
+			s, dir := compactSession(t, "compact")
+			text := name
+			if name == "pending" || name == "late" || name == "last-write-five-minute" {
+				text = "large"
+			}
+			if name == "active" {
+				require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: text}))
+				require.Equal(t, domain.ModelEventInputStarted, nextEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+				require.Equal(t, "active", nextEvent(t, s).Text)
+			} else {
+				compactTurn(t, s, 1, text)
+			}
+			inputCount := 1
+			if name == "pending" {
+				require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "pending"}))
+				require.Equal(t, "queued", nextEvent(t, s).Text)
+				inputCount++
+			}
+			if name == "last-write-five-minute" {
+				compactTurn(t, s, 2, "five-minute")
+				inputCount++
+			}
+			if name == "late" {
+				s.mu.Lock()
+				now := s.compactAt.Add(idleCompactMaxLateness + time.Nanosecond)
+				s.now = func() time.Time { return now }
+				s.mu.Unlock()
+			}
+			awaitCompactTimer(t, s)
+			require.NoError(t, s.Close())
+			require.Empty(t, s.events)
+			require.Len(t, capturedInputs(t, dir), inputCount, "the CLI must receive no /compact")
+		})
+	}
+}
+
+func TestSessionInputDuringCompaction(t *testing.T) {
+	s, dir := compactSession(t, "compact-held")
+	compactTurn(t, s, 1, "large")
+	require.Eventually(t, func() bool {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.parser.compacting
+	}, 5*time.Second, time.Millisecond)
+	require.False(t, s.Idle())
+	s.mu.RLock()
+	require.Empty(t, s.pending, "compaction must not enter the pending input map")
+	s.mu.RUnlock()
+	compactTurn(t, s, 2, "small")
+	require.True(t, s.Idle())
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events)
+	inputs := capturedInputs(t, dir)
+	require.Len(t, inputs, 3)
+	require.JSONEq(t, `"/compact"`, string(inputs[1].Message.Content))
+	require.JSONEq(t, `"small"`, string(inputs[2].Message.Content))
+}
+
+func TestSessionAutonomousTurnBeforeCompaction(t *testing.T) {
+	s, dir := compactSession(t, "compact-task-turn")
+	compactTurn(t, s, 1, "large")
+	require.Equal(t, domain.ModelEventBackgroundDone, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "background text"}, nextEvent(t, s))
+	tool := nextEvent(t, s)
+	require.Equal(t, domain.ModelEventToolCall, tool.Kind)
+	require.Equal(t, "background-tool", tool.ToolCall.ID)
+	result := nextEvent(t, s)
+	require.Equal(t, domain.ModelEventToolResult, result.Kind)
+	require.EqualError(t, result.Err, "background tool failed")
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "background result"}, nextEvent(t, s))
+	require.False(t, s.Idle(), "queued compaction must keep the session busy")
+	s.mu.RLock()
+	compacting, compactUUID, contextTokens := s.parser.compacting, s.parser.compactUUID, s.contextTokens
+	s.mu.RUnlock()
+	require.False(t, compacting, "compaction must wait for its own started frame")
+	require.NotEmpty(t, compactUUID)
+	require.Equal(t, 42, contextTokens, "the autonomous turn must update the main-thread context")
+	compactTurn(t, s, 2, "small")
+	require.True(t, s.Idle())
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events, "internal compaction must emit no core events")
+	inputs := capturedInputs(t, dir)
+	require.Len(t, inputs, 3)
+	require.JSONEq(t, `"/compact"`, string(inputs[1].Message.Content))
+}
+
+func TestSessionIdleCompactionFailure(t *testing.T) {
+	s, dir := compactSession(t, "compact-failed")
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	compactTurn(t, s, 1, "large")
+	awaitCompactTimer(t, s)
+	require.True(t, s.Idle())
+	compactTurn(t, s, 2, "small")
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events)
+	require.Len(t, capturedInputs(t, dir), 3)
+	var record struct{ Level string }
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record))
+	require.Equal(t, "WARN", record.Level)
+	require.NotContains(t, logs.String(), "private diagnostic")
+}
+
+func TestSessionIdleCompactionRearms(t *testing.T) {
+	s, dir := compactSession(t, "compact")
+	s.mu.Lock()
+	s.compactDelay = 400 * time.Millisecond
+	s.mu.Unlock()
+	compactTurn(t, s, 1, "large")
+	s.mu.RLock()
+	firstDeadline := s.compactAt
+	s.mu.RUnlock()
+	<-time.NewTimer(time.Until(firstDeadline.Add(-200 * time.Millisecond))).C
+	compactTurn(t, s, 2, "large")
+	s.mu.RLock()
+	secondDeadline := s.compactAt
+	s.mu.RUnlock()
+	require.True(t, secondDeadline.After(firstDeadline))
+	<-time.NewTimer(time.Until(firstDeadline.Add(50 * time.Millisecond))).C
+	require.Len(t, capturedInputs(t, dir), 2, "the superseded timer must not compact")
+	awaitCompactTimer(t, s)
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events)
+	require.Len(t, capturedInputs(t, dir), 3)
+}
+
+func TestSessionCloseStopsCompaction(t *testing.T) {
+	for _, mode := range []string{"compact", "compact-held"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := compactSession(t, mode)
+			compactTurn(t, s, 1, "large")
+			if mode == "compact-held" {
+				require.Eventually(t, func() bool { return !s.Idle() }, 5*time.Second, time.Millisecond)
+			}
+			require.NoError(t, s.Close())
+			select {
+			case <-s.compactDone:
+			default:
+				t.Fatal("compaction goroutine outlived the session")
+			}
+		})
+	}
+}
+
+func TestCompactionWaitsForInputWriter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		input, output, err := os.Pipe()
+		require.NoError(t, err)
+		defer input.Close()
+		defer output.Close()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		s := &session{
+			ctx: ctx, cancel: cancel, stdin: output, writeLock: make(chan struct{}, 1),
+			compactAt: time.Now(), now: time.Now, contextTokens: idleCompactMinTokens, oneHourCache: true,
+		}
+		s.writeLock <- struct{}{}
+		compacted := make(chan struct{})
+		go func() { s.compactIfIdle(); close(compacted) }()
+		synctest.Wait()
+		require.True(t, s.Idle(), "compaction must reserve stdin before it marks the session busy")
+		sent := make(chan error, 1)
+		go func() { sent <- s.Send(ctx, domain.UserInput{ID: 1, Text: "core input"}) }()
+		synctest.Wait()
+		require.False(t, s.Idle())
+		<-s.writeLock
+		synctest.Wait()
+		<-compacted
+		require.NoError(t, <-sent)
+		require.NoError(t, output.Close())
+		scan := bufio.NewScanner(input)
+		require.True(t, scan.Scan())
+		f, err := parseFrame(scan.Bytes())
+		require.NoError(t, err)
+		require.JSONEq(t, `"core input"`, string(f.Message.Content))
+		require.False(t, scan.Scan(), "a queued core input must prevent compaction")
+		require.NoError(t, scan.Err())
+	})
+}
+
+func TestMainRequestTracking(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	s := &session{compactWake: make(chan struct{}, 1), compactDelay: idleCompactDelay, now: func() time.Time { return now }}
+	observe := func(line string) {
+		t.Helper()
+		f, err := parseFrame([]byte(line))
+		require.NoError(t, err)
+		s.observeRequest(f)
+	}
+	observe(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"first","usage":{"input_tokens":1,"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"cache_creation":{"ephemeral_1h_input_tokens":2}}}}}`)
+	firstDeadline := s.compactAt
+	require.Equal(t, now.Add(54*time.Minute), firstDeadline)
+	require.Equal(t, 6, s.contextTokens)
+	require.True(t, s.oneHourCache)
+	now = now.Add(time.Minute)
+	observe(`{"type":"assistant","message":{"id":"first","content":[],"usage":{"input_tokens":2,"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"cache_creation":{"ephemeral_1h_input_tokens":2}}}}`)
+	require.Equal(t, firstDeadline, s.compactAt, "a final frame belongs to the same request as message_start")
+	require.Equal(t, 7, s.contextTokens)
+	observe(`{"type":"stream_event","parent_tool_use_id":"child","event":{"type":"message_start","message":{"id":"child","usage":{"input_tokens":999999}}}}`)
+	require.Equal(t, firstDeadline, s.compactAt)
+	require.Equal(t, 7, s.contextTokens)
+	observe(`{"type":"assistant","message":{"id":"second","content":[],"usage":{"input_tokens":8}}}`)
+	require.Equal(t, now.Add(54*time.Minute), s.compactAt, "assistant usage also identifies a new main-thread request")
+	require.Equal(t, 8, s.contextTokens)
+	require.True(t, s.oneHourCache, "a cache read does not replace the last cache write's TTL")
 }
 
 func TestVersionCompatibility(t *testing.T) {
@@ -482,6 +871,46 @@ func TestWriteFailureKeepsCause(t *testing.T) {
 	err = s.write(ctx, map[string]string{"type": "control_request"})
 	require.EqualError(t, err, "write claude input failed")
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
+func TestCompactionWriteFailure(t *testing.T) {
+	for _, closing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closing=%t", closing), func(t *testing.T) {
+			input, output, err := os.Pipe()
+			require.NoError(t, err)
+			require.NoError(t, input.Close())
+			t.Cleanup(func() { require.NoError(t, output.Close()) })
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			s := &session{
+				ctx: ctx, cancel: cancel, stdin: output, writeLock: make(chan struct{}, 1),
+				compactAt: time.Now().Add(-time.Second), now: time.Now, contextTokens: idleCompactMinTokens, oneHourCache: true,
+			}
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			if closing {
+				cancel()
+			}
+			s.compactIfIdle()
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			if closing {
+				require.Empty(t, logs.String())
+				return
+			}
+			require.NotEmpty(t, logs.String(), "a failed internal write must log before the session closes")
+			var record struct {
+				Level string `json:"level"`
+				Msg   string `json:"msg"`
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one warning per failed write")
+			require.Equal(t, "WARN", record.Level)
+			require.Equal(t, "Write Claude idle compaction failed", record.Msg)
+			require.Equal(t, "write claude input failed", record.Error)
+		})
+	}
 }
 
 func TestSessionFailures(t *testing.T) {
