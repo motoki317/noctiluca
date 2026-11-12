@@ -308,7 +308,7 @@ func TestSessionResumeAndConfig(t *testing.T) {
 	require.False(t, inv.HasSimple)
 	require.EqualValues(t, 0o600, inv.FileMode)
 	require.EqualValues(t, 0o700, inv.DirMode)
-	require.Equal(t, "Owner instructions", inv.Prompt)
+	require.Equal(t, "Owner instructions\n\n"+subagentInstruction, inv.Prompt)
 	require.JSONEq(t, `{"mcpServers":{"noctiluca":{"type":"http","url":"http://127.0.0.1:1234/mcp","headers":{"Authorization":"Bearer test-bearer"}}}}`, string(inv.MCP))
 	joined := strings.Join(inv.Args, " ")
 	require.NotContains(t, joined, "--bare")
@@ -397,7 +397,7 @@ func TestMissingResumeStartsFresh(t *testing.T) {
 			require.NotContains(t, invocations[1].Args, "--resume")
 			for _, inv := range invocations {
 				require.Contains(t, strings.Join(inv.Args, " "), "--model haiku")
-				require.Equal(t, config.SystemPrompt, inv.Prompt)
+				require.Equal(t, systemPrompt(config.SystemPrompt), inv.Prompt)
 				require.JSONEq(t, `{"mcpServers":{"noctiluca":{"type":"http","url":"http://127.0.0.1:1234/mcp","headers":{"Authorization":"Bearer test-bearer"}}}}`, string(inv.MCP))
 			}
 			require.NoError(t, s.Close())

@@ -28,6 +28,16 @@ const MinimumVersion = "2.1.316"
 // AlwaysOfferedToolMeta keeps built-in tool schemas available after CLI compaction.
 var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
 
+// One session serves a whole conversation, so independent requests would otherwise queue behind each other.
+const subagentInstruction = "One session here serves a whole conversation, so new requests can arrive while you work. When you have two or more independent tasks, give each to a background subagent (the Agent tool with run_in_background), so that no task waits on another and you stay free for new input. Do a quick lookup yourself."
+
+func systemPrompt(prompt string) string {
+	if prompt == "" {
+		return subagentInstruction
+	}
+	return prompt + "\n\n" + subagentInstruction
+}
+
 type adapter struct{ executable, model string }
 
 // New uses the CLI's configured model when model is empty.
@@ -102,13 +112,11 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 			args = append(args, "--resume", config.ResumeToken)
 		}
 	}
-	if config.SystemPrompt != "" {
-		path := filepath.Join(dir, "prompt.txt")
-		if err := os.WriteFile(path, []byte(config.SystemPrompt), 0o600); err != nil {
-			return nil, fmt.Errorf("write claude prompt: %w", err)
-		}
-		args = append(args, "--append-system-prompt-file", path)
+	promptPath := filepath.Join(dir, "prompt.txt")
+	if err := os.WriteFile(promptPath, []byte(systemPrompt(config.SystemPrompt)), 0o600); err != nil {
+		return nil, fmt.Errorf("write claude prompt: %w", err)
 	}
+	args = append(args, "--append-system-prompt-file", promptPath)
 	servers := map[string]any{}
 	if config.ToolHub.URL != "" {
 		servers["noctiluca"] = map[string]any{"type": "http", "url": config.ToolHub.URL, "headers": map[string]string{"Authorization": "Bearer " + config.ToolHub.BearerToken}}
