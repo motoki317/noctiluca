@@ -312,9 +312,8 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		path := filepath.Join(dir, "native-check.txt")
 		require.NoError(t, os.WriteFile(path, []byte("NATIVE_READ_OK"), 0600))
 		send(t, "D_NATIVE", "400.000001", fmt.Sprintf("Read %q using the native Read tool. Run pwd using the native Bash tool from directory %q. Reply here with the file contents and the directory output. These are explicitly authorized smoke-test operations outside the workdir.", path, dir))
+		// The sender is the owner, so `owner` is also a valid target; routing is checked in 1_DM_PONG and a_concurrent_threads.
 		post := liveTake(t, slack.posts)
-		require.Equal(t, "D_NATIVE", post.Get("channel"))
-		require.Equal(t, "400.000001", post.Get("thread_ts"))
 		require.Contains(t, post.Get("text"), "NATIVE_READ_OK")
 		require.Contains(t, post.Get("text"), dir)
 		idle(t, "slack:D_NATIVE:")
