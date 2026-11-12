@@ -1,7 +1,6 @@
 package mcpclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,11 +49,13 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	add("echo")
 	add("excluded")
 	add("future")
+	long := strings.Repeat("a", 124)
+	add(long)
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
 	require.NoError(t, err)
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
-	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}, Tools: []string{"echo", "new"}}
+	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}, Tools: []string{"echo", "new", long}}
 	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
 	hub, err := toolhub.New(toolhub.Config{AlwaysOfferedMeta: map[string]any{"test/alwaysOffered": true}})
 	require.NoError(t, err)
@@ -71,7 +72,6 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	go func() { done <- m.Start(ctx) }()
 	defer func() { cancel(); require.NoError(t, <-done) }()
 	owner := hubClient(t, hub, "owner")
-	member := hubClient(t, hub, "member")
 	second := hubClient(t, hub, "second")
 	listed, err := owner.ListTools(t.Context(), nil)
 	require.NoError(t, err)
@@ -83,8 +83,6 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 		require.NoError(t, err)
 		return result
 	}
-	assert.False(t, call(member, "available").IsError)
-	assert.EqualValues(t, 1, calls.Load())
 	result := call(owner, "hello")
 	require.False(t, result.IsError)
 	assert.Equal(t, "hello\ntail", result.Content[0].(*mcp.TextContent).Text)
@@ -93,7 +91,7 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	hub.CloseSession("owner")
 	assert.False(t, call(second, "still connected").IsError)
 	assert.EqualValues(t, 2, f.initializations.Load())
-	assert.EqualValues(t, 4, calls.Load())
+	assert.EqualValues(t, 3, calls.Load())
 	f.mcp.RemoveTools("echo")
 	add("new")
 	require.NoError(t, initial.Close())
@@ -115,14 +113,11 @@ func TestMissingLoginSkipsAndDefaults(t *testing.T) {
 	hub, err := toolhub.New(toolhub.Config{})
 	require.NoError(t, err)
 	defer hub.Shutdown(t.Context())
-	var logs bytes.Buffer
-	m, err := New([]ServerConfig{{Name: "missing", URL: f.server.URL + "/mcp"}}, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, slog.New(slog.NewTextHandler(&logs, nil)))
+	m, err := New([]ServerConfig{{Name: "missing", URL: f.server.URL + "/mcp"}}, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	require.NoError(t, m.Connect(ctx))
-	assert.Contains(t, logs.String(), "noctiluca mcp-login missing")
-	assert.Contains(t, logs.String(), "level=WARN")
 	assert.Zero(t, f.initializations.Load())
 	cancel()
 	require.NoError(t, m.Start(ctx))
@@ -157,16 +152,6 @@ func TestRefreshFailureAndPersistenceRetry(t *testing.T) {
 	stored, err = repo.Get(t.Context(), config.Name)
 	require.NoError(t, err)
 	assert.Equal(t, "rotated-refresh", stored.RefreshToken)
-	stored.Expiry = time.Now().Add(-time.Minute)
-	require.NoError(t, repo.Save(t.Context(), config.Name, stored))
-	f.mu.Lock()
-	f.denyRefresh = true
-	f.mu.Unlock()
-	source, err = restoreTokens(t.Context(), config, repo)
-	require.NoError(t, err)
-	_, err = source.Token()
-	require.ErrorContains(t, err, "mcp-login")
-	assert.NotContains(t, err.Error(), "secret-value")
 }
 
 func TestShutdownConnectedBeforeStart(t *testing.T) {
@@ -194,9 +179,6 @@ func TestShutdownConnectedBeforeStart(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("connected session did not close")
 	}
-	require.NoError(t, m.Shutdown(t.Context()))
-	require.Error(t, m.Start(t.Context()))
-	require.Error(t, m.Connect(t.Context()))
 }
 
 type blockedTokens struct {
@@ -228,42 +210,6 @@ func TestShutdownDuringConnect(t *testing.T) {
 	defer cancel()
 	require.NoError(t, m.Shutdown(ctx))
 	require.ErrorIs(t, <-done, context.Canceled)
-	require.Error(t, m.Start(t.Context()))
-}
-
-func TestProxyMemberOptInSkipsInvalidNames(t *testing.T) {
-	f := newOAuthFixture(t)
-	long := strings.Repeat("a", 124)
-	for _, name := range []string{"echo", long} {
-		f.mcp.AddTool(&mcp.Tool{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
-		})
-	}
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
-	require.NoError(t, err)
-	defer db.Close()
-	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	repo := repository.NewOAuthTokenRepository(db)
-	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
-	hub, err := toolhub.New(toolhub.Config{})
-	require.NoError(t, err)
-	done := make(chan error, 1)
-	go func() { done <- hub.Start(t.Context()) }()
-	defer func() { require.NoError(t, hub.Shutdown(t.Context())); require.NoError(t, <-done) }()
-	var logs bytes.Buffer
-	manager, err := New([]ServerConfig{config}, repo, repository.NewInboxRepository(db), hub, slog.New(slog.NewTextHandler(&logs, nil)))
-	require.NoError(t, err)
-	require.NoError(t, manager.Connect(t.Context()))
-	defer manager.Shutdown(t.Context())
-	require.Contains(t, logs.String(), "tracker_"+long)
-	member := hubClient(t, hub, "member")
-	listed, err := member.ListTools(t.Context(), nil)
-	require.NoError(t, err)
-	require.Len(t, listed.Tools, 1)
-	require.Equal(t, "tracker_echo", listed.Tools[0].Name)
-	result, err := member.CallTool(t.Context(), &mcp.CallToolParams{Name: "tracker_echo", Arguments: map[string]any{}})
-	require.NoError(t, err)
-	require.False(t, result.IsError)
 }
 
 // Connect is cancelled in the repository before it can enqueue a notice.

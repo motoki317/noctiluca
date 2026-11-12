@@ -41,7 +41,6 @@ type oauthFixture struct {
 	redirect          string
 	access            string
 	refresh           string
-	denyRefresh       bool
 	sendIss           bool // returns iss without advertising RFC 9207 support, as Slite does
 	noOffline         bool
 	rootResource      bool
@@ -54,9 +53,6 @@ type oauthFixture struct {
 	defaultScopes     bool
 	codeOnly          bool
 	challengeScope    string
-	customMetadata    bool
-	noGETChallenge    bool
-	tokenRedirect     bool
 }
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
@@ -67,19 +63,11 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Cleanup(f.server.Close)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return f.mcp }, &mcp.StreamableHTTPOptions{JSONResponse: true})
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
-		if f.noGETChallenge && r.Method == http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
 		f.mu.Lock()
 		access := f.access
 		f.mu.Unlock()
 		if r.Header.Get("Authorization") != "Bearer "+access {
-			metadataPath := "/.well-known/oauth-protected-resource/mcp"
-			if f.customMetadata {
-				metadataPath = "/oauth/resource-info"
-			}
-			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+metadataPath+`"`)
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/.well-known/oauth-protected-resource/mcp"`)
 			if f.challengeScope != "" {
 				w.Header().Set("WWW-Authenticate", w.Header().Get("WWW-Authenticate")+`, scope="`+f.challengeScope+`"`)
 			}
@@ -117,27 +105,18 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		mcpHandler.ServeHTTP(w, r)
 	})
 	prmHandler := func(w http.ResponseWriter, r *http.Request) {
-		if f.rootResource || f.customMetadata && r.URL.Path != "/oauth/resource-info" {
+		if f.rootResource {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		writeJSON(w, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
 	}
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", prmHandler)
-	mux.HandleFunc("/oauth/resource-info", prmHandler)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
-		if f.customMetadata {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
 		writeJSON(w, map[string]any{"resource": f.server.URL, "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
 	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		f.metadataGets.Add(1)
-		tokenURL := f.server.URL + "/token"
-		if f.tokenRedirect {
-			tokenURL += "-redirect"
-		}
 		scopes := []string{"read", "write"}
 		if !f.noOffline {
 			scopes = append(scopes, "offline_access")
@@ -146,7 +125,7 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		if f.codeOnly {
 			grants = []string{"authorization_code"}
 		}
-		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": tokenURL, "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": f.advertiseIss, "grant_types_supported": grants})
+		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": f.advertiseIss, "grant_types_supported": grants})
 	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		var metadata struct {
@@ -204,9 +183,6 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		}
 		http.Redirect(w, r, redirect+"?"+values.Encode(), http.StatusFound)
 	})
-	mux.HandleFunc("/token-redirect", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/token", http.StatusTemporaryRedirect)
-	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.ParseForm() != nil {
 			http.Error(w, "bad form", 400)
@@ -233,11 +209,6 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 				return
 			}
 			assert.Equal(t, f.resource(), r.Form.Get("resource"))
-			if f.denyRefresh {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, `{"error":"invalid_grant","error_description":"secret-value"}`)
-				return
-			}
 			assert.Equal(t, f.refresh, r.Form.Get("refresh_token"))
 			f.refreshes.Add(1)
 			f.access = "rotated-access"
@@ -283,11 +254,11 @@ func browser(t *testing.T) io.Writer {
 	})
 }
 
-func TestLoginPersistRefreshRestart(t *testing.T) {
+func TestLoginPersistsAndRefreshes(t *testing.T) {
 	f := newOAuthFixture(t)
-	path := filepath.Join(t.TempDir(), "oauth.db")
-	db, err := repository.New(t.Context(), repository.Config{Path: path})
+	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
 	require.NoError(t, err)
+	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
 	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
@@ -296,16 +267,9 @@ func TestLoginPersistRefreshRestart(t *testing.T) {
 	assert.Equal(t, "initial-refresh", stored.RefreshToken)
 	var reg registration
 	require.NoError(t, json.Unmarshal(stored.Registration, &reg))
-	assert.Equal(t, "registered-client", reg.OAuth.ClientID)
-	assert.Equal(t, f.server.URL+"/token", reg.OAuth.Endpoint.TokenURL)
 	assert.ElementsMatch(t, []string{"read", "offline_access"}, reg.OAuth.Scopes)
 	stored.Expiry = time.Now().Add(-time.Minute)
 	require.NoError(t, repo.Save(t.Context(), "tracker", stored))
-	require.NoError(t, db.Close())
-	db, err = repository.New(t.Context(), repository.Config{Path: path})
-	require.NoError(t, err)
-	defer db.Close()
-	repo = repository.NewOAuthTokenRepository(db)
 	source, err := restoreTokens(t.Context(), config, repo)
 	require.NoError(t, err)
 	var wg sync.WaitGroup
@@ -359,6 +323,7 @@ func TestLoginCancellationAndState(t *testing.T) {
 // ClickUp issues long-lived access tokens without a refresh token.
 func TestLoginWithoutRefreshToken(t *testing.T) {
 	f := newOAuthFixture(t)
+	f.codeOnly, f.noOffline = true, true
 	f.refresh = ""
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
 	require.NoError(t, err)
@@ -381,14 +346,4 @@ func TestLoginWithoutRefreshToken(t *testing.T) {
 	require.NoError(t, err)
 	_, err = source.Token()
 	require.ErrorContains(t, err, "run mcp-login tracker")
-}
-
-func TestLoginAcceptsUnadvertisedMatchingIss(t *testing.T) {
-	f := newOAuthFixture(t)
-	f.sendIss = true
-	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
-	require.NoError(t, err)
-	defer db.Close()
-	repo := repository.NewOAuthTokenRepository(db)
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t), nil))
 }

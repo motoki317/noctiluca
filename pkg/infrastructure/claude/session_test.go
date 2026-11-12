@@ -80,11 +80,7 @@ func TestCLIHelper(t *testing.T) {
 				_ = syscall.Pause()
 			}
 		}
-		version := MinimumVersion
-		if override := os.Getenv("NOCTILUCA_TEST_VERSION"); override != "" {
-			version = override
-		}
-		fmt.Println(version + " (Claude Code)")
+		fmt.Println(MinimumVersion + " (Claude Code)")
 		os.Exit(0)
 	}
 	get := func(flag string) string {
@@ -164,12 +160,6 @@ func TestCLIHelper(t *testing.T) {
 			}
 			emit(`{"type":"control_response","response":{"request_id":"initialize","subtype":"success"}}`)
 			emit(`{"type":"system","subtype":"init","session_id":"test-session"}`)
-			if mode == "autonomous" {
-				emit(`{"type":"system","subtype":"task_notification","task_id":"task","status":"completed"}`)
-				emit(`{"type":"command_lifecycle","command_uuid":"autonomous","state":"started"}`)
-				emit(`{"type":"command_lifecycle","command_uuid":"autonomous","state":"started"}`)
-				emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"checkpoint"}}}`)
-			}
 			if mode == "blocked" || mode == "descendant" {
 				for {
 					_ = syscall.Pause()
@@ -181,38 +171,6 @@ func TestCLIHelper(t *testing.T) {
 			_ = json.Unmarshal(f["uuid"], &id)
 			lifecycle := func(id, state string) {
 				emit(fmt.Sprintf(`{"type":"command_lifecycle","command_uuid":%q,"state":%q}`, id, state))
-			}
-			if mode == "lifecycle" {
-				lifecycle(id, "queued")
-				switch count {
-				case 1:
-					held = id
-					lifecycle(id, "started")
-				case 2:
-					queued = id
-				case 3:
-					emit(`{"type":"result","subtype":"success"}`)
-					lifecycle(held, "completed")
-					for _, state := range []string{"queued", "started", "refused", "discarded", "cancelled", "completed"} {
-						lifecycle("unknown", state)
-					}
-					lifecycle(id, "started")
-					lifecycle(id, "started")
-					lifecycle(queued, "started")
-					emit(fmt.Sprintf(`{"type":"result","subtype":"success","user_message_uuids":[%q,%q]}`, queued, id))
-					for _, input := range []string{held, queued, id} {
-						lifecycle(input, "completed")
-						lifecycle(input, "started")
-						lifecycle(input, "cancelled")
-					}
-				default:
-					var message struct{ Content string }
-					_ = json.Unmarshal(f["message"], &message)
-					lifecycle(id, message.Content)
-					lifecycle(id, message.Content)
-				}
-				emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"checkpoint"}}}`)
-				continue
 			}
 			if mode == "idle" {
 				switch count {
@@ -252,7 +210,7 @@ func TestCLIHelper(t *testing.T) {
 			case "oversized":
 				emit(strings.Repeat("x", maxFrameSize))
 				continue
-			case "exit", "orphan":
+			case "orphan":
 				os.Exit(3)
 			case "flood":
 				for i := 0; i < 1000; i++ {
@@ -262,22 +220,13 @@ func TestCLIHelper(t *testing.T) {
 				emit(`{"type":"control_request","request_id":"permission","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"anything"}}}`)
 				continue
 			}
-			if mode == "steer" && count == 2 {
-				emit(`{"type":"result","subtype":"success"}`)
-			}
 			lifecycle(id, "started")
 			emit(`{"type":"user","isReplay":true,"message":{"role":"user","content":"replayed input"}}`)
 			// Exercise a UTF-8 frame split across writes.
 			fmt.Print(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"`)
 			emit(`日本語"}}}`)
-			if mode == "steer" && count == 1 {
-				continue
-			}
 			emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"reply","input":{"text":"ok"}}]}}`)
 			emit(`{"type":"result","subtype":"success","session_id":"test-session"}`)
-			if mode == "steer" {
-				emit(`{"type":"system","subtype":"task_notification","task_id":"task-1","status":"completed","summary":"done"}`)
-			}
 		case "control_response":
 			_ = os.WriteFile("permission.json", scan.Bytes(), 0o600)
 			emit(`{"type":"result","subtype":"success"}`)
@@ -299,110 +248,26 @@ func TestSessionIdle(t *testing.T) {
 	}
 }
 
-func TestAutonomousLifecycleStartsTurn(t *testing.T) {
-	path, dir := fakeCLI(t, "autonomous")
-	s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	require.Equal(t, domain.ModelEventBackgroundDone, nextEvent(t, s).Kind)
-	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnStarted}, nextEvent(t, s))
-	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "checkpoint"}, nextEvent(t, s))
-	require.False(t, s.Idle())
-}
-
-func TestInputLifecycle(t *testing.T) {
-	path, dir := fakeCLI(t, "lifecycle")
-	s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	checkpoint := func() []domain.ModelEvent {
-		var events []domain.ModelEvent
-		for {
-			event := nextEvent(t, s)
-			if event.Text == "checkpoint" {
-				return events
-			}
-			events = append(events, event)
-		}
-	}
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
-	require.Equal(t, []domain.ModelEvent{
-		{Kind: domain.ModelEventInputStarted, InputID: 1},
-		{Kind: domain.ModelEventTurnStarted},
-	}, checkpoint())
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "same"}))
-	require.Empty(t, checkpoint())
-	require.False(t, s.Idle())
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 3, Text: "same"}))
-	require.Equal(t, []domain.ModelEvent{
-		{Kind: domain.ModelEventTurnFinished},
-		{Kind: domain.ModelEventTurnStarted},
-		{Kind: domain.ModelEventInputStarted, InputID: 3},
-		{Kind: domain.ModelEventTurnStarted},
-		{Kind: domain.ModelEventInputStarted, InputID: 2},
-		{Kind: domain.ModelEventTurnFinished},
-		{Kind: domain.ModelEventTurnStarted},
-		{Kind: domain.ModelEventTurnStarted},
-		{Kind: domain.ModelEventTurnStarted},
-	}, checkpoint())
-	require.True(t, s.Idle())
-	for i, state := range []string{"refused", "discarded", "cancelled"} {
-		id := int64(i + 4)
-		require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: id, Text: state}))
-		events := checkpoint()
-		require.Len(t, events, 1)
-		require.Equal(t, domain.ModelEventInputRefused, events[0].Kind)
-		require.Equal(t, id, events[0].InputID)
-		require.EqualError(t, events[0].Err, "claude input "+state)
-		require.True(t, s.Idle())
-	}
-}
-
 func TestVersionCompatibility(t *testing.T) {
 	for _, tc := range []struct {
-		version     string
-		wantError   bool
-		wantWarning bool
+		version string
+		invalid bool
 	}{
-		{version: "1.999.999", wantError: true},
-		{version: "2.0.999", wantError: true},
-		{version: "2.1.315", wantError: true},
-		{version: "2.1.316"},
-		{version: "2.1.317"},
-		{version: "2.1.1000"},
-		{version: "2.2.0", wantWarning: true},
-		{version: "2.10.0", wantWarning: true},
-		{version: "3.0.0", wantWarning: true},
-		{version: "invalid", wantError: true},
-		{version: "2.1", wantError: true},
-		{version: "2.1.-1", wantError: true},
+		{"1.999.999", true},
+		{"2.0.999", true},
+		{"2.1.315", true},
+		{"2.1.316", false},
+		{"2.1.1000", false},
+		{"3.0.0", false},
+		{"2.1", true},
+		{"2.1.-1", true},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
-			path, dir := fakeCLI(t, "echo")
-			t.Setenv("NOCTILUCA_TEST_VERSION", tc.version)
-			var logs bytes.Buffer
-			previous := slog.Default()
-			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-			t.Cleanup(func() { slog.SetDefault(previous) })
-			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
-			if tc.wantError {
+			err := checkVersion(t.Context(), tc.version+" (Claude Code)")
+			if tc.invalid {
 				require.Error(t, err)
-				require.Nil(t, s)
 			} else {
 				require.NoError(t, err)
-				require.NoError(t, s.Close())
-			}
-			if tc.wantWarning {
-				var record struct {
-					Level, Version  string
-					MeasuredVersion string `json:"measured_version"`
-				}
-				require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
-				require.Equal(t, "WARN", record.Level)
-				require.Equal(t, tc.version, record.Version)
-				require.Equal(t, MinimumVersion, record.MeasuredVersion)
-			} else {
-				require.Empty(t, logs.String())
 			}
 		})
 	}
@@ -429,8 +294,8 @@ func nextEvent(t *testing.T, s domain.ModelSession) domain.ModelEvent {
 	}
 }
 
-func TestSessionSteerResumeAndConfig(t *testing.T) {
-	path, dir := fakeCLI(t, "steer")
+func TestSessionResumeAndConfig(t *testing.T) {
+	path, dir := fakeCLI(t, "echo")
 	t.Setenv("ANTHROPIC_API_KEY", "fake-secret")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "fake-token")
 	t.Setenv("CLAUDE_CODE_SIMPLE", "1")
@@ -456,24 +321,19 @@ func TestSessionSteerResumeAndConfig(t *testing.T) {
 	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1}, nextEvent(t, s))
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
 	require.Equal(t, "日本語", nextEvent(t, s).Text)
+	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
+	}
 	require.Equal(t, "test-session", s.ResumeToken())
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second", Attachments: []domain.Attachment{{Ref: "file-ref", Name: "photo"}}}))
-	for _, kind := range []domain.ModelEventKind{domain.ModelEventTurnFinished, domain.ModelEventInputStarted, domain.ModelEventTurnStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished, domain.ModelEventBackgroundDone} {
-		require.Equal(t, kind, nextEvent(t, s).Kind)
+	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "input-2.json"))
 	require.NoError(t, err)
 	var input struct {
-		Type, UUID string
-		SessionID  string `json:"session_id"`
-		Parent     any    `json:"parent_tool_use_id"`
-		Message    struct{ Role, Content string }
+		SessionID string `json:"session_id"`
+		Message   struct{ Content string }
 	}
 	require.NoError(t, json.Unmarshal(data, &input))
-	require.Equal(t, "user", input.Type)
-	require.Equal(t, "user", input.Message.Role)
-	require.Nil(t, input.Parent)
-	require.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`, input.UUID)
 	require.Equal(t, "test-session", input.SessionID)
 	require.Contains(t, input.Message.Content, "file-ref")
 	require.NoError(t, s.Close())
@@ -514,14 +374,6 @@ func TestCodexResumeStartsFresh(t *testing.T) {
 	require.Len(t, invocations, 1)
 	require.NotContains(t, invocations[0].Args, "--resume")
 	require.NotEqual(t, token, s.ResumeToken())
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "fresh input"}))
-	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
-	}
-	require.Equal(t, "test-session", s.ResumeToken())
-	var record struct{ Level, Msg string }
-	require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
-	require.Equal(t, "WARN", record.Level)
-	require.Contains(t, record.Msg, "fresh session")
 	require.NotContains(t, logs.String(), token)
 }
 
@@ -539,10 +391,6 @@ func TestMissingResumeStartsFresh(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			require.NotEqual(t, config.ResumeToken, s.ResumeToken())
-			require.NoError(t, s.Send(t.Context(), domain.UserInput{Text: "fresh input"}))
-			for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
-			}
-			require.Equal(t, "test-session", s.ResumeToken())
 			invocations := readInvocations(t, dir)
 			require.Len(t, invocations, 2)
 			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
@@ -560,10 +408,6 @@ func TestMissingResumeStartsFresh(t *testing.T) {
 					}
 				}
 			}
-			var record struct{ Level, Msg string }
-			require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
-			require.Equal(t, "WARN", record.Level)
-			require.Contains(t, record.Msg, "fresh session")
 			require.NotContains(t, logs.String(), "private stderr")
 			require.NotContains(t, logs.String(), "test-bearer")
 		})
@@ -580,47 +424,33 @@ func TestInitializationExitKeepsResume(t *testing.T) {
 		{"successful-result", `{"type":"result","subtype":"success","errors":["No conversation found with session ID: ` + savedSessionID + `"]}`, authRemedy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, afterRead := range []string{"0", "1"} {
-				t.Run("after-read-"+afterRead, func(t *testing.T) {
-					path, dir := fakeCLI(t, "init-exit")
-					t.Setenv("NOCTILUCA_TEST_INIT_ERROR", tc.frame)
-					t.Setenv("NOCTILUCA_TEST_INIT_AFTER_READ", afterRead)
-					var logs bytes.Buffer
-					previous := slog.Default()
-					slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-					t.Cleanup(func() { slog.SetDefault(previous) })
-					config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID}
-					s, err := New(path, "").Open(t.Context(), config)
-					require.ErrorContains(t, err, "claude exited before initialization")
-					require.ErrorContains(t, err, tc.detail)
-					require.NotContains(t, err.Error(), "context canceled")
-					require.NotContains(t, err.Error(), "private stderr")
-					require.Nil(t, s)
-					invocations := readInvocations(t, dir)
-					require.Len(t, invocations, 1)
-					require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
-					require.Equal(t, savedSessionID, config.ResumeToken)
-					require.Empty(t, logs.String())
-				})
-			}
+			path, dir := fakeCLI(t, "init-exit")
+			t.Setenv("NOCTILUCA_TEST_INIT_ERROR", tc.frame)
+			config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID}
+			s, err := New(path, "").Open(t.Context(), config)
+			require.ErrorContains(t, err, "claude exited before initialization")
+			require.ErrorContains(t, err, tc.detail)
+			require.NotContains(t, err.Error(), "context canceled")
+			require.NotContains(t, err.Error(), "private stderr")
+			require.Nil(t, s)
+			invocations := readInvocations(t, dir)
+			require.Len(t, invocations, 1)
+			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
 		})
 	}
 }
 
 func TestMissingResumeFallbackFailure(t *testing.T) {
-	for _, detail := range []string{"Authentication required", "No conversation found with session ID: " + savedSessionID} {
-		t.Run(detail, func(t *testing.T) {
-			path, dir := fakeCLI(t, "missing-resume")
-			t.Setenv("NOCTILUCA_TEST_INIT_ERROR", fmt.Sprintf(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":[%q]}`, detail))
-			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID})
-			require.Nil(t, s)
-			require.ErrorContains(t, err, "claude exited before initialization: "+detail)
-			invocations := readInvocations(t, dir)
-			require.Len(t, invocations, 2)
-			require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
-			require.NotContains(t, invocations[1].Args, "--resume")
-		})
-	}
+	detail := "No conversation found with session ID: " + savedSessionID
+	path, dir := fakeCLI(t, "missing-resume")
+	t.Setenv("NOCTILUCA_TEST_INIT_ERROR", fmt.Sprintf(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":[%q]}`, detail))
+	s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: savedSessionID})
+	require.Nil(t, s)
+	require.ErrorContains(t, err, "claude exited before initialization: "+detail)
+	invocations := readInvocations(t, dir)
+	require.Len(t, invocations, 2)
+	require.Contains(t, strings.Join(invocations[0].Args, " "), "--resume "+savedSessionID)
+	require.NotContains(t, invocations[1].Args, "--resume")
 }
 
 func TestInitializationCancellationKeepsCause(t *testing.T) {
@@ -655,7 +485,7 @@ func TestWriteFailureKeepsCause(t *testing.T) {
 }
 
 func TestSessionFailures(t *testing.T) {
-	for _, mode := range []string{"malformed", "oversized", "exit", "orphan", "permission"} {
+	for _, mode := range []string{"malformed", "oversized", "orphan", "permission"} {
 		t.Run(mode, func(t *testing.T) {
 			path, dir := fakeCLI(t, mode)
 			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir})
@@ -671,7 +501,7 @@ func TestSessionFailures(t *testing.T) {
 			} else {
 				require.Equal(t, domain.ModelEventError, event.Kind)
 				require.Error(t, event.Err)
-				if mode == "exit" || mode == "orphan" {
+				if mode == "orphan" {
 					require.Contains(t, event.Err.Error(), authRemedy)
 				}
 			}

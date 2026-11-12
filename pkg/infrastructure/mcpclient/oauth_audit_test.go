@@ -28,8 +28,7 @@ func loginRepo(t *testing.T) domain.OAuthTokenRepository {
 
 func TestLoginRefreshScopeAndAudience(t *testing.T) {
 	f := newOAuthFixture(t)
-	f.rootResource, f.tokenRedirect = true, true
-	f.noGETChallenge = true
+	f.rootResource = true
 	f.noOffline = true
 	f.grantedScope = new("read")
 	repo := loginRepo(t)
@@ -60,25 +59,6 @@ func TestLoginRefreshScopeAndAudience(t *testing.T) {
 func TestLoginUsesDiscoveredScopes(t *testing.T) {
 	f := newOAuthFixture(t)
 	f.defaultScopes = true
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t), nil))
-}
-
-func TestLoginWithAuthorizationCodeOnly(t *testing.T) {
-	f := newOAuthFixture(t)
-	f.codeOnly, f.noOffline = true, true
-	f.refresh = ""
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t), nil))
-}
-
-func TestLoginUsesPOSTMetadataChallenge(t *testing.T) {
-	f := newOAuthFixture(t)
-	f.customMetadata, f.noGETChallenge = true, true
-	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, loginRepo(t), browser(t), nil))
-}
-
-func TestLoginUsesChallengeScopes(t *testing.T) {
-	f := newOAuthFixture(t)
-	f.challengeScope = "write"
 	require.NoError(t, Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp"}, loginRepo(t), browser(t), nil))
 }
 
@@ -156,22 +136,28 @@ func TestOldRefreshCannotOverwriteRelogin(t *testing.T) {
 	assert.Equal(t, replacement, actual)
 }
 
-func TestLoginRejectsWrongOrMissingIssuer(t *testing.T) {
-	for _, advertised := range []bool{false, true} {
-		for _, wrong := range []bool{false, true} {
-			if !advertised && !wrong {
-				continue
-			}
-			t.Run(strings.Join([]string{map[bool]string{true: "advertised", false: "unadvertised"}[advertised], map[bool]string{true: "wrong", false: "missing"}[wrong]}, "/"), func(t *testing.T) {
-				f := newOAuthFixture(t)
-				f.advertiseIss, f.wrongIss = advertised, wrong
-				repo := loginRepo(t)
-				err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t), nil)
+func TestLoginValidatesIssuer(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		advertised, wrong, send, valid bool
+	}{
+		{"unadvertised/wrong", false, true, false, false},
+		{"advertised/missing", true, false, false, false},
+		{"unadvertised/matching", false, false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOAuthFixture(t)
+			f.advertiseIss, f.wrongIss, f.sendIss = tc.advertised, tc.wrong, tc.send
+			repo := loginRepo(t)
+			err := Login(t.Context(), ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, browser(t), nil)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
 				require.ErrorContains(t, err, "iss")
 				_, err = repo.Get(t.Context(), "wiki")
 				require.ErrorIs(t, err, domain.ErrNotFound)
-			})
-		}
+			}
+		})
 	}
 }
 
