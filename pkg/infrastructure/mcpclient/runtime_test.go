@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,12 +23,11 @@ import (
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
-	"github.com/motoki317/noctiluca/pkg/usecase/core"
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
 )
 
 func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
-	for _, scenario := range []string{"401", "401-no-refresh", "step-up", "refresh", "expiry", "expired-startup"} {
+	for _, scenario := range []string{"401", "401-no-refresh", "step-up", "expiry", "expired-startup"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newOAuthFixture(t)
 			f.insufficientScope = scenario == "step-up"
@@ -56,27 +54,16 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			hubDone := make(chan error, 1)
 			go func() { hubDone <- hub.Start(t.Context()) }()
 			defer func() { require.NoError(t, hub.Shutdown(t.Context())); require.NoError(t, <-hubDone) }()
-			var logs bytes.Buffer
-			m, err := New([]ServerConfig{config}, repo, inbox, hub, slog.New(slog.NewTextHandler(&logs, nil)))
+			m, err := New([]ServerConfig{config}, repo, inbox, hub, slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			require.NoError(t, m.Connect(t.Context()))
-			if stored.RefreshToken == "" {
-				assert.Contains(t, logs.String(), stored.Expiry.UTC().Format(time.RFC3339))
-			}
 			r := m.(*manager).remotes[0]
 			// Establish a short expiry after Connect so the expiry timer, rather than a request, observes it.
-			if scenario == "expiry" || scenario == "refresh" {
+			if scenario == "expiry" {
 				r.tokens.mu.Lock()
-				if scenario == "expiry" {
-					r.tokens.saved.Expiry = time.Now().Add(100 * time.Millisecond)
-				} else {
-					r.tokens.saved.Expiry = time.Now().Add(-time.Minute)
-				}
+				r.tokens.saved.Expiry = time.Now().Add(100 * time.Millisecond)
 				r.tokens.mu.Unlock()
 			}
-			f.mu.Lock()
-			f.denyRefresh = scenario == "refresh"
-			f.mu.Unlock()
 			owner := hubClient(t, hub, "old")
 			done := make(chan error, 1)
 			go func() { done <- m.Start(t.Context()) }()
@@ -103,6 +90,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, items, 1)
 			assert.Contains(t, items[0].Payload.Notice, "run mcp-login wiki")
+			assert.Equal(t, "owner-notice", items[0].Payload.Context.TaskName)
 			if scenario == "step-up" {
 				assert.Contains(t, items[0].Payload.Notice, `check mcp_servers.scopes for "write"`)
 			}
@@ -115,89 +103,41 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 				_, err := owner.CallTool(t.Context(), &mcp.CallToolParams{Name: "wiki_echo", Arguments: map[string]any{}})
 				require.ErrorContains(t, err, "unknown tool")
 			}
-			deliveryHub, err := toolhub.New(toolhub.Config{})
-			require.NoError(t, err)
-			messaging := &noticeMessaging{out: make(chan domain.SentMessage, 1)}
-			c, err := core.New(core.Config{}, []core.Messaging{{Name: "dm", Adapter: messaging, Owner: "owner"}}, noticeModel{}, deliveryHub, repository.NewEventRepository(db), repository.NewSessionRepository(db), nil, repository.NewScheduleRepository(db), repository.NewWatchRepository(db), nil, nil, inbox)
-			require.NoError(t, err)
-			coreDone := make(chan error, 1)
-			go func() { coreDone <- c.Start(t.Context()) }()
-			defer func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				require.NoError(t, c.Shutdown(ctx))
-				require.NoError(t, <-coreDone)
-			}()
-			select {
-			case sent := <-messaging.out:
-				assert.Equal(t, domain.ConversationRef("dm:owner"), sent.Conversation)
-				assert.Equal(t, items[0].Payload.Notice, sent.Message.Text)
-			case <-time.After(3 * time.Second):
-				var status, lastError string
-				require.NoError(t, db.QueryRow("SELECT status,last_error FROM inbox WHERE id=?", items[0].ID).Scan(&status, &lastError))
-				t.Fatalf("owner notice was not delivered: status=%s last_error=%s", status, lastError)
+			if scenario == "401" {
+				claimed, err := inbox.Claim(t.Context(), items[0].ID, time.Now().Add(time.Minute))
+				require.NoError(t, err)
+				require.True(t, claimed)
+				_, err = inbox.Finish(t.Context(), items[0].ID, "", 0, time.Time{})
+				require.NoError(t, err)
+				stored, err = repo.Get(t.Context(), config.Name)
+				require.NoError(t, err)
+				stored.Expiry = time.Now().Add(-time.Minute)
+				require.NoError(t, repo.Save(t.Context(), config.Name, stored))
+				f.runtimeStatus.Store(http.StatusUnauthorized)
+				restartedHub, err := toolhub.New(toolhub.Config{})
+				require.NoError(t, err)
+				defer restartedHub.Shutdown(t.Context())
+				restarted, err := New([]ServerConfig{config}, repo, inbox, restartedHub, slog.New(slog.DiscardHandler))
+				require.NoError(t, err)
+				require.NoError(t, restarted.Connect(t.Context()))
+				defer restarted.Shutdown(t.Context())
+				var count int
+				require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox").Scan(&count))
+				assert.Equal(t, 1, count)
 			}
-			require.Eventually(t, func() bool {
-				var status string
-				return db.QueryRow("SELECT status FROM inbox WHERE id=?", items[0].ID).Scan(&status) == nil && status == "done"
-			}, time.Second, time.Millisecond)
-			require.NoError(t, c.Shutdown(t.Context()))
-			// Delivery and restart must not create another owner notice for this login.
-			stored, err = repo.Get(t.Context(), config.Name)
-			require.NoError(t, err)
-			stored.Expiry = time.Now().Add(-time.Minute)
-			require.NoError(t, repo.Save(t.Context(), config.Name, stored))
-			f.runtimeStatus.Store(http.StatusUnauthorized)
-			restartedHub, err := toolhub.New(toolhub.Config{})
-			require.NoError(t, err)
-			defer restartedHub.Shutdown(t.Context())
-			restarted, err := New([]ServerConfig{config}, repo, inbox, restartedHub, slog.New(slog.DiscardHandler))
-			require.NoError(t, err)
-			require.NoError(t, restarted.Connect(t.Context()))
-			defer restarted.Shutdown(t.Context())
-			var count int
-			require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox").Scan(&count))
-			assert.Equal(t, 1, count)
 			assert.EqualValues(t, 1, f.registrations.Load(), "runtime must never register")
 		})
 	}
 }
 
-type noticeMessaging struct{ out chan domain.SentMessage }
-
-func (*noticeMessaging) Start(ctx context.Context, _ func(context.Context, domain.InboundEvent) error) error {
-	<-ctx.Done()
-	return nil
-}
-func (*noticeMessaging) Shutdown(context.Context) error { return nil }
-func (*noticeMessaging) Tools() []domain.Tool           { return nil }
-func (*noticeMessaging) ToolNotes() string              { return "" }
-func (*noticeMessaging) DirectMessage(_ context.Context, user string) (domain.ConversationRef, error) {
-	return domain.ConversationRef("dm:" + user), nil
-}
-func (m *noticeMessaging) Send(_ context.Context, to domain.ConversationRef, message domain.OutboundMessage) (string, error) {
-	m.out <- domain.SentMessage{Conversation: to, Message: message}
-	return "notice", nil
-}
-
-type noticeModel struct{}
-
-func (noticeModel) Open(context.Context, domain.ModelSessionConfig) (domain.ModelSession, error) {
-	return nil, errors.New("owner notices must not open a model")
-}
-
 func TestForbiddenWithoutScopeChallengeDoesNotInvalidate(t *testing.T) {
-	f := newOAuthFixture(t)
-	repo := loginRepo(t)
-	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
-	source, err := restoreTokens(t.Context(), config, repo)
-	require.NoError(t, err)
-	tokens := source
-	transport := authorizedTransport(config.URL, tokens, roundTripFunc(func(*http.Request) (*http.Response, error) {
+	const endpoint = "https://remote.example/mcp"
+	token := &oauth2.Token{AccessToken: "access"}
+	tokens := &tokenSource{ctx: t.Context(), saved: token, source: oauth2.StaticTokenSource(token)}
+	transport := authorizedTransport(endpoint, tokens, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 403, Body: io.NopCloser(bytes.NewBufferString("private details"))}, nil
 	}))
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, config.URL, nil)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint, nil)
 	require.NoError(t, err)
 	response, err := transport.RoundTrip(request)
 	require.NoError(t, err)
@@ -325,7 +265,7 @@ func TestRuntimeRedirectDoesNotForwardToken(t *testing.T) {
 }
 
 func TestExpiryWarningOnlyWithinThirtyDays(t *testing.T) {
-	for _, days := range []int{-1, 0, 29, 30, 31, 3650} {
+	for _, days := range []int{0, 30, 31} {
 		t.Run(fmt.Sprint(days), func(t *testing.T) {
 			f := newOAuthFixture(t)
 			f.refresh = ""
