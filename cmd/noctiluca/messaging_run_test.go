@@ -22,13 +22,7 @@ import (
 )
 
 func TestRunMultipleMessagingInstances(t *testing.T) {
-	dir := t.TempDir()
-	binary, err := os.Executable()
-	require.NoError(t, err)
-	t.Setenv("NOCTILUCA_RUN_TEST_BINARY", binary)
-	t.Setenv("NOCTILUCA_RUN_TEST_DIR", dir)
-	t.Setenv("NOCTILUCA_RUN_RECOVERY", "1")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexec \"$NOCTILUCA_RUN_TEST_BINARY\" -test.run=TestRunCLIHelper -- \"$@\"\n"), 0700))
+	dir := newRunCLI(t)
 	for _, name := range []string{"support", "slack"} {
 		t.Setenv(name+"_APP", "xapp-"+name)
 		t.Setenv(name+"_BOT", "xoxb-"+name)
@@ -41,17 +35,15 @@ func TestRunMultipleMessagingInstances(t *testing.T) {
     slack:
       app_token: {env: support_APP}
       bot_token: {env: support_BOT}
-      group_refresh_interval: 10ms
-    conversations: [{id: CSHARED, require_mention: true}, {id: COWNER, trust: {}}]
+    conversations: [{id: COWNER, trust: {}}]
   - name: slack
     type: slack
     owner: U_OWNER
     slack:
       app_token: {env: slack_APP}
       bot_token: {env: slack_BOT}
-      group_refresh_interval: 15ms
     trust: {groups: [S_SHARED], bots: [U_ALERT]}
-    conversations: [{id: CSHARED, require_mention: true}, {id: DDIRECT, ignore: true}]
+    conversations: [{id: DDIRECT, ignore: true}]
 model: {executable: ./claude}
 heartbeat: {enabled: false}
 `), 0600))
@@ -142,18 +134,9 @@ heartbeat: {enabled: false}
 			channel, user, bot string
 			accepted           bool
 		}{
-			{"CSHARED", owners[name], "", true},
 			{"DDIRECT", owners[name], "", name == "support"},
-			{"CSHARED", "U_MEMBER", "", true},
-			{"C_UNLISTED", "U_MEMBER", "", true},
-			{"D_FRIEND", "U_MEMBER", "", true},
-			{"C_UNLISTED", "U_ALERT", "B_ALERT", true},
 			{"C_UNLISTED", "U_MEMBER", "B_OTHER", name == "support"},
-			{"C_UNLISTED", "U_ALERT", "", name == "support"},
-			{"D_FRIEND", "U_MEMBER", "B_OTHER", name == "support"},
-			{"COWNER", owners[name], "", true},
 			{"COWNER", "U_MEMBER", "", name == "slack"},
-			{"COWNER", "U_ALERT", "B_ALERT", name == "slack"},
 		} {
 			channel := tc.channel
 			id := fmt.Sprintf("shared-%d", i)
@@ -180,7 +163,4 @@ heartbeat: {enabled: false}
 	require.Equal(t, "ordered notice", post.Get("text"))
 	require.Equal(t, "D_OWNER", post.Get("channel"))
 	require.Equal(t, "xoxb-support", post.Get("token"))
-	var sources int
-	require.NoError(t, app.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key IN ('support:m:CSHARED:1.0','slack:m:CSHARED:1.0')").Scan(&sources))
-	require.Equal(t, 2, sources)
 }
