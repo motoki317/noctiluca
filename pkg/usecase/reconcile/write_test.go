@@ -65,7 +65,7 @@ func TestHandleWriteDeadline(t *testing.T) {
 					}
 					return nil
 				}
-				f.runner = New(f.config, f.inbox, repository.NewScheduleRepository(f.db), sessions, repository.NewEventRepository(f.db), f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				f.runner = New(f.config, f.inbox, repository.NewWatchRepository(f.db), repository.NewScheduleRepository(f.db), sessions, repository.NewEventRepository(f.db), f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				done := make(chan error, 1)

@@ -155,7 +155,7 @@ func TestSlowOpenDoesNotBlockAnotherConversation(t *testing.T) {
 		}
 		m := &modelFake{opened: make(chan *sessionFake, 2)}
 		h := &hubFake{closed: make(chan domain.SessionKey, 4)}
-		r := New(Config{TurnTimeout: 100 * time.Millisecond, MaxAttempts: 1}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), m, h)
+		r := New(Config{TurnTimeout: 100 * time.Millisecond, MaxAttempts: 1}, inbox, repository.NewWatchRepository(db), repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), m, h)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() { done <- r.Start(ctx) }()
@@ -182,7 +182,7 @@ func TestNoticeRetrySurvivesRestart(t *testing.T) {
 	_, err = inbox.Finish(t.Context(), id, "bad model", 1, time.Now())
 	require.NoError(t, err)
 	makeRunner := func(notify func(context.Context, string) error) *Reconciler {
-		return New(Config{RetryDelay: 10 * time.Millisecond, NotifyOwner: notify}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), &modelFake{opened: make(chan *sessionFake, 1)}, &hubFake{closed: make(chan domain.SessionKey, 4)})
+		return New(Config{RetryDelay: 10 * time.Millisecond, NotifyOwner: notify}, inbox, repository.NewWatchRepository(db), repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), &modelFake{opened: make(chan *sessionFake, 1)}, &hubFake{closed: make(chan domain.SessionKey, 4)})
 	}
 	first := makeRunner(func(context.Context, string) error { return errors.New("network failed") })
 	ctx, cancel := context.WithCancel(t.Context())
@@ -208,7 +208,7 @@ func TestToolScheduleUsesDefaultWorkdir(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 	schedules := repository.NewScheduleRepository(db)
-	r := New(Config{Workdir: "/work"}, nil, schedules, nil, nil, nil, nil)
+	r := New(Config{Workdir: "/work"}, nil, nil, schedules, nil, nil, nil, nil)
 	_, err = r.Tools()[0].Handler(t.Context(), []byte(`{"name":"daily","cron":"0 4 * * *","tz":"UTC","prompt":"work"}`))
 	require.NoError(t, err)
 	jobs, err := schedules.List(t.Context())

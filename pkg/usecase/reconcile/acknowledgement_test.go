@@ -387,7 +387,7 @@ func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		completed := make(chan string, 2)
 		f := newDeliveryRig(t, Config{Completed: func(_ context.Context, procedure string, _ time.Time) error { completed <- procedure; return nil }})
-		f.model.manualAck = true
+		f.model.manualAck, f.model.idle = true, true
 		f.start(t)
 		item := TaskItem("first", "work", "")
 		item.Payload.Procedure = "heartbeat"
