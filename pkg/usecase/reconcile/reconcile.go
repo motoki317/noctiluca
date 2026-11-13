@@ -476,7 +476,7 @@ func (p *process) resting() bool {
 }
 
 func endsSession(procedure string) bool {
-	return procedure == "rest" || procedure == "consolidate" || procedure == "heartbeat"
+	return procedure == "rest" || procedure == "consolidate"
 }
 
 func taskFire(item domain.InboxItem) (time.Time, error) {
@@ -704,7 +704,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		}
 		delete(p.unstarted, item.ID)
 		if out.event.Kind == domain.ModelEventInputRefused {
-			if endsSession(item.Payload.Procedure) && p.info.TaskName != "heartbeat" {
+			if endsSession(item.Payload.Procedure) {
 				p.restDeadline = time.Time{}
 			}
 			if err := r.fail(ctx, item, out.event.Err); err != nil {
@@ -746,8 +746,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	case domain.ModelEventTurnFinished:
 		turn := p.turn
 		if turn != nil {
-			heartbeat := p.info.TaskName == "heartbeat" || turn.Procedure == "heartbeat"
-			if heartbeat || (!turn.Failed && endsSession(turn.Procedure)) {
+			if !turn.Failed && endsSession(turn.Procedure) {
 				p.restDeadline = turn.Deadline
 			} else if !endsSession(turn.Procedure) && p.lane == "task" && r.config.Procedure != nil && !r.taskFires[p.key].IsZero() {
 				p.restArmed = true
