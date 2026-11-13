@@ -272,10 +272,11 @@ func TestSetStatus(t *testing.T) {
 				require.Equal(t, "/assistant.threads.setStatus", r.URL.Path)
 				require.NoError(t, r.ParseForm())
 				require.Equal(t, url.Values{
-					"token":      {"xoxb-test"},
-					"channel_id": {"CTEST"},
-					"thread_ts":  {"123.000001"},
-					"status":     {"is looking into it…"},
+					"token":            {"xoxb-test"},
+					"channel_id":       {"CTEST"},
+					"thread_ts":        {"123.000001"},
+					"status":           {"Looking into it, one moment…"},
+					"loading_messages": {`["Looking into it, one moment…"]`},
 				}, r.PostForm)
 				_ = json.NewEncoder(w).Encode(map[string]any{"ok": code == "", "error": code})
 			}, true)
@@ -286,11 +287,11 @@ func TestSetStatus(t *testing.T) {
 				}
 			}
 			require.NotNil(t, tool.Handler)
-			result, err := tool.Handler(t.Context(), json.RawMessage(`{"channel":"CTEST","thread_ts":"123.000001","status":"is looking into it…"}`))
+			result, err := tool.Handler(t.Context(), json.RawMessage(`{"channel":"CTEST","thread_ts":"123.000001","status":"Looking into it, one moment…"}`))
 			if code == "" {
 				require.NoError(t, err)
 				require.JSONEq(t, `{"ok":true}`, string(result))
-				_, err = tool.Handler(t.Context(), json.RawMessage(`{"channel":"slack:CTEST:123.000001","thread_ts":"123.000001","status":"is looking into it…"}`))
+				_, err = tool.Handler(t.Context(), json.RawMessage(`{"channel":"slack:CTEST:123.000001","thread_ts":"123.000001","status":"Looking into it, one moment…"}`))
 				require.ErrorContains(t, err, "channel must be a bare Slack channel ID")
 			} else {
 				require.ErrorContains(t, err, code)

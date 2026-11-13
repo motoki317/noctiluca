@@ -77,7 +77,7 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
 		tool("upload_file", "Upload a local file. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
 		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
-		tool("set_status", "Show \"<app name> <status>\" with a loading animation in a thread, for example status \"is looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": str}, []string{"channel", "thread_ts", "status"}, a.setStatus),
+		tool("set_status", "Show status text as given with a loading animation in a thread, without adding the app name. For example: \"Looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": str}, []string{"channel", "thread_ts", "status"}, a.setStatus),
 		tool("send", "Post Markdown text. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
@@ -307,7 +307,14 @@ func (a *adapter) react(ctx context.Context, in toolInput) (any, error) {
 }
 
 func (a *adapter) setStatus(ctx context.Context, in toolInput) (any, error) {
-	if err := a.bot.SetAssistantThreadsStatusContext(ctx, sdk.AssistantThreadsSetStatusParameters{ChannelID: in.Channel, ThreadTS: in.Thread, Status: in.Status}); err != nil {
+	// slack-go joins with commas, so send a JSON array to keep commas inside a single loading message.
+	loadingMessages, _ := json.Marshal([]string{in.Status})
+	if err := a.bot.SetAssistantThreadsStatusContext(ctx, sdk.AssistantThreadsSetStatusParameters{
+		ChannelID:       in.Channel,
+		ThreadTS:        in.Thread,
+		Status:          in.Status,
+		LoadingMessages: []string{string(loadingMessages)},
+	}); err != nil {
 		return nil, slackError("set Slack thread status failed", err)
 	}
 	return map[string]bool{"ok": true}, nil
