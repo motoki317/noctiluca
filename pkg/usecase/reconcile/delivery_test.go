@@ -38,7 +38,7 @@ func newDeliveryRig(t *testing.T, config Config) *deliveryRig {
 func (f *deliveryRig) start(t *testing.T) func() {
 	t.Helper()
 	f.hub = &hubFake{closed: make(chan domain.SessionKey, 100)}
-	f.runner = New(f.config, f.inbox, repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), f.model, f.hub)
+	f.runner = New(f.config, f.inbox, repository.NewWatchRepository(f.db), repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), f.model, f.hub)
 	ctx, cancel := context.WithCancel(t.Context())
 	f.cancel = cancel
 	done := make(chan error, 1)
@@ -173,7 +173,7 @@ func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 }
 
 func TestScheduleToolRequiresFiveFields(t *testing.T) {
-	r := New(Config{}, nil, nil, nil, nil, nil, nil)
+	r := New(Config{}, nil, nil, nil, nil, nil, nil, nil)
 	for _, expression := range []string{"CRON_TZ=UTC 0 4 * * *", "TZ=UTC\t*\t*\t*\t*"} {
 		raw, err := json.Marshal(map[string]string{"name": "test", "cron": expression, "tz": "UTC", "prompt": "work"})
 		require.NoError(t, err)
@@ -310,7 +310,7 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 				claimed, err := f.inbox.Claim(t.Context(), id, item.Deadline)
 				require.NoError(t, err)
 				require.True(t, claimed)
-				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				r := New(f.config, f.inbox, nil, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				_, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				p := &process{key: item.SessionKey, lane: item.Lane, info: item.Payload.Context, delivering: &item, cancel: cancel, model: &sessionFake{}}
@@ -554,7 +554,7 @@ func TestDeliveryFailureUsesClosingReason(t *testing.T) {
 				claimed, err := f.inbox.Claim(t.Context(), id, time.Now())
 				require.NoError(t, err)
 				require.True(t, claimed)
-				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				r := New(f.config, f.inbox, nil, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				_, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				p := &process{key: item.SessionKey, lane: item.Lane, delivering: &item, cancel: cancel}

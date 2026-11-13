@@ -18,7 +18,7 @@ func TestSharedScheduleAndEpisodeTools(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	schedules := repository.NewScheduleRepository(db)
-	r := reconcile.New(reconcile.Config{}, nil, schedules, nil, nil, nil, nil)
+	r := reconcile.New(reconcile.Config{}, nil, nil, schedules, nil, nil, nil, nil)
 	require.NoError(t, h.AddSource("schedules", r.Tools()))
 	require.NoError(t, h.AddSource("episodes", []domain.Tool{consolidate.EpisodesTool(repository.NewEpisodeRepository(db), nil)}))
 	endpoint, err := h.OpenSession("room")
