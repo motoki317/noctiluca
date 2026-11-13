@@ -801,124 +801,45 @@ func TestEmptyTaskRestDoesNotLoop(t *testing.T) {
 	})
 }
 
-func TestHeartbeatEndsWithoutRest(t *testing.T) {
+func TestHeartbeatResumesUntilLastFire(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDeliveryRig(t, Config{Procedure: restProcedure})
 		f.model.idle = true
-		f.start(t)
-		for fire := range 2 {
-			item := TaskItem("heartbeat", "heartbeat", "")
-			item.Payload.Procedure = "heartbeat"
-			id, err := f.inbox.Enqueue(t.Context(), item)
-			require.NoError(t, err)
-			f.runner.Notify()
-			s := take(t, f.model.opened)
-			require.Empty(t, s.config.ResumeToken)
-			require.Equal(t, id, take(t, s.inputs).ID)
-			f.status(t, id, "done")
-			if fire == 0 {
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("heartbeat failed")}
-			}
-			s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-			take(t, s.closed)
-			require.Empty(t, f.turn(t, "task:heartbeat", false).ResumeToken)
-			require.Empty(t, s.inputs)
-		}
-		var count int
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'rest:%'").Scan(&count))
-		require.Zero(t, count)
-	})
-}
-
-func TestHeartbeatFollowUpEndsWithoutRest(t *testing.T) {
-	for _, followUp := range []string{"wake", "watch", "continuation"} {
-		t.Run(followUp, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{Procedure: restProcedure})
-				f.model.idle = true
-				installTaskRestSchedules(t, f, "0 0 * * *")
-				schedules := repository.NewScheduleRepository(f.db)
-				require.NoError(t, schedules.Delete(t.Context(), "daily"))
-				require.NoError(t, schedules.Save(t.Context(), domain.Schedule{
-					Name: "heartbeat", Cron: "0 0 * * *", TZ: "UTC", NextRun: time.Now(),
-				}))
-				f.start(t)
-				s := take(t, f.model.opened)
-				require.Equal(t, domain.SessionKey("task:heartbeat"), s.config.Key)
-				input := take(t, s.inputs)
-				f.status(t, input.ID, "done")
-				item := TaskItem("heartbeat", "follow-up", "")
-				item.ReadyAt = time.Now().Add(time.Minute)
-				if followUp == "watch" {
-					watches := repository.NewWatchRepository(f.db)
-					id, err := watches.Add(t.Context(), domain.Watch{Command: "work", Item: item})
-					require.NoError(t, err)
-					require.NoError(t, watches.Complete(t.Context(), id, "follow-up", item.ReadyAt))
-				} else {
-					if followUp == "continuation" {
-						item.Payload.Continuations = 1
-					}
-					_, err := f.inbox.Enqueue(t.Context(), item)
-					require.NoError(t, err)
-				}
-				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-				take(t, s.closed)
-				require.Empty(t, f.turn(t, "task:heartbeat", false).ResumeToken)
-				time.Sleep(time.Minute)
-				fresh := take(t, f.model.opened)
-				require.Empty(t, fresh.config.ResumeToken)
-				input = take(t, fresh.inputs)
-				require.Equal(t, "follow-up", input.Text)
-				f.status(t, input.ID, "done")
-				if followUp == "continuation" {
-					fresh.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("follow-up failed")}
-				}
-				fresh.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-				synctest.Wait()
-				require.Empty(t, fresh.inputs)
-				take(t, fresh.closed)
-				require.Empty(t, f.turn(t, "task:heartbeat", false).ResumeToken)
-				var rests int
-				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'rest:task:heartbeat:%'").Scan(&rests))
-				require.Zero(t, rests)
-				_, err := f.db.Exec("UPDATE schedules SET next_run=? WHERE name='heartbeat'", time.Now().Add(time.Minute).UTC())
-				require.NoError(t, err)
-				f.runner.Notify()
-				time.Sleep(time.Minute)
-				next := take(t, f.model.opened)
-				require.Equal(t, fresh.config.Key, next.config.Key)
-				require.Empty(t, next.config.ResumeToken)
-				require.Equal(t, "procedure: heartbeat", take(t, next.inputs).Text)
-			})
-		})
-	}
-}
-
-func TestHeartbeatLateRefusalKeepsTokenEmpty(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{Procedure: restProcedure})
-		f.model.idle, f.model.manualAck = true, true
-		installTaskRestSchedules(t, f, "0 0 * * *")
+		installTaskRestSchedules(t, f, "0 0,2 * * *")
 		schedules := repository.NewScheduleRepository(f.db)
 		require.NoError(t, schedules.Delete(t.Context(), "daily"))
 		require.NoError(t, schedules.Save(t.Context(), domain.Schedule{
-			Name: "heartbeat", Cron: "0 0 * * *", TZ: "UTC", NextRun: time.Now(),
+			Name: "heartbeat", Cron: "0 0,2 * * *", TZ: "UTC", NextRun: time.Now(),
 		}))
 		f.start(t)
 		s := take(t, f.model.opened)
+		require.Equal(t, domain.SessionKey("task:heartbeat"), s.config.Key)
 		input := take(t, s.inputs)
-		f.turn(t, "task:heartbeat", true)
+		require.Equal(t, "procedure: heartbeat", input.Text)
+		f.status(t, input.ID, "done")
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		require.Empty(t, f.turn(t, "task:heartbeat", false).ResumeToken)
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: input.ID, Err: errors.New("busy")}
-		f.status(t, input.ID, "pending")
+		require.Equal(t, "resume-token", f.turn(t, "task:heartbeat", false).ResumeToken)
 		synctest.Wait()
-		require.Empty(t, f.turn(t, "task:heartbeat", false).ResumeToken)
+		require.Empty(t, s.inputs)
+		id, err := f.inbox.Enqueue(t.Context(), TaskItem("heartbeat", "follow-up", ""))
+		require.NoError(t, err)
+		f.runner.Notify()
+		require.Equal(t, id, take(t, s.inputs).ID)
+		f.status(t, id, "done")
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		require.Equal(t, "resume-token", f.turn(t, "task:heartbeat", false).ResumeToken)
+		synctest.Wait()
+		require.Empty(t, s.inputs)
+		time.Sleep(2 * time.Hour)
 		take(t, s.closed)
-		time.Sleep(2 * time.Second)
 		fresh := take(t, f.model.opened)
-		require.Empty(t, fresh.config.ResumeToken)
-		require.Equal(t, input.ID, take(t, fresh.inputs).ID)
+		require.Equal(t, s.config.Key, fresh.config.Key)
+		require.Equal(t, "resume-token", fresh.config.ResumeToken)
+		input = take(t, fresh.inputs)
+		require.Equal(t, "procedure: heartbeat", input.Text)
+		f.status(t, input.ID, "done")
+		fresh.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		finishTaskRest(t, f, fresh)
 	})
 }
 
