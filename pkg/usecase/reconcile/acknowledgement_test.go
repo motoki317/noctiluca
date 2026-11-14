@@ -112,6 +112,9 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 				f := newDeliveryRig(t, Config{TurnTimeout: time.Hour, RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
 					NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil },
 					Completed:   func(context.Context, string, time.Time) error { t.Error("refused input completed a turn"); return nil },
+					Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
+						return domain.UserInput{Text: "prepared " + item.Payload.Input.Text}, nil
+					},
 				})
 				f.model.manualAck = true
 				f.start(t)
@@ -123,7 +126,13 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 				s := take(t, f.model.opened)
 				var retryAt time.Time
 				for attempt := 1; attempt <= 3; attempt++ {
-					require.Equal(t, id, take(t, s.inputs).ID)
+					input := take(t, s.inputs)
+					require.Equal(t, id, input.ID)
+					if attempt == 1 {
+						require.Equal(t, "prepared refused", input.Text)
+					} else {
+						require.Equal(t, "An earlier attempt at this input failed: refused. Check what it already did before you repeat a step.\n\nprepared refused", input.Text)
+					}
 					at := time.Now()
 					if attempt > 1 {
 						require.True(t, retryAt.Equal(at))
@@ -188,7 +197,7 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 				f := newDeliveryRig(t, Config{RetryDelay: time.Hour})
 				f.model.manualAck = true
 				f.start(t)
-				first := f.enqueue(t, "room", "first")
+				first := f.enqueue(t, "room", "schedule:daily:"+time.Now().Format(time.RFC3339Nano))
 				s := take(t, f.model.opened)
 				require.Equal(t, first, take(t, s.inputs).ID)
 				if openingStarted {
@@ -210,6 +219,11 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 				if !openingStarted {
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 					f.status(t, second, "done")
+				}
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+				f.turn(t, "room", false)
+				if openingStarted {
+					f.status(t, first, "done")
 				}
 			})
 		})

@@ -122,3 +122,21 @@ func TestScheduleTimingUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, s.NextRun, saved[0].NextRun)
 }
+
+func TestInboxFailedTurnRollsBackWithoutNotice(t *testing.T) {
+	db := openDB(t)
+	r := repository.NewInboxRepository(db)
+	item := inboxItem("schedule:daily:2026-11-14T00:00:00Z")
+	item.Lane = "task"
+	id := deliveredTurn(t, db, item)
+	_, err := db.Exec(`CREATE TRIGGER fail_notice BEFORE INSERT ON inbox WHEN NEW.source_key LIKE 'failure:%' BEGIN SELECT RAISE(FAIL, 'notice unavailable'); END`)
+	require.NoError(t, err)
+	_, err = r.RetryFailedTurn(t.Context(), id, "turn failed", 1, 15*time.Minute, time.Now())
+	require.ErrorContains(t, err, "notice unavailable")
+	var status, lastError string
+	var attempts int
+	require.NoError(t, db.QueryRow("SELECT status,attempts,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &lastError))
+	require.Equal(t, "done", status)
+	require.Zero(t, attempts)
+	require.Empty(t, lastError)
+}

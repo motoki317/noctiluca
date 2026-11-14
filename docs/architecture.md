@@ -71,7 +71,9 @@ A row counts as delivered when the model reports that it started on the row's in
 Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at` note, or a `watch` outcome.
 
 - A row that fails to send, or that the model refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
-- After three failed attempts a row is dead, and the owner gets one DM about that row.
+- A schedule fire whose turn fails, heartbeat and consolidation included, runs again in the same task session 15 minutes later, and 30 minutes after a second failure. A failed turn on a chat, `watch`, `wake_at`, or rest row does not run again.
+- Delivery failures and turn failures count against one budget of three attempts per row, so an earlier delivery failure moves a fire's first turn retry to the 30-minute delay. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
+- A pending fire retry that is due before the task's next fire holds the task's end-of-day rest.
 - Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
 - A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input at the ref its input's refs and the adapter's notes call for. A turn cut at its timeout does not continue. Tasks notify the owner.
 - Conversation sessions run concurrently. Scheduled tasks run one at a time.

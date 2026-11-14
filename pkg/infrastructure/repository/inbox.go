@@ -94,9 +94,39 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 		return false, err
 	}
 	defer tx.Rollback()
+	dead, err := finishInbox(ctx, tx, id, "dispatched", failure, limit, retry)
+	if err != nil {
+		return false, err
+	}
+	return dead, tx.Commit()
+}
+
+func (r *inboxRepository) RetryFailedTurn(ctx context.Context, id int64, failure string, limit int, delay time.Duration, at time.Time) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var attempts int
+	err = tx.QueryRowContext(ctx, `SELECT attempts FROM inbox WHERE id=? AND status='done' AND source_key LIKE 'schedule:%'`, id).Scan(&attempts)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	retry := at.Add(delay * time.Duration(1<<min(attempts, 8)))
+	dead, err := finishInbox(ctx, tx, id, "done", failure, limit, retry)
+	if err != nil {
+		return false, err
+	}
+	return dead, tx.Commit()
+}
+
+func finishInbox(ctx context.Context, tx *sql.Tx, id int64, from, failure string, limit int, retry time.Time) (bool, error) {
 	var status, key, raw string
 	var attempts int
-	err = tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status='dispatched' RETURNING status,session_key,payload,attempts`, limit, retry.UTC(), failure, id).Scan(&status, &key, &raw, &attempts)
+	err := tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status=? RETURNING status,session_key,payload,attempts`, limit, retry.UTC(), failure, id, from).Scan(&status, &key, &raw, &attempts)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -114,7 +144,7 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 			}
 		}
 	}
-	return status == "dead", tx.Commit()
+	return status == "dead", nil
 }
 
 func insertOwnerNotice(ctx context.Context, db executor, source, text string) error {
@@ -218,6 +248,7 @@ func (r *inboxRepository) Delivered(ctx context.Context, id int64, session domai
 	}
 	return tx.Commit()
 }
+
 func (r *inboxRepository) Reject(ctx context.Context, id int64, reason string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE inbox SET status='dead',last_error=? WHERE id=? AND status IN ('pending','dispatched')`, reason, id)
 	return err

@@ -53,6 +53,7 @@ type InboxRepository interface {
 	Active(context.Context) ([]InboxItem, error)
 	Claim(context.Context, int64, time.Time) (bool, error)
 	Finish(context.Context, int64, string, int, time.Time) (bool, error)
+	RetryFailedTurn(context.Context, int64, string, int, time.Duration, time.Time) (bool, error)
 	Fire(context.Context, Schedule, time.Time, *InboxItem) error
 }
 
