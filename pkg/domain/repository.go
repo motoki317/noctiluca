@@ -62,6 +62,7 @@ type SessionTurn struct {
 	Deadline      time.Time
 	Procedure     string
 	Failed        bool
+	Failure       string `json:",omitempty"`
 }
 
 type Session struct {

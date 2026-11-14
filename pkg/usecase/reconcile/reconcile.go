@@ -592,6 +592,9 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			}
 			if err == nil {
 				input.ID = item.ID
+				if item.LastError != "" {
+					input.Text = fmt.Sprintf("An earlier attempt at this input failed: %s. Check what it already did before you repeat a step.\n\n%s", strings.Join(strings.Fields(item.LastError), " "), input.Text)
+				}
 				err = model.Send(sendCtx, input)
 			}
 			cancel()
@@ -742,10 +745,18 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	case domain.ModelEventError:
 		if p.turn != nil {
 			p.turn.Failed = true
+			p.turn.Failure = event.Err.Error()
 		}
 	case domain.ModelEventTurnFinished:
 		turn := p.turn
 		if turn != nil {
+			if turn.Failure != "" && turn.InputID != 0 {
+				if _, unstarted := p.unstarted[turn.InputID]; !unstarted {
+					if _, err := r.inbox.RetryFailedTurn(ctx, turn.InputID, turn.Failure, r.config.MaxAttempts, failedFireRetryDelay, p.last); err != nil {
+						return err
+					}
+				}
+			}
 			if !turn.Failed && endsSession(turn.Procedure) {
 				p.restDeadline = turn.Deadline
 			} else if !endsSession(turn.Procedure) && p.lane == "task" && r.config.Procedure != nil && !r.taskFires[p.key].IsZero() {
@@ -805,3 +816,5 @@ func (r *Reconciler) fail(ctx context.Context, item domain.InboxItem, cause erro
 	slog.WarnContext(ctx, "Inbox delivery failed", "item", item.ID, "session", item.SessionKey, "error", cause, "dead", dead)
 	return nil
 }
+
+const failedFireRetryDelay = 15 * time.Minute
