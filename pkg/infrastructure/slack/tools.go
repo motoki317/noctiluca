@@ -70,6 +70,8 @@ func (a *adapter) Tools() []domain.Tool {
 			return json.Marshal(result)
 		}}
 	}
+	reactionProperties := map[string]any{"channel": str, "timestamp": str, "emoji": str}
+	reactionRequired := []string{"channel", "timestamp", "emoji"}
 	// setStatus also sends the text as a loading message, and Slack rejects one over 50 characters.
 	status := map[string]any{"type": "string", "minLength": 1, "maxLength": 50}
 	return []domain.Tool{
@@ -78,7 +80,8 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
 		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
 		tool("upload_file", "Upload a local file. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
-		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", map[string]any{"channel": str, "timestamp": str, "emoji": str}, []string{"channel", "timestamp", "emoji"}, a.react),
+		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", reactionProperties, reactionRequired, a.react),
+		tool("unreact", "Remove your own emoji reaction using a bare channel ID and message timestamp.", reactionProperties, reactionRequired, a.unreact),
 		tool("set_status", "Show status text as given with a loading animation in a thread, without adding the app name. For example: \"Looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": status}, []string{"channel", "thread_ts", "status"}, a.setStatus),
 		tool("send", "Post Markdown text. channel and thread_ts come from the ref you post to; omit thread_ts for a ref ending in a colon. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
@@ -304,6 +307,13 @@ func (a *adapter) broadcastImage(ctx context.Context, in toolInput, fileID, file
 func (a *adapter) react(ctx context.Context, in toolInput) (any, error) {
 	if err := a.bot.AddReactionContext(ctx, strings.Trim(in.Emoji, ":"), sdk.ItemRef{Channel: in.Channel, Timestamp: in.Timestamp}); err != nil {
 		return nil, slackError("add Slack reaction failed", err)
+	}
+	return map[string]bool{"ok": true}, nil
+}
+
+func (a *adapter) unreact(ctx context.Context, in toolInput) (any, error) {
+	if err := a.bot.RemoveReactionContext(ctx, strings.Trim(in.Emoji, ":"), sdk.ItemRef{Channel: in.Channel, Timestamp: in.Timestamp}); err != nil {
+		return nil, slackError("remove Slack reaction failed", err)
 	}
 	return map[string]bool{"ok": true}, nil
 }
