@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -14,9 +15,14 @@ import (
 
 const authRemedy = "check `claude auth status`; run `claude /login` if the login expired"
 
+var causeIdentifier = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
 type frame struct {
 	Result          string   `json:"result"`
 	Errors          []string `json:"errors"`
+	TerminalReason  string   `json:"terminal_reason"`
+	APIError        string   `json:"api_error"`
+	APIErrorStatus  *int     `json:"api_error_status"`
 	Type            string   `json:"type"`
 	Subtype         string   `json:"subtype"`
 	SessionID       string   `json:"session_id"`
@@ -87,6 +93,30 @@ type contentBlock struct {
 
 func (f frame) failedResult() bool {
 	return f.Type == "result" && (f.IsError || strings.HasPrefix(f.Subtype, "error"))
+}
+
+func (f frame) resultError() error {
+	subtype := f.Subtype
+	if !strings.HasPrefix(subtype, "error") {
+		subtype = ""
+	}
+	var causes []string
+	for _, value := range []string{subtype, f.TerminalReason, f.APIError} {
+		if causeIdentifier.MatchString(value) {
+			causes = append(causes, value)
+		}
+	}
+	if f.APIErrorStatus != nil {
+		causes = append(causes, fmt.Sprintf("HTTP %d", *f.APIErrorStatus))
+	}
+	detail := strings.Join(causes, " ")
+	if detail == "" {
+		detail = authRemedy
+	} else if f.APIErrorStatus != nil && *f.APIErrorStatus == 401 ||
+		f.APIErrorStatus == nil && !causeIdentifier.MatchString(f.APIError) && !causeIdentifier.MatchString(subtype) {
+		detail += "; " + authRemedy
+	}
+	return errors.New("claude turn failed: " + detail)
 }
 
 func parseFrame(data []byte) (frame, error) {
@@ -205,7 +235,7 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 	case "result":
 		if f.failedResult() {
 			// CLI error bodies can contain prompts, credentials, or tool output.
-			events = append(events, domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("claude turn failed: " + authRemedy)})
+			events = append(events, domain.ModelEvent{Kind: domain.ModelEventError, Err: f.resultError()})
 			f.Result = ""
 		}
 		events = append(events, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: f.Result})

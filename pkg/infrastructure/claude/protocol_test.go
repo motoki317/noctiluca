@@ -96,13 +96,31 @@ func TestRecoverableToolError(t *testing.T) {
 }
 
 func TestFailedResultDoesNotExposeBody(t *testing.T) {
-	for _, f := range []frame{{Type: "result", IsError: true, Result: "private body"}, {Type: "result", Subtype: "error_during_execution", Result: "private body"}} {
-		var p parser
-		events := p.events(f, nil)
-		require.Len(t, events, 2)
-		require.Equal(t, domain.ModelEventTurnFinished, events[1].Kind)
-		require.Empty(t, events[1].Text)
-		require.Contains(t, events[0].Err.Error(), authRemedy)
+	for _, tc := range []struct {
+		name, line, want string
+	}{
+		{"connection failure", `{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error":"connection_failed","api_error_status":null}`, "api_error connection_failed"},
+		{"authentication", `{"type":"result","is_error":true,"terminal_reason":"api_error","api_error_status":401}`, "api_error HTTP 401; " + authRemedy},
+		{"not logged in", `{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":null,"result":"Not logged in · Please run /login"}`, "api_error; " + authRemedy},
+		{"execution error", `{"type":"result","subtype":"error_during_execution"}`, "error_during_execution"},
+		{"no typed cause", `{"type":"result","is_error":true}`, authRemedy},
+		{"unsafe cause with safe status", `{"type":"result","is_error":true,"api_error":"private\nsecret","api_error_status":500}`, "HTTP 500"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parseFrame([]byte(tc.line))
+			require.NoError(t, err)
+			f.Result = "private body"
+			f.Errors = []string{"private error"}
+			p := parser{active: true}
+			events := p.events(f, nil)
+			require.Len(t, events, 2)
+			require.Equal(t, domain.ModelEventError, events[0].Kind)
+			require.EqualError(t, events[0].Err, "claude turn failed: "+tc.want)
+			require.Empty(t, events[0].Text)
+			require.Equal(t, domain.ModelEventTurnFinished, events[1].Kind)
+			require.Empty(t, events[1].Text)
+			require.False(t, p.active)
+		})
 	}
 	var p parser
 	require.Equal(t, "answer", p.events(frame{Type: "result", Result: "answer"}, nil)[0].Text)
