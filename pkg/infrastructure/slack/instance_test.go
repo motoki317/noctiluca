@@ -59,7 +59,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 	require.Equal(t, "U1", reaction.Sender.ID)
 	require.Contains(t, reaction.Text, "eyes")
 	tools := a.Tools()
-	for i, suffix := range []string{"read_thread", "read_history", "search", "download_file", "upload_file", "react", "set_status", "send"} {
+	for i, suffix := range []string{"read_thread", "read_history", "search", "download_file", "upload_file", "react", "unreact", "set_status", "send"} {
 		require.Equal(t, name+"_"+suffix, tools[i].Name)
 		require.Equal(t, i < 3, tools[i].ReadOnly)
 	}

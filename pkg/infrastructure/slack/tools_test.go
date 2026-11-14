@@ -262,6 +262,52 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 	require.NoError(t, a.record(ctx, "already-posted", Conversation(name, "CTEST", ""), domain.OutboundMessage{Text: "posted"}))
 }
 
+func TestUnreact(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		emoji string
+		code  string
+	}{
+		{name: "colons", emoji: "::eyes::"},
+		{name: "absent", emoji: ":eyes:", code: "no_reaction"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			a := apiInstance(t, "support_2", func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "/reactions.remove", r.URL.Path)
+				require.NoError(t, r.ParseForm())
+				require.Equal(t, url.Values{
+					"token":     {"xoxb-test"},
+					"channel":   {"CTEST"},
+					"timestamp": {"124.000001"},
+					"name":      {"eyes"},
+				}, r.PostForm)
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": tt.code == "", "error": tt.code})
+			}, true)
+			var tool domain.Tool
+			for _, candidate := range a.Tools() {
+				if candidate.Name == "support_2_unreact" {
+					tool = candidate
+				}
+			}
+			require.NotNil(t, tool.Handler)
+			args, err := json.Marshal(map[string]string{"channel": "CTEST", "timestamp": "124.000001", "emoji": tt.emoji})
+			require.NoError(t, err)
+			result, err := tool.Handler(t.Context(), args)
+			if tt.code == "" {
+				require.NoError(t, err)
+				require.JSONEq(t, `{"ok":true}`, string(result))
+			} else {
+				require.EqualError(t, err, "remove Slack reaction failed: "+tt.code)
+				require.Nil(t, result)
+			}
+			require.EqualValues(t, 1, calls.Load())
+		})
+	}
+}
+
 func TestSetStatus(t *testing.T) {
 	for _, code := range []string{"", "not_in_channel"} {
 		t.Run(code, func(t *testing.T) {
