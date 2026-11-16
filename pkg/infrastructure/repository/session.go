@@ -51,49 +51,34 @@ func mapNotFound(err error) error {
 }
 
 func (r *sessionRepository) Recover(ctx context.Context) error {
-	rows, err := r.db.QueryContext(ctx, `SELECT key FROM sessions WHERE turn_json!='null' UNION SELECT session_key FROM inbox WHERE status='dispatched'`)
-	if err != nil {
+	if _, err := r.db.ExecContext(ctx, `UPDATE inbox SET status='pending' WHERE status='dispatched' AND session_key GLOB ?`, domain.NoticeSessionPrefix+"*"); err != nil {
 		return err
 	}
-	var keys []domain.SessionKey
-	for rows.Next() {
-		var key domain.SessionKey
-		if err := rows.Scan(&key); err != nil {
-			rows.Close()
-			return err
-		}
-		keys = append(keys, key)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	for _, key := range keys {
-		if err := r.Interrupt(ctx, key, "restart"); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.Interrupt(ctx, domain.MainSessionKey, "restart")
 }
 
 func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey, reason string) error {
+	if key.IsNotice() {
+		_, err := r.db.ExecContext(ctx, `UPDATE inbox SET status='pending' WHERE session_key=? AND status='dispatched'`, key)
+		return err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var raw, rawTurn string
-	err = tx.QueryRowContext(ctx, `SELECT context_json,turn_json FROM sessions WHERE key=?`, key).Scan(&raw, &rawTurn)
+	var rawTurn string
+	err = tx.QueryRowContext(ctx, `SELECT turn_json FROM sessions WHERE key=?`, key).Scan(&rawTurn)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	var info *domain.SessionContext
 	var turn *domain.SessionTurn
-	if raw != "" {
-		if err := errors.Join(json.Unmarshal([]byte(raw), &info), json.Unmarshal([]byte(rawTurn), &turn)); err != nil {
+	if rawTurn != "" {
+		if err := json.Unmarshal([]byte(rawTurn), &turn); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE inbox SET status='pending' WHERE session_key=? AND status='dispatched'`, key); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE inbox SET status='pending' WHERE status='dispatched' AND session_key NOT GLOB ?`, domain.NoticeSessionPrefix+"*"); err != nil {
 		return err
 	}
 	if turn == nil {
@@ -115,23 +100,11 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	if err := saveModel(ctx, tx, domain.ModelRecord{SessionKey: key, RecordedAt: now, Event: domain.ModelEvent{Kind: domain.ModelEventError, Text: note, Err: errors.New(note)}}); err != nil {
 		return err
 	}
-	if started && info != nil {
+	if started && turn.Continuations < 1 {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
-		if reason == domain.TurnDeadlineExceeded || reason == domain.DeliveryDeadlineExceeded {
-			if info.TaskName != "" {
-				if err := insertOwnerNotice(ctx, tx, source, fmt.Sprintf("Task %s stopped: %s", info.TaskName, reason)); err != nil {
-					return err
-				}
-			}
-		} else if turn.Continuations < 1 && (info.TaskName != "" || reason != domain.ConversationNoLongerAccepted) {
-			item := domain.InboxItem{SourceKey: source, SessionKey: key, Lane: "task", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Context: *info, Input: domain.UserInput{Text: note}}}
-			if info.TaskName == "" {
-				item.Lane = "conv"
-				item.Payload.Input.Text += "\nThe interrupted turn may cover several inputs: finish each unfinished part using the posting instructions in its input."
-			}
-			if _, err := insertInbox(ctx, tx, item); err != nil {
-				return err
-			}
+		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\nThe interrupted turn may cover several inputs: finish each unfinished part using the posting instructions in its input."}}}
+		if _, err := insertInbox(ctx, tx, item); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {

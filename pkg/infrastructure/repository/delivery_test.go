@@ -2,7 +2,6 @@ package repository_test
 
 import (
 	"database/sql"
-	"strings"
 	"testing"
 	"time"
 
@@ -25,96 +24,53 @@ func deliveredTurn(t *testing.T, db *sql.DB, item domain.InboxItem) int64 {
 	return id
 }
 
-func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
+func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	db := openDB(t)
 	inbox := repository.NewInboxRepository(db)
 	sessions := repository.NewSessionRepository(db)
-	for _, lane := range []string{"conv", "task"} {
-		info := domain.SessionContext{Conversation: domain.ConversationRef(lane)}
-		if lane == "task" {
-			info.TaskName = "daily"
-			info.Conversation = ""
-		}
-		item := domain.InboxItem{SourceKey: lane, SessionKey: domain.SessionKey(lane), Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Input: domain.UserInput{Text: "never replay"}}}
-		deliveredTurn(t, db, item)
-	}
+	item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now()}
+	deliveredTurn(t, db, item)
 	require.NoError(t, sessions.Recover(t.Context()))
 	require.NoError(t, sessions.Recover(t.Context()))
 	active, err := inbox.Active(t.Context())
 	require.NoError(t, err)
-	require.Len(t, active, 2)
-	for _, item := range active {
-		require.Equal(t, string(item.SessionKey), item.Lane)
-		require.Contains(t, []string{"conv", "task"}, item.Lane)
-		require.Equal(t, 1, item.Payload.Continuations)
-		require.Nil(t, item.Payload.Event)
-		if item.Lane == "conv" {
-			require.True(t, strings.HasPrefix(item.Payload.Input.Text, "previous turn was interrupted: restart\n"))
-			require.Equal(t, domain.SessionContext{Conversation: "conv"}, item.Payload.Context)
-		} else {
-			require.Equal(t, "previous turn was interrupted: restart", item.Payload.Input.Text)
-			require.Equal(t, domain.SessionContext{TaskName: "daily"}, item.Payload.Context)
-		}
-	}
-	var done, events int
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE status='done'").Scan(&done))
-	require.Equal(t, 2, done)
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM model_events").Scan(&events))
-	require.Equal(t, 2, events)
-	for _, key := range []domain.SessionKey{"conv", "task"} {
-		s, err := sessions.Get(t.Context(), key)
-		require.NoError(t, err)
-		require.Nil(t, s.Turn)
-		require.Equal(t, "resume", s.ResumeToken)
-		records, err := repository.NewEventRepository(db).ListModel(t.Context(), key, 10)
-		require.NoError(t, err)
-		require.Len(t, records, 1)
-		require.Equal(t, domain.ModelEventError, records[0].Event.Kind)
-		require.Equal(t, "previous turn was interrupted: restart", records[0].Event.Text)
-		require.EqualError(t, records[0].Event.Err, "previous turn was interrupted: restart")
-	}
-	for _, continued := range active {
-		_, err = inbox.Claim(t.Context(), continued.ID, time.Now())
-		require.NoError(t, err)
-		require.NoError(t, inbox.Delivered(t.Context(), continued.ID, domain.Session{Key: continued.SessionKey, Context: &continued.Payload.Context, Turn: &domain.SessionTurn{InputID: continued.ID, Continuations: continued.Payload.Continuations, Deadline: time.Now().Add(time.Hour)}}))
-	}
+	require.Len(t, active, 1)
+	continued := active[0]
+	require.Equal(t, domain.MainSessionKey, continued.SessionKey)
+	require.Equal(t, "conv", continued.Lane)
+	require.Equal(t, 1, continued.Payload.Continuations)
+	require.Nil(t, continued.Payload.Event)
+	require.Contains(t, continued.Payload.Input.Text, "finish each unfinished part")
+	_, err = inbox.Claim(t.Context(), continued.ID, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, inbox.Delivered(t.Context(), continued.ID, domain.Session{Key: domain.MainSessionKey, ResumeToken: "resume", Turn: &domain.SessionTurn{InputID: continued.ID, Continuations: 1}}))
 	require.NoError(t, sessions.Recover(t.Context()))
 	active, err = inbox.Active(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, active)
+	saved, err := sessions.Get(t.Context(), domain.MainSessionKey)
+	require.NoError(t, err)
+	require.Nil(t, saved.Turn)
+	require.Equal(t, "resume", saved.ResumeToken)
 }
 
-func TestInterruptStopReasons(t *testing.T) {
-	for _, reason := range []string{domain.TurnDeadlineExceeded, domain.DeliveryDeadlineExceeded, domain.ConversationNoLongerAccepted} {
+func TestInterruptContinuesRegardlessOfTaskOrDeadline(t *testing.T) {
+	for _, reason := range []string{"model process exited", domain.TurnDeadlineExceeded, domain.DeliveryDeadlineExceeded} {
 		for _, lane := range []string{"conv", "task"} {
 			t.Run(reason+"/"+lane, func(t *testing.T) {
 				db := openDB(t)
-				inbox := repository.NewInboxRepository(db)
 				sessions := repository.NewSessionRepository(db)
-				info := domain.SessionContext{Conversation: "room"}
-				if lane == "task" {
-					info.TaskName = "daily"
-				}
-				item := domain.InboxItem{SourceKey: "opening", SessionKey: "session", Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info}}
+				item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}}}
 				deliveredTurn(t, db, item)
-				require.NoError(t, sessions.Interrupt(t.Context(), item.SessionKey, reason))
-				active, err := inbox.Active(t.Context())
+				require.NoError(t, sessions.Interrupt(t.Context(), domain.MainSessionKey, reason))
+				active, err := repository.NewInboxRepository(db).Active(t.Context())
 				require.NoError(t, err)
-				if lane == "conv" {
-					require.Empty(t, active)
-				} else {
-					require.Len(t, active, 1)
-					if reason == domain.ConversationNoLongerAccepted {
-						require.Equal(t, "task", active[0].Lane)
-						require.Equal(t, 1, active[0].Payload.Continuations)
-						require.Equal(t, "previous turn was interrupted: "+reason, active[0].Payload.Input.Text)
-					} else {
-						require.Equal(t, "Task daily stopped: "+reason, active[0].Payload.Notice)
-					}
-				}
-				saved, err := sessions.Get(t.Context(), item.SessionKey)
-				require.NoError(t, err)
-				require.Nil(t, saved.Turn)
+				require.Len(t, active, 1)
+				require.Equal(t, "conv", active[0].Lane)
+				require.Equal(t, 1, active[0].Payload.Continuations)
+				require.Contains(t, active[0].Payload.Input.Text, "previous turn was interrupted: "+reason)
+				require.Contains(t, active[0].Payload.Input.Text, "finish each unfinished part")
+				require.Empty(t, active[0].Payload.Notice)
 			})
 		}
 	}
@@ -126,7 +82,7 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 			db := openDB(t)
 			inbox := repository.NewInboxRepository(db)
 			sessions := repository.NewSessionRepository(db)
-			item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
+			item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
 			id, err := inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
 			_, err = inbox.Claim(t.Context(), id, time.Now())
@@ -156,7 +112,7 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 			db := openDB(t)
 			inbox := repository.NewInboxRepository(db)
 			sessions := repository.NewSessionRepository(db)
-			item := domain.InboxItem{SourceKey: "opening", SessionKey: "task", Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}, Input: domain.UserInput{Text: "original"}}}
+			item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}, Input: domain.UserInput{Text: "original"}}}
 			id, err := inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
 			claimed, err := inbox.Claim(t.Context(), id, time.Now().Add(time.Hour))
@@ -214,9 +170,46 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 				active, err := inbox.Active(t.Context())
 				require.NoError(t, err)
 				followup := active[len(active)-1]
-				require.Equal(t, "previous turn was interrupted: restart", followup.Payload.Input.Text)
+				require.Contains(t, followup.Payload.Input.Text, "previous turn was interrupted: restart\n")
 				require.Equal(t, 1, followup.Payload.Continuations)
 			}
 		})
 	}
+}
+
+func TestInterruptResetsOldKeysAndKeepsNoticeIndependent(t *testing.T) {
+	db := openDB(t)
+	inbox := repository.NewInboxRepository(db)
+	sessions := repository.NewSessionRepository(db)
+	ids := make(map[domain.SessionKey]int64)
+	for _, key := range []domain.SessionKey{"old-room", "task:old", domain.MainSessionKey, "notice:owner"} {
+		item := domain.InboxItem{SessionKey: key, SourceKey: string(key), Lane: "conv"}
+		id, err := inbox.Enqueue(t.Context(), item)
+		require.NoError(t, err)
+		ids[key] = id
+		claimed, err := inbox.Claim(t.Context(), id, time.Now())
+		require.NoError(t, err)
+		require.True(t, claimed)
+	}
+	status := func(key domain.SessionKey, want string) {
+		t.Helper()
+		var got string
+		require.NoError(t, db.QueryRow("SELECT status FROM inbox WHERE id=?", ids[key]).Scan(&got))
+		require.Equal(t, want, got)
+	}
+	require.NoError(t, sessions.Interrupt(t.Context(), domain.MainSessionKey, "exit"))
+	for _, key := range []domain.SessionKey{"old-room", "task:old", domain.MainSessionKey} {
+		status(key, "pending")
+	}
+	status("notice:owner", "dispatched")
+	_, err := inbox.Claim(t.Context(), ids["old-room"], time.Now())
+	require.NoError(t, err)
+	require.NoError(t, sessions.Interrupt(t.Context(), "notice:owner", "exit"))
+	status("old-room", "dispatched")
+	status("notice:owner", "pending")
+	_, err = inbox.Claim(t.Context(), ids["notice:owner"], time.Now())
+	require.NoError(t, err)
+	require.NoError(t, sessions.Recover(t.Context()))
+	status("old-room", "pending")
+	status("notice:owner", "pending")
 }

@@ -148,7 +148,7 @@ heartbeat: {enabled: false}
 				t.Fatal("Codex reply timed out")
 			}
 			require.Eventually(t, func() bool {
-				saved, err := repository.NewSessionRepository(app.db).Get(t.Context(), domain.SessionKey("slack:D_OWNER:"))
+				saved, err := repository.NewSessionRepository(app.db).Get(t.Context(), domain.MainSessionKey)
 				return err == nil && strings.HasPrefix(saved.ResumeToken, "codex-thread:") && saved.Turn == nil
 			}, 5*time.Second, 10*time.Millisecond)
 		})

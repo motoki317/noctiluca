@@ -28,7 +28,7 @@ func TestFailedScheduleFireRetriesThenNotifiesOnce(t *testing.T) {
 				stop := f.start(t)
 				s := take(t, f.model.opened)
 				key := s.config.Key
-				require.Equal(t, domain.SessionKey("task:"+name), key)
+				require.Equal(t, domain.MainSessionKey, key)
 				var id int64
 				var text string
 				for attempt := 1; attempt <= 3; attempt++ {
@@ -47,7 +47,7 @@ func TestFailedScheduleFireRetriesThenNotifiesOnce(t *testing.T) {
 					cause := fmt.Sprintf("outage %d", attempt)
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New(cause)}
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-					f.turn(t, string(key), false)
+					f.turn(t, false)
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 					synctest.Wait()
 					var status, failure string
@@ -56,7 +56,7 @@ func TestFailedScheduleFireRetriesThenNotifiesOnce(t *testing.T) {
 					require.NoError(t, f.db.QueryRow("SELECT status,attempts,retry_at,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &retry, &failure))
 					require.Equal(t, attempt, attempts)
 					require.Equal(t, cause, failure)
-					require.Equal(t, "resume-token", f.turn(t, string(key), false).ResumeToken)
+					require.Equal(t, "resume-token", f.turn(t, false).ResumeToken)
 					if attempt == 3 {
 						require.Equal(t, "dead", status)
 						break
@@ -111,7 +111,7 @@ func TestFailedTaskFollowupsDoNotRetry(t *testing.T) {
 				f.status(t, id, "done")
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed")}
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-				f.turn(t, string(item.SessionKey), false)
+				f.turn(t, false)
 				synctest.Wait()
 				f.status(t, id, "done")
 				var attempts int
@@ -158,7 +158,7 @@ func TestFailedFireRefusalKeepsDeliveryBackoff(t *testing.T) {
 		at = time.Now()
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("turn error")}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.turn(t, string(item.SessionKey), false)
+		f.turn(t, false)
 		synctest.Wait()
 		require.NoError(t, f.db.QueryRow("SELECT status,attempts,retry_at,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &retry, &failure))
 		require.Equal(t, "pending", status)

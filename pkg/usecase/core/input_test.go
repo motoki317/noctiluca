@@ -16,26 +16,29 @@ func TestReadableInput(t *testing.T) {
 	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room", MessageRef: "entry:channel:message", Sender: domain.Sender{ID: "owner"}, Text: "add 了解 at the end", ReceivedAt: at}
 	item := domain.InboxItem{Lane: "conv", Payload: domain.InboxPayload{Event: &event}}
 	info := domain.SourceInfo{Location: "entry: native IDs", Conversation: "#general", Sender: "Alex", ThreadAt: at.Add(-time.Minute), ThreadText: "What did\nyou run?"}
-	require.Equal(t, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nentry: native IDs\n\nadd 了解 at the end", formatInput(item, domain.InputContext{}, info, "owner", zone).Text)
+	require.Equal(t, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nentry: native IDs\n\nadd 了解 at the end", formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text)
 	for _, tt := range []struct {
 		name    string
 		history domain.InputContext
 		want    string
 	}{
 		{"deleted root", domain.InputContext{Root: &domain.InboundEvent{Deleted: true}}, "(root deleted)"},
-		{"before reply", domain.InputContext{ThreadSeen: true, Running: true, LastReply: at.Add(time.Second)}, "Sent at 16:29:01 JST, before your reply at 16:29:02 JST in this thread."},
-		{"queued", domain.InputContext{ThreadSeen: true, Running: true}, "Sent while your previous turn was running."},
+		{"before reply", domain.InputContext{Running: true, LastReply: at.Add(time.Second)}, "Sent at 16:29:01 JST, before your reply at 16:29:02 JST in this thread."},
+		{"queued", domain.InputContext{Running: true}, "Sent while your previous turn was running."},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Contains(t, formatInput(item, tt.history, info, "owner", zone).Text, tt.want)
+			input := formatInput(item, tt.history, info, "owner", zone, "").Text
+			require.Contains(t, input, tt.want)
+			if tt.history.Root == nil {
+				require.Contains(t, input, `"What did you run?"`)
+			}
 		})
 	}
-	require.NotContains(t, formatInput(item, domain.InputContext{ThreadSeen: true, Root: &domain.InboundEvent{Deleted: true}}, info, "owner", zone).Text, "root deleted")
 	event.Parent, event.Conversation, event.Direct = "", "room", true
-	require.Contains(t, formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, "owner", zone).Text, "DM with Alex · top level")
+	require.Contains(t, formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, "owner", zone, "").Text, "DM with Alex · top level")
 	item.Payload.Event = nil
 	item.Lane, item.Payload.Context.TaskName, item.ReadyAt = "task", "heartbeat", at
-	require.Equal(t, "Task heartbeat | system | 16:29:01 JST\n\n", formatInput(item, domain.InputContext{}, info, "owner", zone).Text)
+	require.Equal(t, "Task heartbeat | system | 16:29:01 JST\n\n", formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text)
 	require.Equal(t, strings.Repeat("あ", 80)+"…", excerpt(strings.Repeat("あ", 81)))
 }
 
@@ -45,6 +48,37 @@ func TestPrepareBackgroundInput(t *testing.T) {
 		input, err := (&core{}).prepare(t.Context(), item)
 		require.NoError(t, err)
 		require.Equal(t, item.Payload.Input, input)
+	}
+}
+
+type rootMessaging struct {
+	*namedMessaging
+	fetchRoot bool
+}
+
+func (m *rootMessaging) SourceInfo(_ context.Context, _ domain.InboundEvent, root bool) domain.SourceInfo {
+	m.fetchRoot = root
+	return domain.SourceInfo{ThreadText: "Fetched root"}
+}
+
+func TestPrepareIncludesRootForEveryInput(t *testing.T) {
+	for _, root := range []*domain.InboundEvent{nil, {Text: "Stored root"}} {
+		adapter := &rootMessaging{namedMessaging: newNamedMessaging("test")}
+		router, err := newMessagingRouter([]Messaging{{Name: "test", Adapter: adapter, Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"owner"}}}}})
+		require.NoError(t, err)
+		c := &core{events: inputEvents{history: domain.InputContext{Root: root}}, messaging: router}
+		event := message("test:thread", "owner", "reply")
+		event.Parent = "test:room"
+		for range 2 {
+			input, err := c.prepare(t.Context(), domain.InboxItem{Payload: domain.InboxPayload{Event: &event}})
+			require.NoError(t, err)
+			require.Equal(t, root == nil, adapter.fetchRoot)
+			if root == nil {
+				require.Contains(t, input.Text, `"Fetched root"`)
+			} else {
+				require.Contains(t, input.Text, `"Stored root"`)
+			}
+		}
 	}
 }
 
@@ -62,35 +96,46 @@ func TestReadableMessageChanges(t *testing.T) {
 				Conversation: "room", MessageRef: "entry:channel:message",
 			}
 			item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event}}
-			input := formatInput(item, domain.InputContext{}, domain.SourceInfo{}, "owner", time.UTC)
+			input := formatInput(item, domain.InputContext{}, domain.SourceInfo{}, "owner", time.UTC, "")
 			require.Contains(t, input.Text, "\n"+tc.notice+"\n")
 		})
 	}
 }
 
-type inputEvents struct{ domain.EventRepository }
+type inputEvents struct {
+	domain.EventRepository
+	key     *domain.SessionKey
+	history domain.InputContext
+}
 
-func (inputEvents) InputContext(context.Context, domain.SessionKey, domain.ConversationRef, time.Time) (domain.InputContext, error) {
-	return domain.InputContext{}, nil
+func (e inputEvents) InputContext(_ context.Context, key domain.SessionKey, _ domain.ConversationRef, _ time.Time) (domain.InputContext, error) {
+	if e.key != nil {
+		*e.key = key
+	}
+	return e.history, nil
 }
 
 func TestPrepareMessagingEventWithBackgroundPrefix(t *testing.T) {
 	adapter := newNamedMessaging("watch")
 	router, err := newMessagingRouter([]Messaging{{Name: "watch", Adapter: adapter, Rules: map[domain.ConversationRef]domain.AcceptRule{"watch:room": {Users: []string{"owner"}}}}})
 	require.NoError(t, err)
-	c := &core{events: inputEvents{}, messaging: router}
+	var key domain.SessionKey
+	c := &core{events: inputEvents{key: &key, history: domain.InputContext{Running: true}}, messaging: router}
 	event := message("watch:room", "owner", "hello")
-	input, err := c.prepare(t.Context(), domain.InboxItem{SourceKey: "watch:message", Payload: domain.InboxPayload{Event: &event}})
+	input, err := c.prepare(t.Context(), domain.InboxItem{SourceKey: "watch:message", SessionKey: "old-key", Payload: domain.InboxPayload{Event: &event}})
 	require.NoError(t, err)
 	require.Contains(t, input.Text, "hello")
 	require.Contains(t, input.Text, "watch user")
+	require.Equal(t, domain.MainSessionKey, key)
+	require.Contains(t, input.Text, "\nSent while your previous turn was running.\n")
+	require.NotContains(t, input.Text, "answer only")
 }
 
 func TestInputReaction(t *testing.T) {
 	event := message("room", "member", "reacted")
 	event.Kind, event.MessageRef = domain.InboundEventReaction, "entry:channel:message"
 	item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event}}
-	input := formatInput(item, domain.InputContext{LastReply: event.ReceivedAt.Add(time.Second)}, domain.SourceInfo{}, "owner", time.UTC)
+	input := formatInput(item, domain.InputContext{LastReply: event.ReceivedAt.Add(time.Second)}, domain.SourceInfo{}, "owner", time.UTC, "")
 	require.Contains(t, input.Text, "in this conversation.\n\n")
 	require.Contains(t, input.Text, "\nReaction.\n")
 	require.NotContains(t, input.Text, "\nmessage:")
@@ -100,7 +145,25 @@ func TestReadableInputKeepsKnownSenderName(t *testing.T) {
 	event := message("room", "B1", "hello")
 	event.Sender.DisplayName = "Helpful bot"
 	item := domain.InboxItem{Payload: domain.InboxPayload{Event: &event}}
-	input := formatInput(item, domain.InputContext{}, domain.SourceInfo{Sender: "B1"}, "owner", time.UTC)
+	input := formatInput(item, domain.InputContext{}, domain.SourceInfo{Sender: "B1"}, "owner", time.UTC, "")
 	require.Contains(t, input.Text, "| Helpful bot |")
 	require.NotContains(t, input.Text, "B1")
+}
+
+func TestTaskWorkdirHint(t *testing.T) {
+	for _, workdir := range []string{"", "/default", "/project"} {
+		t.Run(workdir, func(t *testing.T) {
+			c := &core{config: Config{Workdir: "/default"}}
+			item := domain.InboxItem{Lane: "task", Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily", Workdir: workdir}, Input: domain.UserInput{Text: "work"}}}
+			input, err := c.prepare(t.Context(), item)
+			require.NoError(t, err)
+			require.Contains(t, input.Text, "Task daily | system |")
+			if workdir == "/project" {
+				require.Contains(t, input.Text, "\nworkdir: /project\n\nwork")
+			} else {
+				require.NotContains(t, input.Text, "workdir:")
+			}
+			require.NotContains(t, input.Text, "refs:")
+		})
+	}
 }

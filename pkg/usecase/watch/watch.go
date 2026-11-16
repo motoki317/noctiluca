@@ -19,7 +19,6 @@ type watcher struct {
 	life     lifecycle.Group
 	repo     domain.WatchRepository
 	inbox    domain.InboxRepository
-	resolve  func(context.Context, domain.SessionKey) (domain.InboxItem, error)
 	notify   func()
 	mu       sync.Mutex
 	ctx      context.Context
@@ -27,8 +26,8 @@ type watcher struct {
 	failures chan error
 }
 
-func New(repo domain.WatchRepository, inbox domain.InboxRepository, resolve func(context.Context, domain.SessionKey) (domain.InboxItem, error), notify func()) domain.Background {
-	return &watcher{repo: repo, inbox: inbox, resolve: resolve, notify: notify, failures: make(chan error, 1)}
+func New(repo domain.WatchRepository, inbox domain.InboxRepository, notify func()) domain.Background {
+	return &watcher{repo: repo, inbox: inbox, notify: notify, failures: make(chan error, 1)}
 }
 
 func (w *watcher) Start(ctx context.Context) error {
@@ -87,7 +86,7 @@ func (w *watcher) Tools() []domain.Tool {
 }
 
 func (w *watcher) wake(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
-	session, ok := domain.ToolSessionFromContext(ctx)
+	_, ok := domain.ToolSessionFromContext(ctx)
 	if !ok {
 		return nil, errors.New("tool session is required")
 	}
@@ -101,10 +100,7 @@ func (w *watcher) wake(ctx context.Context, raw json.RawMessage) (json.RawMessag
 	if in.At.IsZero() || in.Note == "" {
 		return nil, errors.New("at and note are required")
 	}
-	item, err := w.resolve(ctx, session.Key)
-	if err != nil {
-		return nil, err
-	}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
 	item.SourceKey = "wake:" + uuid.NewString()
 	item.ReadyAt = in.At
 	item.Payload.Input.Text = in.Note
@@ -117,7 +113,7 @@ func (w *watcher) wake(ctx context.Context, raw json.RawMessage) (json.RawMessag
 }
 
 func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
-	session, ok := domain.ToolSessionFromContext(ctx)
+	_, ok := domain.ToolSessionFromContext(ctx)
 	if !ok {
 		return nil, errors.New("tool session is required")
 	}
@@ -131,10 +127,7 @@ func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	if in.Command == "" || in.CWD == "" {
 		return nil, errors.New("command and cwd are required")
 	}
-	item, err := w.resolve(ctx, session.Key)
-	if err != nil {
-		return nil, err
-	}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.ctx == nil || w.ctx.Err() != nil {

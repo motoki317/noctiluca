@@ -38,7 +38,7 @@ func (s *session) sendInputs() {
 			method := "turn/steer"
 			params := map[string]any{"threadId": s.threadID, "input": []map[string]string{{"type": "text", "text": input.Text}}}
 			if t == nil {
-				t = &runningTurn{ready: make(chan struct{})}
+				t = &runningTurn{ready: make(chan struct{}), started: make(chan struct{})}
 				s.current = t
 				method = "turn/start"
 			} else {
@@ -89,6 +89,12 @@ func (s *session) sendInputs() {
 					return
 				}
 			} else {
+				// Publish the turn lifecycle before its input acknowledgement.
+				select {
+				case <-t.started:
+				case <-s.ctx.Done():
+					return
+				}
 				s.emit(domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: input.ID})
 			}
 		}

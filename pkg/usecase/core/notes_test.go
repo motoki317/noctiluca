@@ -56,6 +56,11 @@ func TestOwnerDMFailureDoesNotBlockPrompt(t *testing.T) {
 		} else {
 			require.Contains(t, model.config.SystemPrompt, "Owner DM: use chat_send with channel=D_OWNER and no thread_ts.")
 		}
+		_, err := f.hub.tools["rest"].Handler(domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey}), nil)
+		require.NoError(t, err)
+		model.idle.Store(true)
+		model.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		take(t, model.closed)
 	}
 	require.EqualValues(t, 2, calls.Load())
 }

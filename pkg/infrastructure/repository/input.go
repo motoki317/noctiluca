@@ -11,11 +11,6 @@ import (
 
 func (r *eventRepository) InputContext(ctx context.Context, key domain.SessionKey, conversation domain.ConversationRef, at time.Time) (domain.InputContext, error) {
 	var info domain.InputContext
-	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE status='done'
-		AND json_extract(payload, '$.Event.Accepted')=1 AND json_extract(payload, '$.Event.Conversation')=?)`, conversation).Scan(&info.ThreadSeen)
-	if err != nil {
-		return info, err
-	}
 	root, err := r.GetInbound(ctx, conversation)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return info, err

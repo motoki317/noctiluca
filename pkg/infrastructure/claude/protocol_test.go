@@ -156,7 +156,7 @@ func TestInputLifecycle(t *testing.T) {
 		kinds       []domain.ModelEventKind
 	}{
 		{"queued", "input", nil},
-		{"started", "input", []domain.ModelEventKind{domain.ModelEventInputStarted, domain.ModelEventTurnStarted}},
+		{"started", "input", []domain.ModelEventKind{domain.ModelEventTurnStarted, domain.ModelEventInputStarted}},
 		{"started", "input", nil},
 		{"completed", "input", nil},
 		{"started", "unknown", []domain.ModelEventKind{domain.ModelEventTurnStarted}},
@@ -204,8 +204,8 @@ func TestInternalCompaction(t *testing.T) {
 	require.False(t, p.compacting)
 	events := p.events(frame{Type: "command_lifecycle", CommandUUID: "queued", State: "started"}, pending)
 	require.Equal(t, []domain.ModelEvent{
-		{Kind: domain.ModelEventInputStarted, InputID: 7},
 		{Kind: domain.ModelEventTurnStarted},
+		{Kind: domain.ModelEventInputStarted, InputID: 7},
 	}, events)
 	require.True(t, p.active)
 	require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result", LocalCommand: "compact"}, pending)[0].Kind,

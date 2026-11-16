@@ -44,14 +44,13 @@ type Reconciler struct {
 type process struct {
 	key         domain.SessionKey
 	token       string
-	lane        string
-	info        domain.SessionContext
 	cancel      context.CancelFunc
 	inputs      chan domain.InboxItem
 	model       domain.ModelSession
 	delivering  *domain.InboxItem
 	unstarted   map[int64]domain.InboxItem
 	turn        *domain.SessionTurn
+	turnStarted bool
 	closeAtIdle bool
 	closing     bool
 	reason      string
@@ -94,16 +93,6 @@ func (r *Reconciler) Notify() {
 	default:
 	}
 }
-func (r *Reconciler) Context(key domain.SessionKey) (domain.SessionContext, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p, ok := r.live[key]
-	if !ok || p.closing {
-		return domain.SessionContext{}, false
-	}
-	return p.info, true
-}
-
 func (r *Reconciler) Start(ctx context.Context) (retErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer func() {
@@ -157,14 +146,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	due := func(at time.Time) { delay = min(delay, max(time.Duration(0), at.Sub(now))) }
 	for _, p := range r.live {
 		if p.closing {
-			continue
-		}
-		if r.config.Accept != nil && !r.config.Accept(p.info) {
-			r.retire(p, domain.ConversationNoLongerAccepted)
-			continue
-		}
-		if p.closeAtIdle && p.idle() {
-			r.retire(p, "rest")
 			continue
 		}
 		for _, item := range p.unstarted {
@@ -249,14 +230,11 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			due(at)
 		}
 	}
-	taskBusy := false
-	for _, p := range r.live {
-		if p.lane == "task" && (p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil || p.closing) {
-			taskBusy = true
-		}
-	}
 	blocked := map[domain.SessionKey]bool{}
 	for _, item := range items {
+		if !item.SessionKey.IsNotice() {
+			item.SessionKey = domain.MainSessionKey
+		}
 		p := r.live[item.SessionKey]
 		if p != nil {
 			if _, sent := p.unstarted[item.ID]; sent {
@@ -266,8 +244,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if blocked[item.SessionKey] {
 			continue
 		}
-		blocked[item.SessionKey] = true
-		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing)) || (item.Lane == "task" && taskBusy) {
+		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing)) {
 			continue
 		}
 		at := readyAt(item)
@@ -275,6 +252,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			due(at)
 			continue
 		}
+		blocked[item.SessionKey] = true
 		if r.config.Accept != nil && !r.config.Accept(item.Payload.Context) {
 			if err := r.inbox.Reject(ctx, item.ID, "session no longer has an accept rule"); err != nil {
 				return 0, err
@@ -282,11 +260,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			r.Notify()
 			continue
 		}
-		if p != nil && p.info.Workdir != item.Payload.Context.Workdir {
-			r.retire(p, "session configuration changed")
-			continue
-		}
-		item.Deadline = now.Add(r.timeout(item.Lane))
+		item.Deadline = now.Add(r.timeout(item))
 		claimed, err := r.inbox.Claim(ctx, item.ID, item.Deadline)
 		if err != nil {
 			return 0, err
@@ -310,7 +284,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 				continue
 			}
 			processCtx, cancel := context.WithCancel(ctx)
-			p = &process{key: item.SessionKey, token: saved.ResumeToken, lane: item.Lane, info: item.Payload.Context, cancel: cancel, inputs: make(chan domain.InboxItem, 1), last: now}
+			p = &process{key: item.SessionKey, token: saved.ResumeToken, cancel: cancel, inputs: make(chan domain.InboxItem, 1), last: now}
 			r.mu.Lock()
 			r.live[item.SessionKey] = p
 			r.mu.Unlock()
@@ -320,10 +294,12 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		p.delivering = &item
 		p.last = now
 		p.inputs <- item
-		if item.Lane == "task" {
-			taskBusy = true
-		}
 		due(item.Deadline)
+	}
+	for _, p := range r.live {
+		if p.closeAtIdle && p.idle() {
+			r.retire(p, "rest")
+		}
 	}
 	return delay, nil
 }
@@ -332,8 +308,8 @@ func (p *process) idle() bool {
 	return !p.closing && p.delivering == nil && len(p.unstarted) == 0 && p.turn == nil && p.model != nil && p.model.Idle()
 }
 
-func (r *Reconciler) timeout(lane string) time.Duration {
-	if lane == "task" {
+func (r *Reconciler) timeout(item domain.InboxItem) time.Duration {
+	if item.Payload.Context.TaskName != "" && item.Payload.Notice == "" {
 		return r.config.TaskTimeout
 	}
 	return r.config.TurnTimeout
@@ -373,7 +349,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			return
 		case item := <-p.inputs:
 			sendCtx, cancel := context.WithDeadline(ctx, item.Deadline)
-			if item.Payload.Notice != "" {
+			if p.key.IsNotice() {
 				var err error
 				if r.config.NotifyOwner == nil {
 					err = errors.New("owner notification destination unavailable")
@@ -406,7 +382,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 					prompt += "\n\n" + extra
 				}
 				if err == nil {
-					model, err = r.model.Open(ctx, domain.ModelSessionConfig{Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: p.info.Workdir, SystemPrompt: prompt})
+					model, err = r.model.Open(ctx, domain.ModelSessionConfig{Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: r.config.Workdir, SystemPrompt: prompt})
 				}
 				if err == nil {
 					events = model.Events()
@@ -511,11 +487,11 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			}
 			return nil
 		}
-		if p.lane == "task" && !out.skipped && !time.Now().Before(item.Deadline) {
+		if item.Payload.Context.TaskName != "" && !out.skipped && !time.Now().Before(item.Deadline) {
 			r.retire(p, domain.DeliveryDeadlineExceeded)
 		}
 		if !out.skipped && p.turn == nil {
-			p.turn = &domain.SessionTurn{InputID: item.ID, Deadline: time.Now().Add(r.timeout(p.lane)), Continuations: item.Payload.Continuations}
+			p.turn = &domain.SessionTurn{InputID: item.ID, Deadline: time.Now().Add(r.timeout(*item))}
 		}
 		if !out.skipped {
 			if p.unstarted == nil {
@@ -548,6 +524,9 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			}
 			return r.save(ctx, p)
 		}
+		if p.turn != nil && p.turnStarted {
+			p.turn.Continuations = max(p.turn.Continuations, item.Payload.Continuations)
+		}
 		p.last = time.Now()
 		return r.inbox.Delivered(ctx, item.ID, r.state(p))
 	}
@@ -565,14 +544,21 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	}
 	switch event.Kind {
 	case domain.ModelEventTurnStarted:
+		p.turnStarted = true
 		if p.turn == nil {
-			p.turn = &domain.SessionTurn{Deadline: p.last.Add(r.timeout(p.lane))}
+			p.turn = &domain.SessionTurn{Deadline: p.last.Add(r.config.TurnTimeout)}
+			for id := range p.unstarted {
+				if p.turn.InputID == 0 || id < p.turn.InputID {
+					p.turn.InputID = id
+				}
+			}
 		}
 	case domain.ModelEventError:
 		if p.turn != nil {
 			p.turn.Failure = event.Err.Error()
 		}
 	case domain.ModelEventTurnFinished:
+		p.turnStarted = false
 		turn := p.turn
 		if turn != nil {
 			if turn.Failure != "" && turn.InputID != 0 {
@@ -592,7 +578,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	return r.save(ctx, p)
 }
 func (r *Reconciler) state(p *process) domain.Session {
-	s := domain.Session{Key: p.key, ResumeToken: p.token, Context: &p.info, Turn: p.turn}
+	s := domain.Session{Key: p.key, ResumeToken: p.token, Context: &domain.SessionContext{Workdir: r.config.Workdir}, Turn: p.turn}
 	if p.closeAtIdle {
 		s.ResumeToken = ""
 	} else if p.model != nil {

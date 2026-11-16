@@ -23,10 +23,11 @@ func TestInputsAwaitTheirOwnStart(t *testing.T) {
 		s := take(t, f.model.opened)
 		require.Equal(t, first, take(t, s.inputs).ID)
 		f.status(t, first, "dispatched")
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
 		f.status(t, first, "done")
-		deadline := f.turn(t, "room", true).Turn.Deadline
-		require.Equal(t, first, f.turn(t, "room", true).Turn.InputID)
+		deadline := f.turn(t, true).Turn.Deadline
+		require.Equal(t, first, f.turn(t, true).Turn.InputID)
 		second := f.enqueue(t, "room", "second")
 		third := f.enqueue(t, "room", "third")
 		require.Equal(t, second, take(t, s.inputs).ID)
@@ -39,8 +40,8 @@ func TestInputsAwaitTheirOwnStart(t *testing.T) {
 		f.status(t, second, "dispatched")
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 		f.status(t, second, "done")
-		require.Equal(t, deadline, f.turn(t, "room", true).Turn.Deadline)
-		require.Equal(t, first, f.turn(t, "room", true).Turn.InputID)
+		require.Equal(t, deadline, f.turn(t, true).Turn.Deadline)
+		require.Equal(t, first, f.turn(t, true).Turn.InputID)
 		require.Empty(t, s.inputs)
 		require.Empty(t, f.model.opened)
 	})
@@ -56,10 +57,11 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 				first := f.enqueue(t, "room", "first")
 				s := take(t, f.model.opened)
 				require.Equal(t, first, take(t, s.inputs).ID)
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
 				f.status(t, first, "done")
 				time.Sleep(100 * time.Millisecond)
-				second := f.enqueue(t, "room", "second")
+				second := f.enqueue(t, "another-room", "second")
 				third := f.enqueue(t, "room", "third")
 				require.Equal(t, second, take(t, s.inputs).ID)
 				require.Equal(t, third, take(t, s.inputs).ID)
@@ -83,6 +85,7 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 				require.Equal(t, "resume-token", s.config.ResumeToken)
 				require.Equal(t, second, take(t, s.inputs).ID)
 				require.Equal(t, third, take(t, s.inputs).ID)
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: third}
 				for _, id := range []int64{first, second, third} {
@@ -91,14 +94,21 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 					require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
 					require.Zero(t, attempts)
 				}
-				if reason != "deadline" {
-					note := take(t, s.inputs)
-					require.Greater(t, note.ID, third)
-					require.Contains(t, note.Text, "previous turn was interrupted")
-					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: note.ID}
-					f.status(t, note.ID, "done")
-				}
+				note := take(t, s.inputs)
+				require.Greater(t, note.ID, third)
+				require.Contains(t, note.Text, "previous turn was interrupted")
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: note.ID}
+				f.status(t, note.ID, "done")
+				require.Equal(t, second, f.turn(t, true).Turn.InputID)
+				require.Equal(t, 1, f.turn(t, true).Turn.Continuations)
+				close(s.events)
+				take(t, s.closed)
+				synctest.Wait()
+				var continuations int
+				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'interrupted:%'").Scan(&continuations))
+				require.Equal(t, 1, continuations)
 				require.Empty(t, s.inputs)
+				require.Empty(t, f.model.opened)
 			})
 		})
 	}
@@ -174,10 +184,10 @@ func TestRefusedOpeningInputAllowsIdleClose(t *testing.T) {
 		id := f.enqueue(t, "room", "refused")
 		s := take(t, f.model.opened)
 		require.Equal(t, id, take(t, s.inputs).ID)
-		f.turn(t, "room", true)
+		f.turn(t, true)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: id, Err: errors.New("refused")}
 		f.status(t, id, "pending")
-		f.turn(t, "room", false)
+		f.turn(t, false)
 		take(t, s.closed)
 		synctest.Wait()
 		var attempts, notes int
@@ -200,6 +210,7 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 				s := take(t, f.model.opened)
 				require.Equal(t, first, take(t, s.inputs).ID)
 				if openingStarted {
+					s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
 					f.status(t, first, "done")
 				}
@@ -212,14 +223,14 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: refused, Err: errors.New("refused")}
 				f.status(t, refused, "pending")
 				synctest.Wait()
-				turn := f.turn(t, "room", true).Turn
+				turn := f.turn(t, true).Turn
 				require.Equal(t, first, turn.InputID)
 				if !openingStarted {
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 					f.status(t, second, "done")
 				}
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-				f.turn(t, "room", false)
+				f.turn(t, false)
 				if openingStarted {
 					f.status(t, first, "done")
 				}
@@ -239,7 +250,7 @@ func TestUnstartedTaskRedeliversWithoutContinuation(t *testing.T) {
 		f.runner.Notify()
 		s := take(t, f.model.opened)
 		require.Equal(t, id, take(t, s.inputs).ID)
-		require.Equal(t, id, f.turn(t, string(item.SessionKey), true).Turn.InputID)
+		require.Equal(t, id, f.turn(t, true).Turn.InputID)
 		f.status(t, id, "dispatched")
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 		synctest.Wait()
@@ -257,7 +268,7 @@ func TestUnstartedTaskRedeliversWithoutContinuation(t *testing.T) {
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 		f.status(t, id, "done")
-		f.turn(t, string(item.SessionKey), false)
+		f.turn(t, false)
 		synctest.Wait()
 		var rows, notes, attempts int
 		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&rows))
@@ -290,6 +301,7 @@ func TestBufferedStartSurvivesDeliveryDeadline(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		second := f.enqueue(t, "room", "blocked")
 		require.Equal(t, second, take(t, sent).ID)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
 		take(t, s.closed)
 		stop()
@@ -340,14 +352,14 @@ func TestLateInputStartDoesNotRecreateTurn(t *testing.T) {
 		s := take(t, f.model.opened)
 		require.Equal(t, id, take(t, s.inputs).ID)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.turn(t, "room", false)
+		f.turn(t, false)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
 		f.status(t, id, "done")
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: id, Err: errors.New("duplicate")}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: -1}
 		synctest.Wait()
-		saved, err := f.sessions.Get(t.Context(), "room")
+		saved, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
 		require.NoError(t, err)
 		require.Nil(t, saved.Turn)
 		var attempts int
@@ -391,11 +403,12 @@ func TestUnstartedInputDeadlineFailsOnlyExpiredItem(t *testing.T) {
 		var marked int
 		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE error LIKE '%delivery deadline exceeded%'").Scan(&marked))
 		require.Equal(t, 1, marked)
-		require.Empty(t, f.model.opened)
+		continued := take(t, f.model.opened)
+		require.Equal(t, domain.MainSessionKey, continued.config.Key)
 	})
 }
 
-func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
+func TestUnstartedTaskDoesNotBlockNextTask(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDeliveryRig(t, Config{})
 		f.model.manualAck, f.model.idle = true, true
@@ -407,23 +420,95 @@ func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 		f.runner.Notify()
 		s := take(t, f.model.opened)
 		require.Equal(t, id, take(t, s.inputs).ID)
-		saved := f.turn(t, string(item.SessionKey), true)
+		saved := f.turn(t, true)
 		require.Equal(t, id, saved.Turn.InputID)
-		require.Equal(t, 1, saved.Turn.Continuations)
+		require.Zero(t, saved.Turn.Continuations)
 		f.status(t, id, "dispatched")
-		_, err = f.inbox.Enqueue(t.Context(), TaskItem("next", "next", ""))
+		next, err := f.inbox.Enqueue(t.Context(), TaskItem("next", "next", ""))
 		require.NoError(t, err)
 		f.runner.Notify()
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.turn(t, string(item.SessionKey), false)
+		require.Equal(t, next, take(t, s.inputs).ID)
 		synctest.Wait()
 		require.Empty(t, f.model.opened)
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
-		f.status(t, id, "done")
-		next := take(t, f.model.opened)
-		require.Equal(t, domain.SessionKey("task:next"), next.config.Key)
-		input := take(t, next.inputs)
-		next.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: input.ID}
-		f.status(t, input.ID, "done")
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+		for _, inputID := range []int64{id, next} {
+			s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: inputID}
+			f.status(t, inputID, "done")
+			require.Equal(t, 1, f.turn(t, true).Turn.Continuations)
+		}
+	})
+}
+
+func TestQueuedContinuationRaisesTurnCount(t *testing.T) {
+	for name, cut := range map[string]bool{"started": false, "restart before acknowledgement": true} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeliveryRig(t, Config{})
+				f.model.manualAck = true
+				stop := f.start(t)
+				first := f.enqueue(t, "room", "first")
+				s := take(t, f.model.opened)
+				take(t, s.inputs)
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
+				f.status(t, first, "done")
+				item := TaskItem("continued", "continued", "")
+				item.Payload.Continuations = 1
+				id, err := f.inbox.Enqueue(t.Context(), item)
+				require.NoError(t, err)
+				f.runner.Notify()
+				require.Equal(t, id, take(t, s.inputs).ID)
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+				f.turn(t, false)
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+				require.Equal(t, id, f.turn(t, true).Turn.InputID)
+				if cut {
+					stop()
+					f.start(t)
+					s = take(t, f.model.opened)
+					require.Equal(t, id, take(t, s.inputs).ID)
+					s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+				}
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
+				f.status(t, id, "done")
+				require.Equal(t, 1, f.turn(t, true).Turn.Continuations)
+				close(s.events)
+				take(t, s.closed)
+				synctest.Wait()
+				active, err := f.inbox.Active(t.Context())
+				require.NoError(t, err)
+				require.Empty(t, active)
+				require.Empty(t, f.model.opened)
+			})
+		})
+	}
+}
+
+func TestLateInputStartDoesNotCountInNextTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{})
+		f.model.manualAck = true
+		f.start(t)
+		item := TaskItem("continued", "continued", "")
+		item.Payload.Continuations = 1
+		first, err := f.inbox.Enqueue(t.Context(), item)
+		require.NoError(t, err)
+		f.runner.Notify()
+		s := take(t, f.model.opened)
+		require.Equal(t, first, take(t, s.inputs).ID)
+		f.turn(t, true)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		f.turn(t, false)
+		next := f.enqueue(t, "another-room", "next")
+		require.Equal(t, next, take(t, s.inputs).ID)
+		f.turn(t, true)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
+		f.status(t, first, "done")
+		require.Zero(t, f.turn(t, true).Turn.Continuations)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: next}
+		f.status(t, next, "done")
+		require.Zero(t, f.turn(t, true).Turn.Continuations)
 	})
 }

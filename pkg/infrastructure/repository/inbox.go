@@ -124,24 +124,19 @@ func (r *inboxRepository) RetryFailedTurn(ctx context.Context, id int64, failure
 }
 
 func finishInbox(ctx context.Context, tx *sql.Tx, id int64, from, failure string, limit int, retry time.Time) (bool, error) {
-	var status, key, raw string
+	var status string
+	var key domain.SessionKey
 	var attempts int
-	err := tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status=? RETURNING status,session_key,payload,attempts`, limit, retry.UTC(), failure, id, from).Scan(&status, &key, &raw, &attempts)
+	err := tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status=? RETURNING status,session_key,attempts`, limit, retry.UTC(), failure, id, from).Scan(&status, &key, &attempts)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if status == "dead" {
-		var payload domain.InboxPayload
-		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+	if status == "dead" && !key.IsNotice() {
+		if err := insertOwnerNotice(ctx, tx, fmt.Sprintf("failure:%d", id), fmt.Sprintf("Work item %d for %s failed after %d attempts: %s", id, key, attempts, failure)); err != nil {
 			return false, err
-		}
-		if payload.Notice == "" {
-			if err := insertOwnerNotice(ctx, tx, fmt.Sprintf("failure:%d", id), fmt.Sprintf("Work item %d for %s failed after %d attempts: %s", id, key, attempts, failure)); err != nil {
-				return false, err
-			}
 		}
 	}
 	return status == "dead", nil

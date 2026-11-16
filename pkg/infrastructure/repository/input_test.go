@@ -10,10 +10,9 @@ import (
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 )
 
-func TestInputContextUsesPostingOrderAndDeliveredHistory(t *testing.T) {
+func TestInputContextUsesPostingOrder(t *testing.T) {
 	db := openDB(t)
 	r := repository.NewEventRepository(db)
-	inbox := repository.NewInboxRepository(db)
 	at := time.Date(2026, 11, 6, 7, 29, 1, 0, time.UTC)
 	root := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "room", MessageRef: "thread", Sender: domain.Sender{ID: "person", Kind: domain.SenderHuman}, Text: "Thread subject", ReceivedAt: at.Add(-time.Hour)}
 	require.NoError(t, r.SaveInbound(t.Context(), root))
@@ -30,40 +29,9 @@ func TestInputContextUsesPostingOrderAndDeliveredHistory(t *testing.T) {
 	require.True(t, info.Running, "a later finish must not hide the running turn at posting time")
 	require.Equal(t, at.Add(time.Second), info.LastReply)
 	require.Equal(t, "Thread subject", info.Root.Text)
-	require.False(t, info.ThreadSeen)
-	for _, accepted := range []bool{false, true} {
-		event := root
-		event.Conversation, event.Parent, event.MessageRef = "thread", "room", "reply"
-		event.Accepted = &accepted
-		item := domain.InboxItem{SourceKey: "rejected", SessionKey: "room", Lane: "conv", Status: "done", Payload: domain.InboxPayload{Event: &event}}
-		if accepted {
-			item.SourceKey = "delivered"
-		}
-		_, err := inbox.Enqueue(t.Context(), item)
-		require.NoError(t, err)
-		info, err := r.InputContext(t.Context(), "room", "thread", at.Add(3*time.Second))
-		require.NoError(t, err)
-		require.Equal(t, accepted, info.ThreadSeen)
-		require.False(t, info.Running)
-	}
-}
-
-func TestInputContextCountsDeliveredInputsAcrossSessionKeys(t *testing.T) {
-	accepted := true
-	db := openDB(t)
-	r := repository.NewEventRepository(db)
-	inbox := repository.NewInboxRepository(db)
-	payload := domain.InboxPayload{Event: &domain.InboundEvent{Accepted: &accepted, Conversation: "thread"}}
-	_, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "input:1", SessionKey: "room", Lane: "conv", Status: "done", Payload: payload})
+	info, err = r.InputContext(t.Context(), "room", "thread", at.Add(3*time.Second))
 	require.NoError(t, err)
-	for _, key := range []domain.SessionKey{"room", "other"} {
-		info, err := r.InputContext(t.Context(), key, "thread", time.Now())
-		require.NoError(t, err)
-		require.True(t, info.ThreadSeen)
-	}
-	other, err := r.InputContext(t.Context(), "other", "unseen", time.Now())
-	require.NoError(t, err)
-	require.False(t, other.ThreadSeen)
+	require.False(t, info.Running)
 }
 
 func TestInputContextUsesCurrentRootText(t *testing.T) {

@@ -376,8 +376,8 @@ func compactSession(t *testing.T, mode string) (*session, string) {
 func compactTurn(t *testing.T, s *session, id int64, text string) {
 	t.Helper()
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: id, Text: text}))
-	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}, nextEvent(t, s))
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}, nextEvent(t, s))
 	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "reply"}, nextEvent(t, s))
 }
 
@@ -466,8 +466,8 @@ func TestSessionIdleCompactionSkipped(t *testing.T) {
 			}
 			if name == "active" {
 				require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: text}))
-				require.Equal(t, domain.ModelEventInputStarted, nextEvent(t, s).Kind)
 				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+				require.Equal(t, domain.ModelEventInputStarted, nextEvent(t, s).Kind)
 				require.Equal(t, "active", nextEvent(t, s).Text)
 			} else {
 				compactTurn(t, s, 1, text)
@@ -742,8 +742,8 @@ func TestSessionResumeAndConfig(t *testing.T) {
 		require.Contains(t, joined, flag)
 	}
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
-	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1}, nextEvent(t, s))
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1}, nextEvent(t, s))
 	require.Equal(t, "日本語", nextEvent(t, s).Text)
 	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
 	}
@@ -1032,7 +1032,7 @@ func TestConcurrentSend(t *testing.T) {
 		wg.Go(func() { errs <- s.Send(t.Context(), domain.UserInput{Text: "concurrent"}) })
 	}
 	for i := 0; i < 20; i++ {
-		for _, kind := range []domain.ModelEventKind{domain.ModelEventInputStarted, domain.ModelEventTurnStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished} {
+		for _, kind := range []domain.ModelEventKind{domain.ModelEventTurnStarted, domain.ModelEventInputStarted, domain.ModelEventText, domain.ModelEventToolCall, domain.ModelEventTurnFinished} {
 			require.Equal(t, kind, nextEvent(t, s).Kind)
 		}
 	}
