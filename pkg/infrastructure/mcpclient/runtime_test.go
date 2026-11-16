@@ -66,7 +66,8 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			}
 			owner := hubClient(t, hub, "old")
 			done := make(chan error, 1)
-			go func() { done <- m.Start(t.Context()) }()
+			var notified int
+			go func() { done <- m.Start(t.Context(), func() { notified++ }) }()
 			if scenario == "401" || scenario == "401-no-refresh" {
 				f.runtimeStatus.Store(http.StatusUnauthorized)
 			}
@@ -85,6 +86,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("auth failure did not disable remote")
 			}
+			require.Equal(t, 1, notified)
 			require.NoError(t, m.Shutdown(t.Context()))
 			items, err := inbox.Active(t.Context())
 			require.NoError(t, err)
