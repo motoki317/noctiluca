@@ -57,10 +57,7 @@ func TestCodexRunHelper(t *testing.T) {
 			if os.Getenv("NOCTILUCA_CODEX_RUN_HANG") == "1" {
 				continue
 			}
-			_, refs, ok := strings.Cut(request.Params.Input[0].Text, "\nrefs: conversation=")
-			require.True(t, ok)
-			line, _, _ := strings.Cut(refs, "\n")
-			target, _, _ := strings.Cut(line, " thread=")
+			tool, args := slackSendFromInput(t, request.Params.Input[0].Text, "PONG")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			client := mcp.NewClient(&mcp.Implementation{Name: "fake-codex", Version: "1"}, nil)
 			session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint.URL,
@@ -72,7 +69,7 @@ func TestCodexRunHelper(t *testing.T) {
 			for _, tool := range listed.Tools {
 				require.Nil(t, tool.Meta, tool.Name)
 			}
-			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "reply", Arguments: map[string]any{"target": target, "text": "PONG"}})
+			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 			require.NoError(t, err)
 			require.False(t, result.IsError)
 			require.NoError(t, session.Close())

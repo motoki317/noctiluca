@@ -4,7 +4,7 @@ This session ends after this turn. The next input here opens a new session that 
 
 Write what the new session needs:
 
-- in short-term memory, each piece of work in progress and each promised follow-up, with its request, the ref to post the result at, and its done condition;
+- in short-term memory, open work and promised follow-ups, with each request, its messaging entry and native destination IDs, and its done condition;
 - in short-term memory, each pending `watch` command and `wake_at` note, and what it is for;
 - in external memory, under their theme, facts learned in this session.
 

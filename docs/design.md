@@ -18,7 +18,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 ## Sessions and replies
 
 - One session per channel. Threads in a channel share context. The cost is that one channel's turns run in order. Background tools keep turns short.
-- Explicit post refs. With several threads in one session, an implicit "current conversation" picks the wrong thread, so every post names a ref from an input.
+- Adapter send tools are the only posting path. Each adapter puts its native destination IDs in the input header and documents its owner's DM channel. The model remembers where requested work belongs when its background result arrives.
 - Only tools post. OpenClaw posted the final text unless it was a magic `NO_REPLY` string, which caused stray posts.
 
 ## Model adapter

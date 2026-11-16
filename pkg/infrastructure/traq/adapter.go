@@ -24,6 +24,8 @@ type Config struct {
 }
 
 type adapter struct {
+	ownerDMMu          sync.Mutex
+	ownerDM            string
 	name               string
 	config             Config
 	api                *sdk.APIClient
@@ -69,13 +71,6 @@ func validID(id string) bool { return idPattern.MatchString(id) }
 
 func Conversation(name, channel, message string) domain.ConversationRef {
 	return domain.NewConversationRef(name, channel, message)
-}
-
-func (a *adapter) PostRefs(_, message domain.ConversationRef, direct bool) []domain.NamedRef {
-	if direct || message == "" {
-		return nil
-	}
-	return []domain.NamedRef{{Name: "quote", Ref: message}}
 }
 
 func (a *adapter) destination(ref domain.ConversationRef) (string, string, error) {

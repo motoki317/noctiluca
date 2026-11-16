@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"unicode/utf8"
@@ -30,8 +31,31 @@ type toolInput struct {
 	Emoji   string `json:"emoji"`
 }
 
-func (a *adapter) ToolNotes() string {
-	return fmt.Sprintf("Channel, thread, and message arguments are bare numeric IDs. A ref ending in a colon is a channel. In a ref with a final ID, that ID is a thread or a message. A top-level channel input (a message or a reaction) also has a `thread` ref: posting there starts a thread from the message. Talk at `conversation`, including quick investigations and their results. Use `thread` only for a project that spans days, or when asked for a thread. Other inputs have only `conversation`; post there. Use %[1]s_read_history and %[1]s_read_thread for context. Only user mentions notify. If an answer needs any tool besides the reply, first show that you started. React with %[1]s_react using `channel` and `id` from the `message:` line.", a.name)
+func (a *adapter) ToolNotes(ctx context.Context) string {
+	notes := fmt.Sprintf(`Channel, thread, and message arguments are bare numeric IDs. The input's channel and thread locate the conversation.
+Use %[1]s_send to post text. Omit thread for top-level chat, including quick investigations and their results.
+To start a thread, set thread to the input's message ID. Start a thread only for a project that spans days or when asked.
+For an existing thread, copy thread. In a DM, omit thread. Use %[1]s_read_history and %[1]s_read_thread for context. Only user mentions notify.
+If an answer needs any tool besides %[1]s_send, first show that you started: call %[1]s_react with message_channel as channel and message as message.`, a.name)
+	if a.config.Owner == "" {
+		return notes
+	}
+	a.ownerDMMu.Lock()
+	defer a.ownerDMMu.Unlock()
+	if a.ownerDM == "" {
+		ref, err := a.DirectMessage(ctx, a.config.Owner)
+		if err != nil {
+			slog.WarnContext(ctx, "Resolve owner DM for tool notes failed", "messaging", a.name, "error", err)
+			return notes
+		}
+		channel, _, err := a.destination(ref)
+		if err != nil {
+			slog.WarnContext(ctx, "Invalid owner DM for tool notes", "messaging", a.name, "error", err)
+			return notes
+		}
+		a.ownerDM = channel.String()
+	}
+	return notes + fmt.Sprintf("\nOwner DM: use %s_send with channel=%s and no thread.", a.name, a.ownerDM)
 }
 
 func (a *adapter) Tools() []domain.Tool {
@@ -80,7 +104,7 @@ func (a *adapter) Tools() []domain.Tool {
 		}}
 	}
 	return []domain.Tool{
-		makeTool("send", "Send a message to channel. With thread, post in that thread, or start a thread from the message with that ID.", map[string]any{"channel": str, "thread": str, "text": str}, []string{"channel", "text"}, a.sendTool),
+		makeTool("send", domain.PostingGuidance+" Send a message to channel. With thread, post in that thread, or start a thread from the message with that ID.", map[string]any{"channel": str, "thread": str, "text": str}, []string{"channel", "text"}, a.sendTool),
 		makeTool("read_history", "Read recent channel messages, newest first. Paginate with before.", map[string]any{"channel": str, "before": str, "limit": limit}, []string{"channel"}, a.readHistory),
 		makeTool("read_thread", "Read a thread's starter and replies, newest first. Paginate replies with before.", map[string]any{"channel": str, "thread": str, "before": str, "limit": limit}, []string{"channel", "thread"}, a.readThread),
 		makeTool("search", "Search messages in the guild that contains channel. DM channels cannot be searched.", map[string]any{"channel": str, "query": str, "offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 9975}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 25}}, []string{"channel", "query"}, a.search),

@@ -131,18 +131,19 @@ heartbeat: {enabled: false}
 			t.Fatal("socket startup timed out", name)
 		}
 		for i, tc := range []struct {
-			channel, user, bot string
-			accepted           bool
+			channel, user, bot, thread string
+			accepted                   bool
 		}{
-			{"DDIRECT", owners[name], "", name == "support"},
-			{"C_UNLISTED", "U_MEMBER", "B_OTHER", name == "support"},
-			{"COWNER", "U_MEMBER", "", name == "slack"},
+			{"DDIRECT", owners[name], "", "", name == "support"},
+			{"C_UNLISTED", "U_MEMBER", "B_OTHER", "", name == "support"},
+			{"COWNER", "U_MEMBER", "", "", name == "slack"},
+			{"COWNER", owners[name], "", "1.2", true},
 		} {
 			channel := tc.channel
 			id := fmt.Sprintf("shared-%d", i)
 			require.NoError(t, socket.WriteJSON(map[string]any{"type": "events_api", "envelope_id": id, "payload": map[string]any{
 				"type": "event_callback", "event_id": id, "event": map[string]any{
-					"type": "message", "channel": channel, "user": tc.user, "bot_id": tc.bot, "text": "<@U_BOT> hello", "ts": fmt.Sprintf("1.%d", i),
+					"type": "message", "channel": channel, "user": tc.user, "bot_id": tc.bot, "text": "<@U_BOT> hello", "ts": fmt.Sprintf("1.%d", i), "thread_ts": tc.thread,
 				},
 			}}))
 			require.Eventually(t, func() bool {
@@ -154,6 +155,7 @@ heartbeat: {enabled: false}
 				post := takePost()
 				require.Equal(t, "xoxb-"+name, post.Get("token"))
 				require.Equal(t, channel, post.Get("channel"))
+				require.Equal(t, tc.thread, post.Get("thread_ts"))
 			}
 		}
 	}

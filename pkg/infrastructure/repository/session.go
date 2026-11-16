@@ -124,10 +124,9 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 		return err
 	}
 	started := true
-	var rawInput string
 	if turn.InputID != 0 {
 		var status string
-		if err := tx.QueryRowContext(ctx, `SELECT status,payload FROM inbox WHERE id=?`, turn.InputID).Scan(&status, &rawInput); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM inbox WHERE id=?`, turn.InputID).Scan(&status); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		started = status == "done"
@@ -149,19 +148,7 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 			item := domain.InboxItem{SourceKey: source, SessionKey: key, Lane: "task", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Context: *info, Input: domain.UserInput{Text: note}}}
 			if info.TaskName == "" {
 				item.Lane = "conv"
-				item.Payload.Input.Text += "\nThe interrupted turn may cover several inputs: finish each unfinished part at the ref its input's refs and the messaging notes call for."
-				var input domain.InboxPayload
-				if json.Unmarshal([]byte(rawInput), &input) == nil {
-					item.Payload.Target = input.Target
-					item.Payload.MessageRef = input.MessageRef
-					if input.Event != nil {
-						item.Payload.Target = input.Event.Conversation
-						item.Payload.MessageRef = input.Event.MessageRef
-					}
-				}
-				if item.Payload.Target == "" {
-					item.Payload.Target = info.Conversation
-				}
+				item.Payload.Input.Text += "\nThe interrupted turn may cover several inputs: finish each unfinished part using the posting instructions in its input."
 			}
 			if _, err := insertInbox(ctx, tx, item); err != nil {
 				return err

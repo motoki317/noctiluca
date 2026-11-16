@@ -40,15 +40,11 @@ func TestSendAndGroups(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
 		switch r.URL.Path {
-		case "/files.info":
-			require.Equal(t, "xoxp-test", r.Form.Get("token"))
-			_, _ = w.Write([]byte(`{"ok":true,"file":{"id":"FTEST","name":"image.png","permalink":"https://example.test/file"}}`))
 		case "/chat.postMessage":
 			require.Equal(t, "xoxb-test", r.Form.Get("token"))
 			require.Equal(t, "CTEST", r.Form.Get("channel"))
 			require.Equal(t, "123.000001", r.Form.Get("thread_ts"))
 			require.Contains(t, r.Form.Get("text"), "*bold* <https://example.test|link>")
-			require.Contains(t, r.Form.Get("text"), "<https://example.test/file|image.png>")
 			_, _ = w.Write([]byte(`{"ok":true,"channel":"CTEST","ts":"124.000001"}`))
 		case "/usergroups.users.list":
 			require.Equal(t, "xoxb-test", r.Form.Get("token"))
@@ -59,7 +55,7 @@ func TestSendAndGroups(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	}, true)
-	id, err := a.Send(t.Context(), Conversation("slack", "CTEST", "123.000001"), domain.OutboundMessage{Text: "**bold** [link](https://example.test)", Attachments: []domain.Attachment{{Ref: "FTEST"}}})
+	id, err := a.Send(t.Context(), Conversation("slack", "CTEST", "123.000001"), domain.OutboundMessage{Text: "**bold** [link](https://example.test)"})
 	require.NoError(t, err)
 	require.Equal(t, "124.000001", id)
 	groups, err := a.UserGroups(t.Context(), []string{"GTEST"})

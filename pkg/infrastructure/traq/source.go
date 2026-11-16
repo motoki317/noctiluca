@@ -2,6 +2,7 @@ package traq
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -72,12 +73,15 @@ func (a *adapter) channelName(ctx context.Context, id string) string {
 	return name
 }
 
-func (a *adapter) SourceInfo(ctx context.Context, ref domain.ConversationRef, user string, root bool) domain.SourceInfo {
+func (a *adapter) SourceInfo(ctx context.Context, event domain.InboundEvent, root bool) domain.SourceInfo {
+	ref, user := event.Conversation, event.Sender.ID
 	info := domain.SourceInfo{Conversation: string(ref), Sender: user}
 	channel, message, err := a.destination(ref)
 	if err != nil {
 		return info
 	}
+	_, messageID, _ := a.destination(event.MessageRef)
+	info.Location = fmt.Sprintf("%s: channel=%s message_id=%s", a.name, channel, messageID)
 	info.Conversation = a.channelName(ctx, channel)
 	if user != "" {
 		info.Sender = a.user(ctx, user).DisplayName

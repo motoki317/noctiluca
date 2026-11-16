@@ -11,7 +11,7 @@ Read `short-term.md` in full.
 
 Take each short-term entry:
 
-- Open work stays in short-term memory: its request, the ref to post the result at, its done condition, and its latest status, not a history of checks.
+- Open work stays in short-term memory: its request, messaging entry, native destination IDs, done condition, and latest status. Omit the history of checks.
 - A rule the owner taught, or one that repeated experience confirms, goes to long-term memory, stated generally.
 - A specific fact or procedure goes to external memory under its theme, including facts the owner taught or corrected.
 - Delete everything else: finished work, logs of past reports, superseded facts.
@@ -33,4 +33,4 @@ Read the diff of the commits you made in this run and the external pages you cha
 
 Propose changes to `owner/`, to tools, and to the harness to the owner instead of making them. Do not run a behavior experiment (`procedures/hillclimb.md`) here; it needs the owner's request.
 
-If you merged pages that other people wrote, or have proposals that you have not sent before, call `reply` with `target: "owner"` and send only those, briefly. Record each sent proposal in short-term memory until the owner decides or it no longer applies. With nothing new, post nothing. Then end the turn.
+If you merged pages that other people wrote, or have new proposals, send only those to the owner, briefly. Use the messaging adapter's send tool and the owner DM channel in its notes. Record each sent proposal in short-term memory until the owner decides or it no longer applies. With nothing new, post nothing. Then end the turn.

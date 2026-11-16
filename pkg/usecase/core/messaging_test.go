@@ -51,8 +51,8 @@ func (m *namedMessaging) DirectMessage(_ context.Context, user string) (domain.C
 	return domain.ConversationRef(m.name + ":dm:" + user), nil
 }
 
-func (m *namedMessaging) SourceInfo(_ context.Context, ref domain.ConversationRef, sender string, _ bool) domain.SourceInfo {
-	m.info <- sourceCall{ref: ref, sender: sender}
+func (m *namedMessaging) SourceInfo(_ context.Context, event domain.InboundEvent, _ bool) domain.SourceInfo {
+	m.info <- sourceCall{ref: event.Conversation, sender: event.Sender.ID}
 	return domain.SourceInfo{Conversation: m.name + " room", Sender: m.name + " user"}
 }
 
@@ -60,8 +60,8 @@ func (m *namedMessaging) SetConversationFilter(filter func(domain.ConversationRe
 	m.filter = filter
 }
 
-func (m *namedMessaging) ToolNotes() string {
-	return "Use " + m.name + "_send with " + m.name + ": refs."
+func (m *namedMessaging) ToolNotes(context.Context) string {
+	return "Use " + m.name + "_send with native IDs."
 }
 func (m *namedMessaging) Tools() []domain.Tool {
 	return []domain.Tool{{Name: m.name + "_send", Description: "Send a message.", InputSchema: json.RawMessage(`{"type":"object"}`)}}
@@ -72,15 +72,8 @@ func TestMessagingRouter(t *testing.T) {
 	router, err := newMessagingRouter([]Messaging{{Name: "beta", Adapter: beta}, {Name: "alpha", Adapter: alpha}})
 	require.NoError(t, err)
 	require.Equal(t, "beta", router.instances[0].config.Name)
-	for _, adapter := range []*namedMessaging{alpha, beta} {
-		ref := domain.ConversationRef(adapter.name + ":room:thread:opaque")
-		id, err := router.Send(t.Context(), ref, domain.OutboundMessage{Text: "hello"})
-		require.NoError(t, err)
-		require.Equal(t, "sent", id)
-		require.Equal(t, ref, take(t, adapter.out).Conversation)
-	}
 	for _, ref := range []domain.ConversationRef{"alpha", "missing:room"} {
-		_, err := router.Send(t.Context(), ref, domain.OutboundMessage{})
+		_, err := router.resolve(ref)
 		require.ErrorContains(t, err, "unknown messaging entry")
 	}
 	alpha.shutdownErr = errors.New("shutdown failed")
@@ -113,7 +106,7 @@ func TestMessagingConfigurationValidation(t *testing.T) {
 	}
 }
 
-func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
+func TestMultipleMessagingRoutesInputsAndOwner(t *testing.T) {
 	alpha, beta := newNamedMessaging("alpha"), newNamedMessaging("beta")
 	f := setup(t, Config{}, []Messaging{
 		{Name: "beta", Adapter: beta, Owner: "primary", Rules: map[domain.ConversationRef]domain.AcceptRule{"beta:room": {Users: []string{"primary"}}}},
@@ -132,7 +125,7 @@ func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
 	require.Contains(t, take(t, second.inputs).Text, "alpha user (owner)")
 	take(t, alpha.info)
 	for _, sentence := range []string{
-		"alpha:\n" + alpha.ToolNotes(), "beta:\n" + beta.ToolNotes(),
+		"alpha:\nUse alpha_send with native IDs.", "beta:\nUse beta_send with native IDs.",
 	} {
 		require.Equal(t, 1, strings.Count(second.config.SystemPrompt, sentence), sentence)
 	}
@@ -145,34 +138,13 @@ func TestMultipleMessagingRoutesInputsRepliesAndOwner(t *testing.T) {
 	require.False(t, alpha.filter("beta:room"))
 	require.False(t, beta.filter("alpha:room"))
 	require.False(t, beta.filter("missing:room"))
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "alpha:room"})
-	for _, adapter := range []*namedMessaging{alpha, beta} {
-		ref := domain.ConversationRef(adapter.name + ":room:thread")
-		raw, err := json.Marshal(map[string]any{"target": ref, "text": "reply", "attachments": []domain.Attachment{{Ref: "file"}}})
-		require.NoError(t, err)
-		_, err = f.hub.tools["reply"].Handler(ctx, raw)
-		require.NoError(t, err)
-		sent := take(t, adapter.out)
-		require.Equal(t, ref, sent.Conversation)
-		require.Equal(t, []domain.Attachment{{Ref: "file"}}, sent.Message.Attachments)
-		history, err := f.events.ListOutbound(t.Context(), ref, 10)
-		require.NoError(t, err)
-		require.Len(t, history, 1)
-	}
-	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"missing:room","text":"no route"}`))
-	require.ErrorContains(t, err, "unknown messaging entry")
-	_, err = impl.prepare(t.Context(), domain.InboxItem{SessionKey: "alpha:room", ReadyAt: time.Now(), Payload: domain.InboxPayload{Target: "missing:room"}})
-	require.ErrorContains(t, err, "unknown messaging entry")
-	_, err = f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"owner","text":"owner reply"}`))
-	require.NoError(t, err)
-	require.Equal(t, "primary", take(t, beta.dmUsers))
-	require.Equal(t, domain.ConversationRef("beta:dm:primary"), take(t, beta.out).Conversation)
+	require.NotContains(t, f.hub.tools, "reply")
 	require.NoError(t, impl.notifyOwner(t.Context(), "owner notice"))
 	require.Equal(t, "primary", take(t, beta.dmUsers))
 	require.Equal(t, "owner notice", take(t, beta.out).Message.Text)
 	history, err := f.events.ListOutbound(t.Context(), "beta:dm:primary", 10)
 	require.NoError(t, err)
-	require.Len(t, history, 2)
+	require.Len(t, history, 1)
 }
 
 func TestMessagingRetriesDoNotStopOtherInstances(t *testing.T) {

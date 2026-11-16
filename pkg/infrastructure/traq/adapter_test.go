@@ -170,12 +170,17 @@ func TestProviders(t *testing.T) {
 	ref, err := a.DirectMessage(t.Context(), "owner")
 	require.NoError(t, err)
 	require.Equal(t, Conversation("team", "dm", ""), ref)
-	info := a.SourceInfo(t.Context(), Conversation("team", "channel", "root"), "owner", true)
+	info := a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: Conversation("team", "channel", "root"), MessageRef: Conversation("team", "channel", "message"), Sender: domain.Sender{ID: "owner"}}, true)
+	require.Equal(t, "team: channel=channel message_id=message", info.Location)
+	a.config.Owner = "owner"
+	notes := a.ToolNotes(t.Context())
+	require.Contains(t, notes, "Owner DM: use team_send with channel=dm and no quote_message_id.")
+	require.Contains(t, a.Tools()[0].Description, domain.PostingGuidance)
 	require.Equal(t, "#parent/child", info.Conversation)
 	require.Equal(t, "Owner", info.Sender)
 	require.Equal(t, "request", info.ThreadText)
 	require.Equal(t, int64(100), info.ThreadAt.Unix())
-	require.Equal(t, "Owner", a.SourceInfo(t.Context(), ref, "owner", false).Conversation)
+	require.Equal(t, "Owner", a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: ref, Sender: domain.Sender{ID: "owner"}}, false).Conversation)
 	groups, err := a.UserGroups(t.Context(), []string{"group"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"member"}, groups["group"])
@@ -323,7 +328,7 @@ func TestErrorsDoNotExposeResponseSecrets(t *testing.T) {
 	_, err := a.Send(t.Context(), Conversation("team", "channel", ""), domain.OutboundMessage{Text: "hi"})
 	require.ErrorContains(t, err, "403")
 	require.NotContains(t, err.Error(), "test-token")
-	require.Equal(t, "channel", a.SourceInfo(t.Context(), Conversation("team", "channel", ""), "", false).Conversation)
+	require.Equal(t, "channel", a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: Conversation("team", "channel", ""), Sender: domain.Sender{ID: ""}}, false).Conversation)
 }
 
 func TestHistoryFailureAfterPost(t *testing.T) {

@@ -24,6 +24,8 @@ type Config struct {
 }
 
 type adapter struct {
+	ownerDMMu          sync.Mutex
+	ownerDM            string
 	name               string
 	config             Config
 	history            domain.EventRepository
@@ -213,14 +215,6 @@ func (a *adapter) Shutdown(ctx context.Context) error {
 
 func Conversation(name, channel, thread string) domain.ConversationRef {
 	return domain.NewConversationRef(name, channel, thread)
-}
-
-func (a *adapter) PostRefs(conversation, message domain.ConversationRef, direct bool) []domain.NamedRef {
-	_, thread, err := a.destination(conversation)
-	if err != nil || direct || message == "" || thread != 0 {
-		return nil
-	}
-	return []domain.NamedRef{{Name: "thread", Ref: message}}
 }
 
 func parseID(value string) (snowflake.ID, error) {

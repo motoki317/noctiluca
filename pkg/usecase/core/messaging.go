@@ -75,14 +75,6 @@ func (r *messagingRouter) resolve(ref domain.ConversationRef) (*messagingInstanc
 	return nil, fmt.Errorf("unknown messaging entry in ref %q", ref)
 }
 
-func (r *messagingRouter) Send(ctx context.Context, ref domain.ConversationRef, message domain.OutboundMessage) (string, error) {
-	instance, err := r.resolve(ref)
-	if err != nil {
-		return "", err
-	}
-	return instance.config.Adapter.Send(ctx, ref, message)
-}
-
 func (r *messagingRouter) Shutdown(ctx context.Context) (result error) {
 	for _, instance := range r.instances {
 		result = errors.Join(result, instance.config.Adapter.Shutdown(ctx))

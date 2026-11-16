@@ -12,7 +12,7 @@ flowchart LR
   Rec -->|Open / Send| Model[model adapter]
   Model <--> CLI[model CLI]
   CLI -->|MCP, session token| Hub[tool hub<br/>pkg/usecase/toolhub]
-  Hub -->|reply, watch, wake_at, schedules| Core
+  Hub -->|watch, wake_at, schedules| Core
   Hub -->|adapter tools| MA
   Hub --> Ext[external MCP servers]
   CLI -->|file tools and git| Mem[(memory Git repo)]
@@ -43,9 +43,8 @@ sequenceDiagram
   R->>M: Send (starts a turn, or joins or queues behind the running one)
   M-->>R: input_started (for this row's input ID)
   R->>D: row done
-  M->>H: reply(target, text)
-  H->>C: reply
-  C->>A: Send (to the adapter named by the target's prefix)
+  M->>H: slack_send(channel, thread_ts, text)
+  H->>A: send tool
   A->>S: chat.postMessage
   M-->>R: turn_finished
 ```
@@ -57,7 +56,7 @@ A row counts as delivered when the model reports that it started on the row's in
 ## Sessions
 
 - A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, consolidation) runs in its own session.
-- Chat and watch/wake inputs name the place, sender, and local time, with ordering context. The header ends with `refs: conversation=<ref>` and any refs the messaging adapter names for the input, such as Slack's `thread`. The adapter's notes say which ref to post at. `reply` always takes an explicit ref.
+- Chat inputs name the place, sender, and local time, with ordering context. Each adapter formats a location line with its native IDs. For example, Slack supplies `channel`, `thread_ts`, and `timestamp`. Its send tool takes `channel` and an optional `thread_ts`. Watch results and wake notes arrive as plain inputs without posting targets.
 - A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
 - With consolidation enabled, heartbeat and cron tasks keep context across fires within a day. The consolidation fire marks the day boundary. A task's last fire is the one whose next fire falls at or after that boundary. After that fire, its rest waits for the session's unfinished watches, dispatched inputs, and pending inputs due before its next fire. The model process must also be idle. Pending inputs due at or after the next fire do not hold rest. Without another scheduled fire, only dispatched or currently due inputs and unfinished watches hold rest. The rest uses `procedures/rest.md` in the same live process. Once queued, it runs ahead of other tasks and of its own session's later inputs. If the task's next fire comes while a watch or background job of the last fire still runs, nothing is queued yet, so that fire resumes the old context and the task rests after a later last fire.
@@ -75,7 +74,7 @@ Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at`
 - Delivery failures and turn failures count against one budget of three attempts per row, so an earlier delivery failure moves a fire's first turn retry to the 30-minute delay. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
 - A pending fire retry that is due before the task's next fire holds the task's end-of-day rest.
 - Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
-- A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input at the ref its input's refs and the adapter's notes call for. A turn cut at its timeout does not continue. Tasks notify the owner.
+- A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input using its posting instructions. A turn cut at its timeout does not continue. Tasks notify the owner.
 - Conversation sessions run concurrently. Scheduled tasks run one at a time.
 - A failed row never stops the process. Only a failure of SQLite or of the tool-hub listener does.
 
@@ -88,14 +87,14 @@ type MessagingAdapter interface {
 	Start(ctx context.Context, consume func(context.Context, InboundEvent) error) error
 	Send(ctx context.Context, to ConversationRef, msg OutboundMessage) (messageID string, err error)
 	Tools() []Tool     // platform operations, offered to the model through the tool hub
-	ToolNotes() string // short usage notes added to the prompt
+	ToolNotes(context.Context) string // usage notes and the owner DM channel, added to the prompt
 	Shutdown(context.Context) error
 }
 ```
 
-Each adapter is a named entry under `messaging` in the config. The core reads only the first segment of a `ConversationRef`, which is the entry's name, and routes `Send`, the `reply` tool, and lookups to the adapter with that name. The rest of the ref is opaque, and only that adapter interprets it. An adapter's tools carry the same name as a prefix (`slack_send` for an entry named `slack`).
+Each adapter is a named entry under `messaging` in the config. The core reads only the first segment of a `ConversationRef`, which is the entry's name, to select the adapter for input lookups and accept rules. The rest of the ref is opaque, and only that adapter interprets it. An adapter's tools carry the same name as a prefix (`slack_send` for an entry named `slack`).
 
-`InboundEvent` carries the conversation and its parent, the sender (human or bot), text, attachments, and whether the agent is mentioned. An adapter can also implement `SourceInfoProvider` (readable channel and sender names for input headers), `UserGroupProvider` (group membership for accept rules), `DirectMessageProvider` (the owner's DM, for notices), and `ConversationFilter` (skips remote lookups in ignored conversations).
+`InboundEvent` carries the conversation and its parent, the sender (human or bot), text, attachments, and whether the agent is mentioned. An adapter can also implement `SourceInfoProvider` (readable names and a location line with native IDs for input headers), `UserGroupProvider` (group membership for accept rules), `DirectMessageProvider` (the owner's DM, for notices), and `ConversationFilter` (skips remote lookups in ignored conversations).
 
 Core ↔ model adapter (`pkg/domain/model.go`):
 
@@ -130,6 +129,6 @@ Every session, scheduled tasks included, gets the same tools: the hub's tools, e
 
 Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 
-Owner notices, and replies whose target is the literal `owner`, go to the `owner` of the first `messaging` entry. Input headers append ` (owner)` to a sender whose ID matches the `owner` of the entry the message came from, so the model knows who the owner is. The marker grants no permission.
+Owner notices use `DirectMessageProvider` and `Send` on the first `messaging` entry. Model posts use each adapter's send tool. Each adapter's prompt notes name its owner's DM channel. Input headers append ` (owner)` to a sender whose ID matches the `owner` of the entry the message came from, so the model knows who the owner is. The marker grants no permission.
 
 Real isolation needs a separate Unix user for the model, without access to noctiluca's config, tokens, and database. It is out of scope.

@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	sdk "github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
@@ -11,12 +12,19 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
-func (a *adapter) SourceInfo(ctx context.Context, ref domain.ConversationRef, senderID string, root bool) domain.SourceInfo {
+func (a *adapter) SourceInfo(ctx context.Context, event domain.InboundEvent, root bool) domain.SourceInfo {
+	ref, senderID := event.Conversation, event.Sender.ID
 	info := domain.SourceInfo{Conversation: string(ref), Sender: senderID}
 	channel, thread, err := a.destination(ref)
 	if err != nil {
 		return info
 	}
+	messageChannel, message, _ := a.destination(event.MessageRef)
+	threadID := ""
+	if thread != 0 {
+		threadID = thread.String()
+	}
+	info.Location = fmt.Sprintf("%s: channel=%s thread=%s message=%s message_channel=%s", a.name, channel, threadID, message, messageChannel)
 	info.Conversation = channel.String()
 	userID, userErr := parseID(senderID)
 	if userErr == nil {

@@ -100,11 +100,8 @@ func TestRunCLIHelper(t *testing.T) {
 		for _, tool := range listed.Tools {
 			require.Equal(t, mcp.Meta{"anthropic/alwaysLoad": true}, tool.Meta, tool.Name)
 		}
-		_, refs, ok := strings.Cut(frame.Message.Content, "\nrefs: conversation=")
-		require.True(t, ok)
-		line, _, _ := strings.Cut(refs, "\n")
-		target, _, _ := strings.Cut(line, " thread=")
-		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "reply", Arguments: map[string]any{"target": target, "text": "**Hello** from the hub"}})
+		tool, args := slackSendFromInput(t, frame.Message.Content, "**Hello** from the hub")
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 		require.NoError(t, err)
 		require.False(t, result.IsError, "%+v", result.Content)
 		require.NoError(t, session.Close())
@@ -280,4 +277,29 @@ func TestRunCancellationDuringStartup(t *testing.T) {
 			require.Error(t, app.db.Ping())
 		})
 	}
+}
+
+func slackSendFromInput(t *testing.T, text, reply string) (string, map[string]any) {
+	t.Helper()
+	require.NotContains(t, text, "refs:")
+	header, _, _ := strings.Cut(text, "\n\n")
+	for _, line := range strings.Split(header, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[1], "channel=") {
+			continue
+		}
+		name, ok := strings.CutSuffix(fields[0], ":")
+		require.True(t, ok)
+		args := map[string]any{"text": reply}
+		for _, field := range fields[1:] {
+			key, value, _ := strings.Cut(field, "=")
+			if value != "" && (key == "channel" || key == "thread_ts") {
+				args[key] = value
+			}
+		}
+		require.NotEmpty(t, args["channel"])
+		return name + "_send", args
+	}
+	t.Fatal("input has no native destination line: " + text)
+	return "", nil
 }
