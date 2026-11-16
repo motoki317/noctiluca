@@ -92,8 +92,9 @@ Completing the procedure without calling `rest` keeps the context.
 Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at` note, or a `watch` outcome.
 
 - A row that fails to send, or that the model CLI refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
-- A schedule fire that opens a turn runs again after 15 minutes if the turn fails. A second failure delays its next attempt by 30 minutes. A failed turn on a chat, `watch`, or `wake_at` row does not run again.
-- Delivery failures and turn failures count against one budget of three attempts per row. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
+- A turn that finishes with a failure sends the owner one notice, even if it covers several inputs. Its inputs do not run again.
+- Delivery failures count against a budget of three attempts per row. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
+- An error from `Procedure` or `Prepare` fails only its row and sends the owner the notice for a dead row. The pump keeps running.
 - An input that opens a turn sets its timeout: `model.turn_timeout` (2 h), or `tasks.timeout` (30 min) for a task. Later inputs share that deadline.
 - After a restart, crash, model exit, or timeout, an interrupted turn continues once with a note. The note asks the model to finish each unfinished input using its posting instructions. A continuation cut short does not create another continuation.
 - A failed row never stops the process. Only a failure of SQLite or of the tool-hub listener does.

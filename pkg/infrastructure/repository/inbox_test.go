@@ -123,20 +123,24 @@ func TestScheduleTimingUpdate(t *testing.T) {
 	require.Equal(t, s.NextRun, saved[0].NextRun)
 }
 
-func TestInboxFailedTurnRollsBackWithoutNotice(t *testing.T) {
+func TestInboxFailureRollsBackWithoutNotice(t *testing.T) {
 	db := openDB(t)
 	r := repository.NewInboxRepository(db)
 	item := inboxItem("schedule:daily:2026-11-14T00:00:00Z")
 	item.Lane = "task"
-	id := deliveredTurn(t, db, item)
-	_, err := db.Exec(`CREATE TRIGGER fail_notice BEFORE INSERT ON inbox WHEN NEW.source_key LIKE 'failure:%' BEGIN SELECT RAISE(FAIL, 'notice unavailable'); END`)
+	id, err := r.Enqueue(t.Context(), item)
 	require.NoError(t, err)
-	_, err = r.RetryFailedTurn(t.Context(), id, "turn failed", 1, 15*time.Minute, time.Now())
+	claimed, err := r.Claim(t.Context(), id, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.True(t, claimed)
+	_, err = db.Exec(`CREATE TRIGGER fail_notice BEFORE INSERT ON inbox WHEN NEW.source_key LIKE 'failure:%' BEGIN SELECT RAISE(FAIL, 'notice unavailable'); END`)
+	require.NoError(t, err)
+	_, err = r.Finish(t.Context(), id, "delivery failed", 1, time.Now())
 	require.ErrorContains(t, err, "notice unavailable")
 	var status, lastError string
 	var attempts int
 	require.NoError(t, db.QueryRow("SELECT status,attempts,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &lastError))
-	require.Equal(t, "done", status)
+	require.Equal(t, "dispatched", status)
 	require.Zero(t, attempts)
 	require.Empty(t, lastError)
 }
