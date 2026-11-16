@@ -144,7 +144,6 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		IdleTimeout: config.Model.IdleTimeout,
 		Workdir:     config.Model.Workdir,
 		Jobs:        jobs, Procedure: procedure, TaskTimeout: config.Tasks.Timeout, TurnTimeout: config.Model.TurnTimeout,
-		Completed: consolidate.Checkpoint(repository.NewConsolidationRepository(db)),
 	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {

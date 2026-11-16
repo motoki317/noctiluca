@@ -28,10 +28,15 @@ func TestSchemaReopen(t *testing.T) {
 		if i == 0 {
 			_, err = db.ExecContext(t.Context(), "INSERT INTO sessions(key, resume_token) VALUES ('session', 'resume')")
 			require.NoError(t, err)
+			_, err = db.ExecContext(t.Context(), "CREATE TABLE extra (value TEXT); INSERT INTO extra VALUES ('preserved')")
+			require.NoError(t, err)
 		} else {
 			var token string
 			require.NoError(t, db.QueryRowContext(t.Context(), "SELECT resume_token FROM sessions WHERE key='session'").Scan(&token))
 			assert.Equal(t, "resume", token)
+			var value string
+			require.NoError(t, db.QueryRowContext(t.Context(), "SELECT value FROM extra").Scan(&value))
+			assert.Equal(t, "preserved", value)
 		}
 		require.NoError(t, db.Close())
 	}

@@ -144,10 +144,6 @@ func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 					require.Equal(t, "heartbeat", name)
 					return text, nil
 				},
-				Completed: func(context.Context, string, time.Time) error {
-					t.Error("unfinished or skipped procedure completed a turn")
-					return nil
-				},
 			})
 			require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: "task:heartbeat", ResumeToken: "saved"}))
 			f.start(t)
@@ -209,27 +205,6 @@ func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {
 	f.status(t, third, "done")
 	require.Empty(t, f.model.opened)
 }
-func TestCompletionWaitsForSuccessfulTurnFinish(t *testing.T) {
-	finished := make(chan time.Time, 1)
-	f := newDeliveryRig(t, Config{Completed: func(_ context.Context, _ string, at time.Time) error { finished <- at; return nil }})
-	f.start(t)
-	id := f.enqueue(t, "room", "first")
-	s := take(t, f.model.opened)
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	require.Empty(t, finished)
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed result")}
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.turn(t, "room", false)
-	require.Empty(t, finished)
-	id = f.enqueue(t, "room", "second")
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	before := time.Now()
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	require.False(t, take(t, finished).Before(before))
-}
-
 func TestTaskDeadlineNotifiesWithoutContinuing(t *testing.T) {
 	// Runner scheduling must not consume the deadline used to expire the hung task.
 	synctest.Test(t, func(t *testing.T) {

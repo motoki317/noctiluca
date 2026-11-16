@@ -20,7 +20,6 @@ func TestFailedScheduleFireRetriesThenNotifiesOnce(t *testing.T) {
 				notes := make(chan string, 4)
 				f := newDeliveryRig(t, Config{IdleTimeout: 5 * time.Minute, Procedure: restProcedure,
 					NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil },
-					Completed:   func(context.Context, string, time.Time) error { t.Error("failed turn completed"); return nil },
 				})
 				f.model.idle, f.model.manualAck = true, true
 				require.NoError(t, repository.NewScheduleRepository(f.db).Save(t.Context(), domain.Schedule{

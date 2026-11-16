@@ -111,7 +111,6 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 				notes := make(chan string, 2)
 				f := newDeliveryRig(t, Config{TurnTimeout: time.Hour, RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
 					NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil },
-					Completed:   func(context.Context, string, time.Time) error { t.Error("refused input completed a turn"); return nil },
 					Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
 						return domain.UserInput{Text: "prepared " + item.Payload.Input.Text}, nil
 					},
@@ -399,8 +398,7 @@ func TestUnstartedInputDeadlineFailsOnlyExpiredItem(t *testing.T) {
 
 func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		completed := make(chan string, 2)
-		f := newDeliveryRig(t, Config{Completed: func(_ context.Context, procedure string, _ time.Time) error { completed <- procedure; return nil }})
+		f := newDeliveryRig(t, Config{})
 		f.model.manualAck, f.model.idle = true, true
 		f.start(t)
 		item := TaskItem("first", "work", "")
@@ -420,7 +418,7 @@ func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 		require.NoError(t, err)
 		f.runner.Notify()
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		require.Equal(t, "heartbeat", take(t, completed))
+		f.turn(t, string(item.SessionKey), false)
 		synctest.Wait()
 		require.Empty(t, f.model.opened)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}

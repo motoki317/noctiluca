@@ -25,7 +25,6 @@ type Config struct {
 	Prepare     func(context.Context, domain.InboxItem) (domain.UserInput, error)
 	Procedure   func(context.Context, string) (string, error)
 	NotifyOwner func(context.Context, string) error
-	Completed   func(context.Context, string, time.Time) error
 }
 
 type Reconciler struct {
@@ -766,9 +765,6 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		p.turn = nil
 		if err := r.save(ctx, p); err != nil {
 			return err
-		}
-		if turn != nil && !turn.Failed && r.config.Completed != nil {
-			return r.config.Completed(ctx, turn.Procedure, p.last)
 		}
 		return nil
 	}
