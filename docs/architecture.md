@@ -77,8 +77,13 @@ When a Codex subagent finishes while `main` has no turn, the adapter starts a pa
 A subagent that finishes during a running turn needs no extra turn.
 The `wake_at` tool sends a note to `main` at a given time.
 
-An idle model process closes after `model.idle_timeout`, and the next input resumes `main`.
-The hourly heartbeat counts as input, so with the default config the process stays open until `rest`, a restart, or a failure.
+A model process closes in these cases:
+
+- `rest` requests a close and the process reaches idle.
+- Input delivery fails, unless the model refuses the input.
+- The reconciler fails to handle a model event.
+- noctiluca stops or restarts.
+- The model CLI exits or is killed.
 
 The nightly `rest` schedule sends `procedures/rest.md` to `main` as a task input.
 The model can also follow it during the day when it judges that its context needs a fresh start.

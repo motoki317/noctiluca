@@ -19,7 +19,6 @@ type Config struct {
 	Workdir          string
 	ChatWritingTools []string
 	Accept           func(domain.SessionContext) bool
-	IdleTimeout      time.Duration
 	RetryDelay       time.Duration
 	MaxAttempts      int
 	Prompt           domain.PromptAssembler
@@ -56,7 +55,6 @@ type process struct {
 	closeAtIdle bool
 	closing     bool
 	reason      string
-	last        time.Time
 }
 
 type result struct {
@@ -71,9 +69,6 @@ type result struct {
 }
 
 func New(config Config, inbox domain.InboxRepository, schedules domain.ScheduleRepository, sessions domain.SessionRepository, events domain.EventRepository, model domain.ModelAdapter, hub domain.ToolHub) *Reconciler {
-	if config.IdleTimeout <= 0 {
-		config.IdleTimeout = time.Hour
-	}
 	if config.RetryDelay <= 0 {
 		config.RetryDelay = time.Second
 	}
@@ -181,21 +176,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		}
 		return item.ReadyAt
 	}
-	for _, p := range r.live {
-		if p.closing || p.delivering != nil || p.turn != nil || len(p.unstarted) != 0 || p.model == nil {
-			continue
-		}
-		at := p.last.Add(r.config.IdleTimeout)
-		if !now.Before(at) {
-			if p.model.Idle() {
-				r.retire(p, "idle")
-			} else {
-				due(now.Add(r.config.IdleTimeout))
-			}
-		} else {
-			due(at)
-		}
-	}
 	blocked := map[domain.SessionKey]bool{}
 	for _, item := range items {
 		if !item.SessionKey.IsNotice() {
@@ -249,7 +229,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 				continue
 			}
 			processCtx, cancel := context.WithCancel(ctx)
-			p = &process{key: item.SessionKey, token: saved.ResumeToken, cancel: cancel, inputs: make(chan domain.InboxItem, 1), last: now}
+			p = &process{key: item.SessionKey, token: saved.ResumeToken, cancel: cancel, inputs: make(chan domain.InboxItem, 1)}
 			r.mu.Lock()
 			r.live[item.SessionKey] = p
 			r.mu.Unlock()
@@ -257,7 +237,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			go r.pump(processCtx, p, saved.ResumeToken, endpoint)
 		}
 		p.delivering = &item
-		p.last = now
 		p.inputs <- item
 	}
 	for _, p := range r.live {
@@ -454,7 +433,6 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		if err := r.inbox.Delivered(ctx, item.ID, r.state(p)); err != nil {
 			return err
 		}
-		p.last = time.Now()
 		if p.model == nil {
 			r.retire(p, "empty input")
 		}
@@ -478,7 +456,6 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		if p.turn != nil && p.turnStarted {
 			p.turn.Continuations = max(p.turn.Continuations, item.Payload.Continuations)
 		}
-		p.last = time.Now()
 		return r.inbox.Delivered(ctx, item.ID, r.state(p))
 	}
 	if p.closing {
@@ -489,8 +466,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		return nil
 	}
 	event := *out.event
-	p.last = time.Now()
-	if err := r.events.SaveModel(ctx, domain.ModelRecord{SessionKey: p.key, Event: event, RecordedAt: p.last}); err != nil {
+	if err := r.events.SaveModel(ctx, domain.ModelRecord{SessionKey: p.key, Event: event, RecordedAt: time.Now()}); err != nil {
 		return err
 	}
 	switch event.Kind {

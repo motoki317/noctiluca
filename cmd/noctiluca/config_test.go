@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -124,10 +123,13 @@ func TestExampleConfig(t *testing.T) {
 }
 
 func TestRemovedTimeoutConfig(t *testing.T) {
-	c, err := loadConfig(writeConfig(t, slackEntry))
+	_, err := loadConfig(writeConfig(t, slackEntry))
 	require.NoError(t, err)
-	require.Equal(t, time.Hour, c.Model.IdleTimeout)
-	for _, fields := range []string{"tasks: {timeout: 30m}\n", "model: {turn_timeout: 2h}\n"} {
+	for _, fields := range []string{
+		"tasks: {timeout: 30m}\n",
+		"model: {turn_timeout: 2h}\n",
+		"model: {idle_timeout: 1h}\n",
+	} {
 		_, err = loadConfig(writeConfig(t, slackEntry+fields))
 		require.ErrorContains(t, err, "invalid config")
 	}

@@ -249,8 +249,8 @@ func TestConversationFlow(t *testing.T) {
 	}
 }
 
-func TestChannelThreadsIdleAndResume(t *testing.T) {
-	f := setup(t, Config{IdleTimeout: 30 * time.Millisecond}, []Messaging{{Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"member"}}}}}, fixtureOptions{})
+func TestChannelThreadsShareProcessAndResumeAfterExit(t *testing.T) {
+	f := setup(t, Config{}, []Messaging{{Rules: map[domain.ConversationRef]domain.AcceptRule{"test:room": {Users: []string{"member"}}}}}, fixtureOptions{})
 	e := message("test:thread-a", "member", "first")
 	e.Parent = "test:room"
 	f.messaging.in <- e
@@ -273,15 +273,8 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	default:
 	}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	// A completed turn can still own background work and its tool grant.
-	select {
-	case <-s.closed:
-		t.Fatal("closed a busy session")
-	case <-time.After(80 * time.Millisecond):
-	}
 	require.True(t, f.hub.active(domain.MainSessionKey))
-	s.idle.Store(true)
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "done"}
+	require.NoError(t, s.Close())
 	require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
 	saved, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
 	require.NoError(t, err)

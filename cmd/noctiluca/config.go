@@ -129,12 +129,11 @@ type Config struct {
 	} `mapstructure:"rest"`
 	Messaging []messagingConfig `mapstructure:"messaging"`
 	Model     struct {
-		Type            string        `mapstructure:"type"`
-		Workdir         string        `mapstructure:"workdir"`
-		Executable      string        `mapstructure:"executable"`
-		Name            string        `mapstructure:"name"`
-		ReasoningEffort string        `mapstructure:"reasoning_effort"`
-		IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
+		Type            string `mapstructure:"type"`
+		Workdir         string `mapstructure:"workdir"`
+		Executable      string `mapstructure:"executable"`
+		Name            string `mapstructure:"name"`
+		ReasoningEffort string `mapstructure:"reasoning_effort"`
 	} `mapstructure:"model"`
 	Memory struct {
 		Dir string `mapstructure:"dir"`
@@ -161,7 +160,7 @@ func loadConfig(path string) (Config, error) {
 	v.SetConfigType("yaml")
 	for key, value := range map[string]any{
 		"log.level": "INFO", "database.path": "noctiluca.db", "memory.dir": "memory",
-		"model.type": "claude", "model.workdir": "", "model.name": "", "model.idle_timeout": "1h",
+		"model.type": "claude", "model.workdir": "", "model.name": "",
 		"toolhub.listen": "127.0.0.1:0", "heartbeat.enabled": true, "heartbeat.interval": "1h",
 		"rest.enabled": false, "rest.cron": "0 4 * * *", "rest.tz": "UTC",
 	} {
@@ -308,8 +307,8 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if c.Memory.Dir == "" || c.Database.Path == "" || c.Model.Executable == "" {
 		return nil, 0, errors.New("memory.dir, database.path, and model.executable are required")
 	}
-	if c.Model.IdleTimeout <= 0 || c.Heartbeat.Interval <= 0 {
-		return nil, 0, errors.New("timeouts and intervals must be positive")
+	if c.Heartbeat.Interval <= 0 {
+		return nil, 0, errors.New("heartbeat.interval must be positive")
 	}
 	host, port, err := net.SplitHostPort(c.ToolHub.Listen)
 	number, numberErr := strconv.Atoi(port)

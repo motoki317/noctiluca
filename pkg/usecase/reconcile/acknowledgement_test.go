@@ -173,20 +173,28 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 	}
 }
 
-func TestRefusedOpeningInputAllowsIdleClose(t *testing.T) {
+func TestRefusedOpeningInputAllowsRestClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{IdleTimeout: 100 * time.Millisecond, RetryDelay: time.Hour})
-		f.model.manualAck = true
-		f.model.idle = true
+		f := newDeliveryRig(t, Config{RetryDelay: time.Hour})
+		f.model.manualAck, f.model.idle = true, true
 		f.start(t)
 		id := f.enqueue(t, "room", "refused")
 		s := take(t, f.model.opened)
 		require.Equal(t, id, take(t, s.inputs).ID)
 		f.turn(t, true)
+		ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
+		_, err := f.runner.rest(ctx, nil)
+		require.NoError(t, err)
+		synctest.Wait()
+		select {
+		case <-s.closed:
+			t.Fatal("rest closed the process before the opening input was refused")
+		default:
+		}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputRefused, InputID: id, Err: errors.New("refused")}
 		f.status(t, id, "pending")
-		f.turn(t, false)
 		take(t, s.closed)
+		f.turn(t, false)
 		synctest.Wait()
 		var attempts, notes int
 		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
