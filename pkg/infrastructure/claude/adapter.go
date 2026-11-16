@@ -117,6 +117,19 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 		return nil, fmt.Errorf("write claude prompt: %w", err)
 	}
 	args = append(args, "--append-system-prompt-file", promptPath)
+	disallowed := make([]string, 0, len(config.ChatWritingTools))
+	for _, name := range config.ChatWritingTools {
+		disallowed = append(disallowed, "mcp__noctiluca__"+name)
+	}
+	agents, err := json.Marshal(map[string]any{"worker": map[string]any{
+		"description":     "Complete a delegated task and return the result to the main session.",
+		"prompt":          "Complete the delegated task. Return your findings and any reply draft to the main session.",
+		"disallowedTools": disallowed,
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("encode claude agents: %w", err)
+	}
+	args = append(args, "--agents", string(agents))
 	servers := map[string]any{}
 	if config.ToolHub.URL != "" {
 		servers["noctiluca"] = map[string]any{"type": "http", "url": config.ToolHub.URL, "headers": map[string]string{"Authorization": "Bearer " + config.ToolHub.BearerToken}}

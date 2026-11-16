@@ -8,6 +8,7 @@ import (
 
 type Tool struct {
 	ReadOnly    bool
+	WritesChat  bool
 	OnDemand    bool
 	Name        string
 	Description string

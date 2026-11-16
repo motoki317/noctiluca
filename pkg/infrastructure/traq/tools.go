@@ -66,7 +66,7 @@ func (a *adapter) Tools() []domain.Tool {
 	offset := map[string]any{"type": "integer", "minimum": 0, "maximum": 2147483547}
 	tool := func(name, description string, properties map[string]any, required []string, handler func(context.Context, toolInput) (any, error)) domain.Tool {
 		schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
-		return domain.Tool{Name: a.name + "_" + name, Description: description, ReadOnly: name == "read_message" || name == "read_history" || name == "search", InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		return domain.Tool{WritesChat: name == "send" || name == "upload_file" || name == "react", Name: a.name + "_" + name, Description: description, ReadOnly: name == "read_message" || name == "read_history" || name == "search", InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var in toolInput
 			decoder := json.NewDecoder(strings.NewReader(string(raw)))
 			decoder.DisallowUnknownFields()

@@ -63,7 +63,7 @@ func (a *adapter) Tools() []domain.Tool {
 	limit := map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
 	makeTool := func(name, description string, props map[string]any, required []string, handler func(context.Context, toolInput) (any, error)) domain.Tool {
 		schema, _ := json.Marshal(map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false})
-		return domain.Tool{Name: a.name + "_" + name, Description: description, ReadOnly: name == "read_history" || name == "read_thread" || name == "search", InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		return domain.Tool{WritesChat: name == "send" || name == "upload_file" || name == "react", Name: a.name + "_" + name, Description: description, ReadOnly: name == "read_history" || name == "read_thread" || name == "search", InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var fields map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &fields); err != nil {
 				return nil, err

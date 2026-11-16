@@ -355,3 +355,20 @@ func TestConstructorValidation(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestChatWritingTools(t *testing.T) {
+	a := &adapter{name: "entry"}
+	writes := map[string]bool{}
+	for _, tool := range a.Tools() {
+		writes[tool.Name] = tool.WritesChat
+	}
+	require.Equal(t, map[string]bool{
+		"entry_send":          true,
+		"entry_read_history":  false,
+		"entry_read_message":  false,
+		"entry_search":        false,
+		"entry_download_file": false,
+		"entry_upload_file":   true,
+		"entry_react":         true,
+	}, writes)
+}
