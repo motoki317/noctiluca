@@ -16,12 +16,15 @@ func TestSharedScheduleTools(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	schedules := repository.NewScheduleRepository(db)
-	r := reconcile.New(reconcile.Config{}, nil, nil, schedules, nil, nil, nil, nil)
+	r := reconcile.New(reconcile.Config{}, nil, schedules, nil, nil, nil, nil)
 	require.NoError(t, h.AddSource("schedules", r.Tools()))
 	endpoint, err := h.OpenSession("room")
 	require.NoError(t, err)
 	c := client(t, endpoint)
 	require.False(t, call(t, c, "schedule_add", map[string]any{"name": "daily", "cron": "0 9 * * *", "tz": "UTC", "prompt": "Check tasks"}).IsError)
+	for _, name := range []string{"heartbeat", "rest"} {
+		require.True(t, call(t, c, "schedule_add", map[string]any{"name": name, "cron": "0 9 * * *", "tz": "UTC", "prompt": "work"}).IsError)
+	}
 	jobs, err := schedules.List(t.Context())
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)

@@ -64,7 +64,7 @@ heartbeat:
   enabled: true
   interval: 1h
 
-consolidate:
+rest:
   enabled: false
   cron: '0 4 * * *'
   tz: UTC

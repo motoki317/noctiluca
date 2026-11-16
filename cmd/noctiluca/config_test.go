@@ -32,6 +32,7 @@ model: {executable: ./claude}
 memory: {dir: memories}
 database: {path: history.db}
 toolhub: {listen: '127.0.0.1:12345'}
+rest: {enabled: true, cron: '30 4 * * *', tz: Europe/London}
 cron:
   - {name: daily, cron: '0 9 * * *', tz: UTC, prompt: Check tasks, workdir: work}
 `)
@@ -44,6 +45,9 @@ cron:
 	require.Equal(t, "app-secret", tokens[0].Slack.AppToken)
 	require.Equal(t, "bot-secret", tokens[0].Slack.BotToken)
 	require.Equal(t, 12345, port)
+	require.True(t, c.Rest.Enabled)
+	require.Equal(t, "30 4 * * *", c.Rest.Cron)
+	require.Equal(t, "Europe/London", c.Rest.TZ)
 	require.Equal(t, filepath.Join(filepath.Dir(path), "history.db"), c.Database.Path)
 	require.Equal(t, filepath.Join(filepath.Dir(path), "memories"), c.Memory.Dir)
 	require.Equal(t, filepath.Join(filepath.Dir(path), "claude"), c.Model.Executable)
@@ -162,7 +166,7 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 	require.NoError(t, err)
 	db, err := repository.New(t.Context(), c.Database)
 	require.NoError(t, err)
-	for _, name := range []string{"heartbeat", "consolidate"} {
+	for _, name := range []string{"heartbeat", "rest"} {
 		require.NoError(t, repository.NewScheduleRepository(db).Save(t.Context(), domain.Schedule{Name: name, Cron: "0 * * * *", TZ: "UTC"}))
 	}
 	require.NoError(t, db.Close())
@@ -175,7 +179,7 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 }
 
 func TestReservedCronNames(t *testing.T) {
-	for _, name := range []string{"heartbeat", "consolidate"} {
+	for _, name := range []string{"heartbeat", "rest"} {
 		c, err := loadConfig(writeConfig(t, slackEntry+"cron:\n  - {name: "+name+", cron: '0 4 * * *', tz: UTC, prompt: run}\n"))
 		require.NoError(t, err)
 		_, _, err = c.validateRun()

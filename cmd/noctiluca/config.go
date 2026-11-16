@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/motoki317/noctiluca/pkg/usecase/reconcile"
 	"github.com/spf13/viper"
 
@@ -123,9 +122,13 @@ type messagingTokens struct {
 }
 
 type Config struct {
-	Consolidate consolidate.Config `mapstructure:"consolidate"`
-	Messaging   []messagingConfig  `mapstructure:"messaging"`
-	Model       struct {
+	Rest struct {
+		Enabled bool   `mapstructure:"enabled"`
+		Cron    string `mapstructure:"cron"`
+		TZ      string `mapstructure:"tz"`
+	} `mapstructure:"rest"`
+	Messaging []messagingConfig `mapstructure:"messaging"`
+	Model     struct {
 		Type            string        `mapstructure:"type"`
 		Workdir         string        `mapstructure:"workdir"`
 		TurnTimeout     time.Duration `mapstructure:"turn_timeout"`
@@ -164,8 +167,8 @@ func loadConfig(path string) (Config, error) {
 		"log.level": "INFO", "database.path": "noctiluca.db", "memory.dir": "memory",
 		"model.type": "claude", "model.workdir": "", "model.turn_timeout": "2h", "model.name": "", "model.idle_timeout": "1h",
 		"toolhub.listen": "127.0.0.1:0", "heartbeat.enabled": true, "heartbeat.interval": "1h",
-		"tasks.timeout":       "30m",
-		"consolidate.enabled": false, "consolidate.cron": "0 4 * * *", "consolidate.tz": "UTC",
+		"tasks.timeout": "30m",
+		"rest.enabled":  false, "rest.cron": "0 4 * * *", "rest.tz": "UTC",
 	} {
 		v.SetDefault(key, value)
 	}
@@ -321,8 +324,8 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if err := c.validateWorkdir(); err != nil {
 		return nil, 0, err
 	}
-	if c.Consolidate.Enabled {
-		if err := reconcile.ValidateCron(c.Consolidate.Cron); err != nil {
+	if c.Rest.Enabled {
+		if err := reconcile.ValidateCron(c.Rest.Cron); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -330,8 +333,8 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 		if err := reconcile.ValidateCron(job.Cron); err != nil {
 			return nil, 0, err
 		}
-		if job.Name == "heartbeat" || job.Name == "consolidate" {
-			return nil, 0, errors.New("heartbeat and consolidate are reserved cron names")
+		if job.Name == "heartbeat" || job.Name == "rest" {
+			return nil, 0, errors.New("heartbeat and rest are reserved cron names")
 		}
 	}
 	tokens := make([]messagingTokens, len(c.Messaging))

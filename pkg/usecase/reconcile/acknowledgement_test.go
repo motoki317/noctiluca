@@ -111,7 +111,6 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 				notes := make(chan string, 2)
 				f := newDeliveryRig(t, Config{TurnTimeout: time.Hour, RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
 					NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil },
-					Completed:   func(context.Context, string, time.Time) error { t.Error("refused input completed a turn"); return nil },
 					Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
 						return domain.UserInput{Text: "prepared " + item.Payload.Input.Text}, nil
 					},
@@ -215,7 +214,6 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 				synctest.Wait()
 				turn := f.turn(t, "room", true).Turn
 				require.Equal(t, first, turn.InputID)
-				require.True(t, turn.Failed)
 				if !openingStarted {
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 					f.status(t, second, "done")
@@ -399,12 +397,10 @@ func TestUnstartedInputDeadlineFailsOnlyExpiredItem(t *testing.T) {
 
 func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		completed := make(chan string, 2)
-		f := newDeliveryRig(t, Config{Completed: func(_ context.Context, procedure string, _ time.Time) error { completed <- procedure; return nil }})
+		f := newDeliveryRig(t, Config{})
 		f.model.manualAck, f.model.idle = true, true
 		f.start(t)
 		item := TaskItem("first", "work", "")
-		item.Payload.Procedure = "heartbeat"
 		item.Payload.Continuations = 1
 		id, err := f.inbox.Enqueue(t.Context(), item)
 		require.NoError(t, err)
@@ -413,14 +409,13 @@ func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 		require.Equal(t, id, take(t, s.inputs).ID)
 		saved := f.turn(t, string(item.SessionKey), true)
 		require.Equal(t, id, saved.Turn.InputID)
-		require.Equal(t, "heartbeat", saved.Turn.Procedure)
 		require.Equal(t, 1, saved.Turn.Continuations)
 		f.status(t, id, "dispatched")
 		_, err = f.inbox.Enqueue(t.Context(), TaskItem("next", "next", ""))
 		require.NoError(t, err)
 		f.runner.Notify()
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		require.Equal(t, "heartbeat", take(t, completed))
+		f.turn(t, string(item.SessionKey), false)
 		synctest.Wait()
 		require.Empty(t, f.model.opened)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}

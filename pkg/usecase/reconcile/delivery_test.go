@@ -38,7 +38,7 @@ func newDeliveryRig(t *testing.T, config Config) *deliveryRig {
 func (f *deliveryRig) start(t *testing.T) func() {
 	t.Helper()
 	f.hub = &hubFake{closed: make(chan domain.SessionKey, 100)}
-	f.runner = New(f.config, f.inbox, repository.NewWatchRepository(f.db), repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), f.model, f.hub)
+	f.runner = New(f.config, f.inbox, repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), f.model, f.hub)
 	ctx, cancel := context.WithCancel(t.Context())
 	f.cancel = cancel
 	done := make(chan error, 1)
@@ -144,10 +144,6 @@ func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 					require.Equal(t, "heartbeat", name)
 					return text, nil
 				},
-				Completed: func(context.Context, string, time.Time) error {
-					t.Error("unfinished or skipped procedure completed a turn")
-					return nil
-				},
 			})
 			require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: "task:heartbeat", ResumeToken: "saved"}))
 			f.start(t)
@@ -173,7 +169,7 @@ func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 }
 
 func TestScheduleToolRequiresFiveFields(t *testing.T) {
-	r := New(Config{}, nil, nil, nil, nil, nil, nil, nil)
+	r := New(Config{}, nil, nil, nil, nil, nil, nil)
 	for _, expression := range []string{"CRON_TZ=UTC 0 4 * * *", "TZ=UTC\t*\t*\t*\t*"} {
 		raw, err := json.Marshal(map[string]string{"name": "test", "cron": expression, "tz": "UTC", "prompt": "work"})
 		require.NoError(t, err)
@@ -209,27 +205,6 @@ func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {
 	f.status(t, third, "done")
 	require.Empty(t, f.model.opened)
 }
-func TestCompletionWaitsForSuccessfulTurnFinish(t *testing.T) {
-	finished := make(chan time.Time, 1)
-	f := newDeliveryRig(t, Config{Completed: func(_ context.Context, _ string, at time.Time) error { finished <- at; return nil }})
-	f.start(t)
-	id := f.enqueue(t, "room", "first")
-	s := take(t, f.model.opened)
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	require.Empty(t, finished)
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed result")}
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.turn(t, "room", false)
-	require.Empty(t, finished)
-	id = f.enqueue(t, "room", "second")
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	before := time.Now()
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	require.False(t, take(t, finished).Before(before))
-}
-
 func TestTaskDeadlineNotifiesWithoutContinuing(t *testing.T) {
 	// Runner scheduling must not consume the deadline used to expire the hung task.
 	synctest.Test(t, func(t *testing.T) {
@@ -310,7 +285,7 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 				claimed, err := f.inbox.Claim(t.Context(), id, item.Deadline)
 				require.NoError(t, err)
 				require.True(t, claimed)
-				r := New(f.config, f.inbox, nil, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				_, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				p := &process{key: item.SessionKey, lane: item.Lane, info: item.Payload.Context, delivering: &item, cancel: cancel, model: &sessionFake{}}
@@ -553,7 +528,7 @@ func TestDeliveryFailureUsesClosingReason(t *testing.T) {
 				claimed, err := f.inbox.Claim(t.Context(), id, time.Now())
 				require.NoError(t, err)
 				require.True(t, claimed)
-				r := New(f.config, f.inbox, nil, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
+				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				_, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				p := &process{key: item.SessionKey, lane: item.Lane, delivering: &item, cancel: cancel}

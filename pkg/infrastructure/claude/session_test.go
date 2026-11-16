@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -328,6 +329,37 @@ func TestSessionIdle(t *testing.T) {
 	}
 }
 
+func TestSessionReportsIdleTransition(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parser parser
+		line   string
+	}{
+		{"tasks-cleared", parser{tasks: map[string]struct{}{"task": {}}}, `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`},
+		{"compaction-finished", parser{compactUUID: "internal", compacting: true}, `{"type":"result","local_command":"compact"}`},
+		{"compaction-failed", parser{compactUUID: "internal", compacting: true}, `{"type":"result","local_command":"compact","is_error":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			closed := make(chan struct{})
+			close(closed)
+			s := &session{ctx: ctx, cancel: cancel, parser: tc.parser, events: make(chan domain.ModelEvent, 1), done: make(chan struct{}), processDone: closed, shutdownDone: closed}
+			reader, writer := io.Pipe()
+			go s.read(reader, t.TempDir())
+			t.Cleanup(func() {
+				cancel()
+				require.NoError(t, writer.Close())
+				<-s.done
+			})
+			require.False(t, s.Idle())
+			_, err := fmt.Fprintln(writer, tc.line)
+			require.NoError(t, err)
+			require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}, nextEvent(t, s))
+			require.True(t, s.Idle())
+		})
+	}
+}
+
 func compactSession(t *testing.T, mode string) (*session, string) {
 	t.Helper()
 	path, dir := fakeCLI(t, mode)
@@ -399,9 +431,10 @@ func TestSessionIdleCompaction(t *testing.T) {
 				s.mu.Unlock()
 			}
 			awaitCompactTimer(t, s)
+			require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}, nextEvent(t, s))
 			require.True(t, s.Idle())
 			require.NoError(t, s.Close())
-			require.Empty(t, s.events, "internal compaction must emit no core events")
+			require.Empty(t, s.events)
 			inputs := capturedInputs(t, dir)
 			require.Len(t, inputs, len(tc.inputs)+1)
 			last := inputs[len(inputs)-1]
@@ -522,6 +555,7 @@ func TestSessionIdleCompactionFailure(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	compactTurn(t, s, 1, "large")
 	awaitCompactTimer(t, s)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}, nextEvent(t, s))
 	require.True(t, s.Idle())
 	compactTurn(t, s, 2, "small")
 	require.NoError(t, s.Close())
@@ -551,6 +585,7 @@ func TestSessionIdleCompactionRearms(t *testing.T) {
 	<-time.NewTimer(time.Until(firstDeadline.Add(50 * time.Millisecond))).C
 	require.Len(t, capturedInputs(t, dir), 2, "the superseded timer must not compact")
 	awaitCompactTimer(t, s)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}, nextEvent(t, s))
 	require.NoError(t, s.Close())
 	require.Empty(t, s.events)
 	require.Len(t, capturedInputs(t, dir), 3)

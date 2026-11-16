@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,13 +24,11 @@ type Config struct {
 	Prepare     func(context.Context, domain.InboxItem) (domain.UserInput, error)
 	Procedure   func(context.Context, string) (string, error)
 	NotifyOwner func(context.Context, string) error
-	Completed   func(context.Context, string, time.Time) error
 }
 
 type Reconciler struct {
 	config    Config
 	inbox     domain.InboxRepository
-	watches   domain.WatchRepository
 	schedules domain.ScheduleRepository
 	sessions  domain.SessionRepository
 	events    domain.EventRepository
@@ -39,32 +36,31 @@ type Reconciler struct {
 	hub       domain.ToolHub
 	mu        sync.Mutex
 	live      map[domain.SessionKey]*process
-	taskFires map[domain.SessionKey]time.Time
 	changed   chan struct{}
 	results   chan result
 	workers   sync.WaitGroup
 }
 
 type process struct {
-	key          domain.SessionKey
-	token        string
-	lane         string
-	info         domain.SessionContext
-	cancel       context.CancelFunc
-	inputs       chan domain.InboxItem
-	model        domain.ModelSession
-	delivering   *domain.InboxItem
-	unstarted    map[int64]domain.InboxItem
-	turn         *domain.SessionTurn
-	restArmed    bool
-	restDeadline time.Time
-	closing      bool
-	reason       string
-	retiredAt    time.Time
-	last         time.Time
+	key         domain.SessionKey
+	token       string
+	lane        string
+	info        domain.SessionContext
+	cancel      context.CancelFunc
+	inputs      chan domain.InboxItem
+	model       domain.ModelSession
+	delivering  *domain.InboxItem
+	unstarted   map[int64]domain.InboxItem
+	turn        *domain.SessionTurn
+	closeAtIdle bool
+	closing     bool
+	reason      string
+	retiredAt   time.Time
+	last        time.Time
 }
 
 type result struct {
+	rest      chan error
 	skipped   bool
 	delivered bool
 	exited    bool
@@ -74,7 +70,7 @@ type result struct {
 	err       error
 }
 
-func New(config Config, inbox domain.InboxRepository, watches domain.WatchRepository, schedules domain.ScheduleRepository, sessions domain.SessionRepository, events domain.EventRepository, model domain.ModelAdapter, hub domain.ToolHub) *Reconciler {
+func New(config Config, inbox domain.InboxRepository, schedules domain.ScheduleRepository, sessions domain.SessionRepository, events domain.EventRepository, model domain.ModelAdapter, hub domain.ToolHub) *Reconciler {
 	if config.IdleTimeout <= 0 {
 		config.IdleTimeout = time.Hour
 	}
@@ -90,7 +86,7 @@ func New(config Config, inbox domain.InboxRepository, watches domain.WatchReposi
 	if config.MaxAttempts <= 0 {
 		config.MaxAttempts = 3
 	}
-	return &Reconciler{config: config, inbox: inbox, watches: watches, schedules: schedules, sessions: sessions, events: events, model: model, hub: hub, live: map[domain.SessionKey]*process{}, taskFires: map[domain.SessionKey]time.Time{}, changed: make(chan struct{}, 1), results: make(chan result)}
+	return &Reconciler{config: config, inbox: inbox, schedules: schedules, sessions: sessions, events: events, model: model, hub: hub, live: map[domain.SessionKey]*process{}, changed: make(chan struct{}, 1), results: make(chan result)}
 }
 func (r *Reconciler) Notify() {
 	select {
@@ -167,12 +163,8 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			r.retire(p, domain.ConversationNoLongerAccepted)
 			continue
 		}
-		if !p.restDeadline.IsZero() {
-			if p.idle() || !now.Before(p.restDeadline) {
-				r.retire(p, "rest")
-			} else {
-				due(p.restDeadline)
-			}
+		if p.closeAtIdle && p.idle() {
+			r.retire(p, "rest")
 			continue
 		}
 		for _, item := range p.unstarted {
@@ -215,67 +207,23 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		}
 		var item *domain.InboxItem
 		prompt := schedule.Prompt
-		if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "consolidate") {
+		if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "rest") {
 			// File reads run with the item, never in the reconciliation loop.
 			prompt = "Run the " + schedule.Name + " procedure."
 		}
 		if prompt != "" {
 			value := TaskItem(schedule.Name, prompt, schedule.Workdir)
-			if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "consolidate") {
+			if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "rest") {
 				value.Payload.Procedure = schedule.Name
 			}
 			value.SourceKey = fmt.Sprintf("schedule:%s:%s", schedule.Name, schedule.NextRun.Format(time.RFC3339Nano))
 			item = &value
-		}
-		if item != nil && item.Payload.Procedure == "consolidate" {
-			sessions, err := r.sessions.List(ctx)
-			if err != nil {
-				return 0, err
-			}
-			for _, session := range sessions {
-				if session.ResumeToken == "" || session.Context == nil || session.Context.TaskName != "" || (r.config.Accept != nil && !r.config.Accept(*session.Context)) {
-					continue
-				}
-				if _, err := r.inbox.Enqueue(ctx, domain.InboxItem{
-					SourceKey:  fmt.Sprintf("rest:%s:%s", session.Key, schedule.NextRun.Format(time.RFC3339Nano)),
-					SessionKey: session.Key,
-					Lane:       "conv",
-					ReadyAt:    schedule.NextRun,
-					Payload:    domain.InboxPayload{Context: *session.Context, Procedure: "rest"},
-				}); err != nil {
-					return 0, err
-				}
-			}
 		}
 		if err := r.inbox.Fire(ctx, schedule, next, item); err != nil {
 			return 0, err
 		}
 		due(next)
 	}
-	taskRests := map[domain.SessionKey]time.Time{}
-	for _, p := range r.live {
-		if !p.restArmed || !p.idle() {
-			continue
-		}
-		last, next, err := lastTaskFire(schedules, p.info.TaskName, r.taskFires[p.key])
-		if err != nil {
-			return 0, err
-		}
-		if last {
-			taskRests[p.key] = next
-		}
-	}
-	watching := map[domain.SessionKey]bool{}
-	if len(taskRests) != 0 {
-		watches, err := r.watches.Unfinished(ctx)
-		if err != nil {
-			return 0, err
-		}
-		for _, watch := range watches {
-			watching[watch.Item.SessionKey] = true
-		}
-	}
-	// Watch completion atomically enqueues its result, so read watches before inbox items.
 	items, err := r.inbox.Active(ctx)
 	if err != nil {
 		return 0, err
@@ -286,48 +234,8 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		}
 		return item.ReadyAt
 	}
-	queuedWork := map[domain.SessionKey]bool{}
-	queuedRest := map[domain.SessionKey]string{}
-	for _, item := range items {
-		if item.Payload.Procedure == "rest" {
-			queuedRest[item.SessionKey] = item.Lane
-			continue
-		}
-		at := readyAt(item)
-		holdsRest := !at.After(now)
-		if next := taskRests[item.SessionKey]; !next.IsZero() {
-			holdsRest = at.Before(next)
-		}
-		if item.Status != "pending" || holdsRest {
-			queuedWork[item.SessionKey] = true
-		}
-	}
-	for key := range taskRests {
-		p := r.live[key]
-		if queuedRest[key] != "" || queuedWork[key] || watching[key] {
-			continue
-		}
-		item := domain.InboxItem{
-			SourceKey:  fmt.Sprintf("rest:%s:%s", p.key, now.Format(time.RFC3339Nano)),
-			SessionKey: p.key, Lane: "task", ReadyAt: now, Status: "pending",
-			Payload: domain.InboxPayload{Context: p.info, Procedure: "rest"},
-		}
-		item.ID, err = r.inbox.Enqueue(ctx, item)
-		if err != nil {
-			return 0, err
-		}
-		p.restArmed = false
-		queuedRest[key] = "task"
-		items = append(items, item)
-	}
-	// Conversation rests keep their order ahead of consolidation.
-	sort.SliceStable(items, func(i, j int) bool {
-		iRest := items[i].Lane == "task" && items[i].Payload.Procedure == "rest"
-		jRest := items[j].Lane == "task" && items[j].Payload.Procedure == "rest"
-		return iRest && !jRest
-	})
 	for _, p := range r.live {
-		if p.closing || p.resting() || queuedRest[p.key] == "task" || p.delivering != nil || p.turn != nil || len(p.unstarted) != 0 || p.model == nil {
+		if p.closing || p.delivering != nil || p.turn != nil || len(p.unstarted) != 0 || p.model == nil {
 			continue
 		}
 		at := p.last.Add(r.config.IdleTimeout)
@@ -343,7 +251,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	}
 	taskBusy := false
 	for _, p := range r.live {
-		if p.resting() || (p.lane == "task" && (p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil || p.closing)) {
+		if p.lane == "task" && (p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil || p.closing) {
 			taskBusy = true
 		}
 	}
@@ -355,17 +263,11 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 				continue
 			}
 		}
-		rest := item.Payload.Procedure == "rest"
-		if !rest && (blocked[item.SessionKey] || queuedRest[item.SessionKey] == "task") {
+		if blocked[item.SessionKey] {
 			continue
 		}
-		if rest && ((item.Lane != "task" && queuedWork[item.SessionKey]) || taskBusy || (p != nil && !p.idle())) {
-			continue
-		}
-		if !rest {
-			blocked[item.SessionKey] = true
-		}
-		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing || p.resting())) || (item.Lane == "task" && taskBusy) {
+		blocked[item.SessionKey] = true
+		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing)) || (item.Lane == "task" && taskBusy) {
 			continue
 		}
 		at := readyAt(item)
@@ -392,25 +294,14 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if !claimed {
 			continue
 		}
-		blocked[item.SessionKey] = true
-		var saved domain.Session
-		if p == nil || rest {
-			saved, err = r.sessions.Get(ctx, item.SessionKey)
+		if p == nil {
+			saved, err := r.sessions.Get(ctx, item.SessionKey)
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return 0, err
 			}
 			if errors.Is(err, domain.ErrNotFound) {
 				saved = domain.Session{Key: item.SessionKey, Context: &item.Payload.Context}
 			}
-		}
-		if rest && saved.ResumeToken == "" {
-			if err := r.inbox.Delivered(ctx, item.ID, saved); err != nil {
-				return 0, err
-			}
-			r.Notify()
-			continue
-		}
-		if p == nil {
 			endpoint, err := r.hub.OpenSession(item.SessionKey)
 			if err != nil {
 				if err := r.fail(ctx, item, err); err != nil {
@@ -426,32 +317,10 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			r.workers.Add(1)
 			go r.pump(processCtx, p, saved.ResumeToken, endpoint)
 		}
-		if item.Lane == "task" && !rest {
-			fire, err := taskFire(item)
-			if err != nil {
-				return 0, err
-			}
-			if fire.IsZero() {
-				fire = r.taskFires[item.SessionKey]
-				for _, candidate := range items {
-					if candidate.SessionKey != item.SessionKey {
-						continue
-					}
-					at, err := taskFire(candidate)
-					if err != nil {
-						return 0, err
-					}
-					if at.After(fire) && !at.After(readyAt(item)) {
-						fire = at
-					}
-				}
-			}
-			r.taskFires[item.SessionKey] = fire
-		}
 		p.delivering = &item
 		p.last = now
 		p.inputs <- item
-		if item.Lane == "task" || rest {
+		if item.Lane == "task" {
 			taskBusy = true
 		}
 		due(item.Deadline)
@@ -461,52 +330,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 
 func (p *process) idle() bool {
 	return !p.closing && p.delivering == nil && len(p.unstarted) == 0 && p.turn == nil && p.model != nil && p.model.Idle()
-}
-
-func (p *process) resting() bool {
-	if !p.restDeadline.IsZero() || (p.turn != nil && p.turn.Procedure == "rest") || (p.delivering != nil && p.delivering.Payload.Procedure == "rest") {
-		return true
-	}
-	for _, item := range p.unstarted {
-		if item.Payload.Procedure == "rest" {
-			return true
-		}
-	}
-	return false
-}
-
-func endsSession(procedure string) bool {
-	return procedure == "rest" || procedure == "consolidate"
-}
-
-func taskFire(item domain.InboxItem) (time.Time, error) {
-	stamp, ok := strings.CutPrefix(item.SourceKey, "schedule:"+item.Payload.Context.TaskName+":")
-	if !ok {
-		return time.Time{}, nil
-	}
-	return time.Parse(time.RFC3339Nano, stamp)
-}
-
-func lastTaskFire(schedules []domain.Schedule, name string, fire time.Time) (bool, time.Time, error) {
-	if fire.IsZero() {
-		return false, time.Time{}, nil
-	}
-	var boundary, next time.Time
-	for _, schedule := range schedules {
-		if schedule.Name != "consolidate" && schedule.Name != name {
-			continue
-		}
-		at, err := Next(schedule, fire)
-		if err != nil {
-			return false, time.Time{}, err
-		}
-		if schedule.Name == "consolidate" {
-			boundary = at
-		} else {
-			next = at
-		}
-	}
-	return !boundary.IsZero() && (next.IsZero() || !boundary.After(next)), next, nil
 }
 
 func (r *Reconciler) timeout(lane string) time.Duration {
@@ -624,6 +447,16 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handleWriteTimeout)
 	defer cancel()
 	p := out.process
+	if out.rest != nil {
+		if r.live[p.key] != p || p.closing {
+			out.rest <- errors.New("session is no longer active")
+			return nil
+		}
+		p.closeAtIdle = true
+		err := r.save(ctx, p)
+		out.rest <- err
+		return err
+	}
 	if r.live[p.key] != p {
 		return nil
 	}
@@ -682,7 +515,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			r.retire(p, domain.DeliveryDeadlineExceeded)
 		}
 		if !out.skipped && p.turn == nil {
-			p.turn = &domain.SessionTurn{InputID: item.ID, Deadline: time.Now().Add(r.timeout(p.lane)), Procedure: item.Payload.Procedure, Continuations: item.Payload.Continuations}
+			p.turn = &domain.SessionTurn{InputID: item.ID, Deadline: time.Now().Add(r.timeout(p.lane)), Continuations: item.Payload.Continuations}
 		}
 		if !out.skipped {
 			if p.unstarted == nil {
@@ -707,18 +540,11 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		}
 		delete(p.unstarted, item.ID)
 		if out.event.Kind == domain.ModelEventInputRefused {
-			if endsSession(item.Payload.Procedure) {
-				p.restDeadline = time.Time{}
-			}
 			if err := r.fail(ctx, item, out.event.Err); err != nil {
 				return err
 			}
-			if p.turn != nil {
-				if p.turn.InputID == item.ID && len(p.unstarted) == 0 {
-					p.turn = nil
-				} else {
-					p.turn.Failed = true
-				}
+			if p.turn != nil && p.turn.InputID == item.ID && len(p.unstarted) == 0 {
+				p.turn = nil
 			}
 			return r.save(ctx, p)
 		}
@@ -744,7 +570,6 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		}
 	case domain.ModelEventError:
 		if p.turn != nil {
-			p.turn.Failed = true
 			p.turn.Failure = event.Err.Error()
 		}
 	case domain.ModelEventTurnFinished:
@@ -757,18 +582,10 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 					}
 				}
 			}
-			if !turn.Failed && endsSession(turn.Procedure) {
-				p.restDeadline = turn.Deadline
-			} else if !endsSession(turn.Procedure) && p.lane == "task" && r.config.Procedure != nil && !r.taskFires[p.key].IsZero() {
-				p.restArmed = true
-			}
 		}
 		p.turn = nil
 		if err := r.save(ctx, p); err != nil {
 			return err
-		}
-		if turn != nil && !turn.Failed && r.config.Completed != nil {
-			return r.config.Completed(ctx, turn.Procedure, p.last)
 		}
 		return nil
 	}
@@ -776,9 +593,8 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 }
 func (r *Reconciler) state(p *process) domain.Session {
 	s := domain.Session{Key: p.key, ResumeToken: p.token, Context: &p.info, Turn: p.turn}
-	if !p.restDeadline.IsZero() {
+	if p.closeAtIdle {
 		s.ResumeToken = ""
-		s.Turn = nil
 	} else if p.model != nil {
 		if token := p.model.ResumeToken(); token != "" {
 			p.token = token

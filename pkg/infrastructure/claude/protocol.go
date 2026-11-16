@@ -231,6 +231,8 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 		}
 		if f.Subtype == "task_notification" {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: fmt.Sprintf("%s (%s): %s", f.TaskID, f.Status, f.Summary)})
+			p.command = ""
+			start()
 		}
 	case "result":
 		if f.failedResult() {

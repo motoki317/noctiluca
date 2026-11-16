@@ -14,13 +14,12 @@ import (
 )
 
 func TestFailedScheduleFireRetriesThenNotifiesOnce(t *testing.T) {
-	for _, name := range []string{"daily", "heartbeat", "consolidate"} {
+	for _, name := range []string{"daily", "heartbeat", "rest"} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				notes := make(chan string, 4)
-				f := newDeliveryRig(t, Config{IdleTimeout: 5 * time.Minute, Procedure: restProcedure,
+				f := newDeliveryRig(t, Config{IdleTimeout: 5 * time.Minute, Procedure: testProcedure,
 					NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil },
-					Completed:   func(context.Context, string, time.Time) error { t.Error("failed turn completed"); return nil },
 				})
 				f.model.idle, f.model.manualAck = true, true
 				require.NoError(t, repository.NewScheduleRepository(f.db).Save(t.Context(), domain.Schedule{
@@ -96,17 +95,13 @@ func TestFailedScheduleFireRetriesThenNotifiesOnce(t *testing.T) {
 }
 
 func TestFailedTaskFollowupsDoNotRetry(t *testing.T) {
-	for _, source := range []string{"watch:1", "wake:1", "rest:1", "task:1"} {
+	for _, source := range []string{"watch:1", "wake:1", "task:1"} {
 		t.Run(source, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{Procedure: restProcedure})
+				f := newDeliveryRig(t, Config{})
 				f.model.idle, f.model.manualAck = true, true
 				item := TaskItem("daily", "follow-up", "")
 				item.SourceKey = source
-				if source == "rest:1" {
-					item.Payload.Procedure = "rest"
-					require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: item.SessionKey, ResumeToken: "resume"}))
-				}
 				id, err := f.inbox.Enqueue(t.Context(), item)
 				require.NoError(t, err)
 				f.start(t)
@@ -170,37 +165,5 @@ func TestFailedFireRefusalKeepsDeliveryBackoff(t *testing.T) {
 		require.Equal(t, 2, attempts)
 		require.Equal(t, "turn error", failure)
 		require.True(t, retry.Equal(at.Add(30*time.Minute)))
-	})
-}
-
-func TestPendingFireRetryHoldsTaskRest(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{Procedure: restProcedure})
-		f.model.idle = true
-		installTaskRestSchedules(t, f, "0 0 * * *")
-		f.start(t)
-		s := take(t, f.model.opened)
-		input := take(t, s.inputs)
-		f.status(t, input.ID, "done")
-		at := time.Now()
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("outage")}
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.turn(t, "task:daily", false)
-		synctest.Wait()
-		f.status(t, input.ID, "pending")
-		var rests int
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'rest:%'").Scan(&rests))
-		require.Zero(t, rests)
-		require.Empty(t, s.inputs)
-		time.Sleep(time.Until(at.Add(15*time.Minute)) - time.Nanosecond)
-		synctest.Wait()
-		require.Empty(t, s.inputs)
-		require.Empty(t, s.closed)
-		require.Equal(t, "resume-token", f.turn(t, "task:daily", false).ResumeToken)
-		time.Sleep(time.Nanosecond)
-		require.Equal(t, input.ID, take(t, s.inputs).ID)
-		f.status(t, input.ID, "done")
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		finishTaskRest(t, f, s)
 	})
 }

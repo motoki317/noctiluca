@@ -81,14 +81,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     expiry DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS consolidation (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    last_run DATETIME NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS events_time ON events(received_at, id);
-CREATE INDEX IF NOT EXISTS sends_time ON sends(sent_at, id);
-CREATE INDEX IF NOT EXISTS model_events_time ON model_events(recorded_at, id);
 
 CREATE TABLE IF NOT EXISTS inbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
