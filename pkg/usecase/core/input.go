@@ -10,6 +10,11 @@ import (
 )
 
 func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserInput, error) {
+	if item.Payload.Event == nil {
+		if prefix, _, ok := strings.Cut(item.SourceKey, ":"); ok && (prefix == "watch" || prefix == "wake") {
+			return item.Payload.Input, nil
+		}
+	}
 	target, at, sender := item.Payload.Target, item.ReadyAt, ""
 	message, direct := item.Payload.MessageRef, item.Payload.Context.Direct
 	if event := item.Payload.Event; event != nil {

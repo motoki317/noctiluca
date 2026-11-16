@@ -52,6 +52,15 @@ func TestReadableInput(t *testing.T) {
 	require.Equal(t, strings.Repeat("あ", 80)+"…", excerpt(strings.Repeat("あ", 81)))
 }
 
+func TestPrepareBackgroundInput(t *testing.T) {
+	for _, source := range []string{"watch:1", "wake:1"} {
+		item := domain.InboxItem{SourceKey: source, Payload: domain.InboxPayload{Input: domain.UserInput{Text: "completed work"}}}
+		input, err := (&core{}).prepare(t.Context(), item)
+		require.NoError(t, err)
+		require.Equal(t, item.Payload.Input, input)
+	}
+}
+
 func TestReadableMessageChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name, notice string
@@ -119,7 +128,11 @@ func TestPreparePostRefs(t *testing.T) {
 				payload.Event = &event
 				payload.Target, payload.MessageRef, payload.Context.Direct = "ignored", "ignored", !tc.direct
 			}
-			input, err := c.prepare(t.Context(), domain.InboxItem{Lane: tc.lane, Payload: payload})
+			item := domain.InboxItem{Lane: tc.lane, Payload: payload}
+			if tc.event {
+				item.SourceKey = "watch:message"
+			}
+			input, err := c.prepare(t.Context(), item)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantCall, called)
 			if tc.wantCall {
