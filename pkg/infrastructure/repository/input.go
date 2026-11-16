@@ -11,9 +11,9 @@ import (
 
 func (r *eventRepository) InputContext(ctx context.Context, key domain.SessionKey, conversation domain.ConversationRef, at time.Time) (domain.InputContext, error) {
 	var info domain.InputContext
-	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE session_key=? AND status='done'
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE status='done'
 		AND ((json_extract(payload, '$.Event.Accepted')=1 AND json_extract(payload, '$.Event.Conversation')=?)
-        OR (json_extract(payload, '$.Event') IS NULL AND json_extract(payload, '$.Target')=?)))`, key, conversation, conversation).Scan(&info.ThreadSeen)
+        OR (json_extract(payload, '$.Event') IS NULL AND json_extract(payload, '$.Target')=?)))`, conversation, conversation).Scan(&info.ThreadSeen)
 	if err != nil {
 		return info, err
 	}
