@@ -13,7 +13,7 @@ import (
 
 func TestRestClosesAtIdleAndStartsFresh(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{TurnTimeout: time.Minute})
+		f := newDeliveryRig(t, Config{})
 		f.model.manualAck, f.model.idle = true, true
 		f.start(t)
 		id := f.enqueue(t, "room", "save memory")
@@ -86,7 +86,7 @@ func TestRestStaysFreshAcrossRestartBeforeIdle(t *testing.T) {
 func TestRestDispatchesReadyInputBeforeClose(t *testing.T) {
 	f := newDeliveryRig(t, Config{})
 	r := New(Config{}, f.inbox, repository.NewScheduleRepository(f.db), f.sessions, repository.NewEventRepository(f.db), nil, &hubFake{closed: make(chan domain.SessionKey, 1)})
-	p := &process{key: domain.MainSessionKey, closeAtIdle: true, model: &sessionFake{idle: true}, inputs: make(chan domain.InboxItem, 1), cancel: func() {}, turn: &domain.SessionTurn{Deadline: time.Now().Add(time.Hour)}}
+	p := &process{key: domain.MainSessionKey, closeAtIdle: true, model: &sessionFake{idle: true}, inputs: make(chan domain.InboxItem, 1), cancel: func() {}, turn: &domain.SessionTurn{}}
 	r.live[p.key] = p
 	id, err := f.inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "ready", SessionKey: "old-room", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "arrived before close"}}})
 	require.NoError(t, err)

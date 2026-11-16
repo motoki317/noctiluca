@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,9 +53,6 @@ func TestCodexRunHelper(t *testing.T) {
 		case "turn/start":
 			respond(map[string]any{"turn": map[string]string{"id": "codex-turn"}})
 			emit(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "codex-thread", "turn": map[string]string{"id": "codex-turn", "status": "inProgress"}}})
-			if os.Getenv("NOCTILUCA_CODEX_RUN_HANG") == "1" {
-				continue
-			}
 			tool, args := slackSendFromInput(t, request.Params.Input[0].Text, "PONG")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			client := mcp.NewClient(&mcp.Implementation{Name: "fake-codex", Version: "1"}, nil)
@@ -76,81 +72,65 @@ func TestCodexRunHelper(t *testing.T) {
 			cancel()
 			emit(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "codex-thread", "turn": map[string]string{"id": "codex-turn", "status": "completed"}}})
 		case "turn/interrupt":
-			require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("NOCTILUCA_CODEX_RUN_DIR"), "interrupted"), []byte("interrupted"), 0600))
 			respond(map[string]any{})
 		}
 	}
 	os.Exit(0)
 }
 
-func TestRunCodexReplyAndTurnTimeout(t *testing.T) {
-	for _, hang := range []bool{false, true} {
-		t.Run(fmt.Sprintf("timeout=%t", hang), func(t *testing.T) {
-			dir := t.TempDir()
-			binary, err := os.Executable()
-			require.NoError(t, err)
-			t.Setenv("NOCTILUCA_CODEX_RUN_BINARY", binary)
-			t.Setenv("NOCTILUCA_CODEX_RUN_DIR", dir)
-			if hang {
-				t.Setenv("NOCTILUCA_CODEX_RUN_HANG", "1")
-			}
-			t.Setenv("TEST_APP_TOKEN", "xapp-fake")
-			t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexec \"$NOCTILUCA_CODEX_RUN_BINARY\" -test.run=TestCodexRunHelper -- \"$@\"\n"), 0700))
-			path := filepath.Join(dir, "config.yaml")
-			require.NoError(t, os.WriteFile(path, []byte(`messaging:
+func TestRunCodexReply(t *testing.T) {
+	dir := t.TempDir()
+	binary, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv("NOCTILUCA_CODEX_RUN_BINARY", binary)
+	t.Setenv("TEST_APP_TOKEN", "xapp-fake")
+	t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexec \"$NOCTILUCA_CODEX_RUN_BINARY\" -test.run=TestCodexRunHelper -- \"$@\"\n"), 0700))
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`messaging:
   - name: slack
     type: slack
     owner: U_OWNER
     slack:
       app_token: {env: TEST_APP_TOKEN}
       bot_token: {env: TEST_BOT_TOKEN}
-model: {type: codex, executable: ./codex, name: test-model, reasoning_effort: low, turn_timeout: 1s}
+model: {type: codex, executable: ./codex, name: test-model, reasoning_effort: low}
 heartbeat: {enabled: false}
 `), 0600))
-			config, err := loadConfig(path)
+	config, err := loadConfig(path)
+	require.NoError(t, err)
+	api := newRunSlack(t, nil)
+	app, err := newApplication(t.Context(), config, nil, sdk.OptionAPIURL(api.URL+"/"))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- app.Start(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-done:
 			require.NoError(t, err)
-			api := newRunSlack(t, nil)
-			app, err := newApplication(t.Context(), config, nil, sdk.OptionAPIURL(api.URL+"/"))
-			require.NoError(t, err)
-			ctx, cancel := context.WithCancel(t.Context())
-			done := make(chan error, 1)
-			go func() { done <- app.Start(ctx) }()
-			defer func() {
-				cancel()
-				select {
-				case err := <-done:
-					require.NoError(t, err)
-				case <-time.After(5 * time.Second):
-					t.Error("Codex assembly shutdown timed out")
-				}
-			}()
-			select {
-			case socket := <-api.connections:
-				require.NoError(t, socket.WriteJSON(map[string]any{"type": "events_api", "envelope_id": "message", "payload": map[string]any{
-					"type": "event_callback", "event_id": "message", "event": map[string]any{"type": "message", "channel": "D_OWNER", "user": "U_OWNER", "text": "hello", "ts": "1.2"},
-				}}))
-			case <-time.After(5 * time.Second):
-				t.Fatal("socket startup timed out")
-			}
-			if hang {
-				require.Eventually(t, func() bool {
-					_, err := os.Stat(filepath.Join(dir, "interrupted"))
-					return err == nil
-				}, 5*time.Second, 10*time.Millisecond, "turn_timeout did not interrupt Codex")
-				return
-			}
-			select {
-			case post := <-api.posts:
-				require.Equal(t, "D_OWNER", post.Get("channel"))
-				require.Equal(t, "PONG", post.Get("text"))
-			case <-time.After(5 * time.Second):
-				t.Fatal("Codex reply timed out")
-			}
-			require.Eventually(t, func() bool {
-				saved, err := repository.NewSessionRepository(app.db).Get(t.Context(), domain.MainSessionKey)
-				return err == nil && strings.HasPrefix(saved.ResumeToken, "codex-thread:") && saved.Turn == nil
-			}, 5*time.Second, 10*time.Millisecond)
-		})
+		case <-time.After(5 * time.Second):
+			t.Error("Codex assembly shutdown timed out")
+		}
+	}()
+	select {
+	case socket := <-api.connections:
+		require.NoError(t, socket.WriteJSON(map[string]any{"type": "events_api", "envelope_id": "message", "payload": map[string]any{
+			"type": "event_callback", "event_id": "message", "event": map[string]any{"type": "message", "channel": "D_OWNER", "user": "U_OWNER", "text": "hello", "ts": "1.2"},
+		}}))
+	case <-time.After(5 * time.Second):
+		t.Fatal("socket startup timed out")
 	}
+	select {
+	case post := <-api.posts:
+		require.Equal(t, "D_OWNER", post.Get("channel"))
+		require.Equal(t, "PONG", post.Get("text"))
+	case <-time.After(5 * time.Second):
+		t.Fatal("Codex reply timed out")
+	}
+	require.Eventually(t, func() bool {
+		saved, err := repository.NewSessionRepository(app.db).Get(t.Context(), domain.MainSessionKey)
+		return err == nil && strings.HasPrefix(saved.ResumeToken, "codex-thread:") && saved.Turn == nil
+	}, 5*time.Second, 10*time.Millisecond)
 }

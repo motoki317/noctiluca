@@ -137,7 +137,7 @@ func (s *session) shutdown() {
 	}
 	s.mu.RUnlock()
 	if active != "" {
-		// The core cancels the process context when its turn deadline expires.
+		// Interrupt before killing the process so the CLI can record the cut turn.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		_ = s.call(ctx, "turn/interrupt", map[string]string{"threadId": threadID, "turnId": active}, nil)
 		cancel()

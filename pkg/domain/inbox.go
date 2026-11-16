@@ -31,7 +31,6 @@ type InboxItem struct {
 	Status     string
 	Attempts   int
 	RetryAt    time.Time
-	Deadline   time.Time
 	LastError  string
 }
 
@@ -56,7 +55,7 @@ type InboxRepository interface {
 	Enqueue(context.Context, InboxItem) (int64, error)
 	Receive(context.Context, InboundEvent, InboxItem) error
 	Active(context.Context) ([]InboxItem, error)
-	Claim(context.Context, int64, time.Time) (bool, error)
+	Claim(context.Context, int64) (bool, error)
 	Finish(context.Context, int64, string, int, time.Time) (bool, error)
 	Fire(context.Context, Schedule, time.Time, *InboxItem) error
 }

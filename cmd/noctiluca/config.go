@@ -131,7 +131,6 @@ type Config struct {
 	Model     struct {
 		Type            string        `mapstructure:"type"`
 		Workdir         string        `mapstructure:"workdir"`
-		TurnTimeout     time.Duration `mapstructure:"turn_timeout"`
 		Executable      string        `mapstructure:"executable"`
 		Name            string        `mapstructure:"name"`
 		ReasoningEffort string        `mapstructure:"reasoning_effort"`
@@ -148,9 +147,6 @@ type Config struct {
 		Interval time.Duration `mapstructure:"interval"`
 		Enabled  bool          `mapstructure:"enabled"`
 	} `mapstructure:"heartbeat"`
-	Tasks struct {
-		Timeout time.Duration `mapstructure:"timeout"`
-	} `mapstructure:"tasks"`
 	Cron       []domain.Schedule        `mapstructure:"cron"`
 	MCPServers []mcpclient.ServerConfig `mapstructure:"mcp_servers"`
 	Log        struct {
@@ -165,10 +161,9 @@ func loadConfig(path string) (Config, error) {
 	v.SetConfigType("yaml")
 	for key, value := range map[string]any{
 		"log.level": "INFO", "database.path": "noctiluca.db", "memory.dir": "memory",
-		"model.type": "claude", "model.workdir": "", "model.turn_timeout": "2h", "model.name": "", "model.idle_timeout": "1h",
+		"model.type": "claude", "model.workdir": "", "model.name": "", "model.idle_timeout": "1h",
 		"toolhub.listen": "127.0.0.1:0", "heartbeat.enabled": true, "heartbeat.interval": "1h",
-		"tasks.timeout": "30m",
-		"rest.enabled":  false, "rest.cron": "0 4 * * *", "rest.tz": "UTC",
+		"rest.enabled": false, "rest.cron": "0 4 * * *", "rest.tz": "UTC",
 	} {
 		v.SetDefault(key, value)
 	}
@@ -313,7 +308,7 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if c.Memory.Dir == "" || c.Database.Path == "" || c.Model.Executable == "" {
 		return nil, 0, errors.New("memory.dir, database.path, and model.executable are required")
 	}
-	if c.Model.TurnTimeout <= 0 || c.Tasks.Timeout <= 0 || c.Model.IdleTimeout <= 0 || c.Heartbeat.Interval <= 0 {
+	if c.Model.IdleTimeout <= 0 || c.Heartbeat.Interval <= 0 {
 		return nil, 0, errors.New("timeouts and intervals must be positive")
 	}
 	host, port, err := net.SplitHostPort(c.ToolHub.Listen)

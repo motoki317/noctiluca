@@ -18,8 +18,6 @@ import (
 
 type Config struct {
 	IdleTimeout time.Duration
-	TaskTimeout time.Duration
-	TurnTimeout time.Duration
 	RetryDelay  time.Duration
 	MaxAttempts int
 	Workdir     string
@@ -50,7 +48,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	if model == nil || hub == nil || events == nil || sessions == nil || schedules == nil || inbox == nil {
 		return nil, errors.New("core dependencies are required")
 	}
-	if config.IdleTimeout < 0 || config.TaskTimeout < 0 {
+	if config.IdleTimeout < 0 {
 		return nil, errors.New("timeouts must be positive")
 	}
 	router, err := newMessagingRouter(messaging)
@@ -72,7 +70,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 			})
 		}
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
 		return memoryusecase.Prompt(memory, c.toolNotes(ctx), prompt)(ctx, session)
 	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.reconciler.Notify)

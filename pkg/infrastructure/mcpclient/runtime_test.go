@@ -104,7 +104,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 				require.ErrorContains(t, err, "unknown tool")
 			}
 			if scenario == "401" {
-				claimed, err := inbox.Claim(t.Context(), items[0].ID, time.Now().Add(time.Minute))
+				claimed, err := inbox.Claim(t.Context(), items[0].ID)
 				require.NoError(t, err)
 				require.True(t, claimed)
 				_, err = inbox.Finish(t.Context(), items[0].ID, "", 0, time.Time{})

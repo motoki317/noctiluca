@@ -14,7 +14,7 @@
 //   - `result` ends a turn. `message_stop` also appears between tool calls, so it does not.
 //   - Background Bash or Agent work reports `system/task_notification` when it finishes, and the
 //     CLI then starts a turn by itself, without input. The adapter emits turn_started for that
-//     turn so the reconciler marks the session busy and applies the turn deadline.
+//     turn so the reconciler keeps the session busy until its result.
 //   - `--resume <session_id>` restores the conversation in a new process.
 //   - Idle sessions with at least 200000 context tokens and a one-hour cache compact internally after 54 minutes.
 //
