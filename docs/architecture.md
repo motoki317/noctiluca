@@ -51,29 +51,51 @@ sequenceDiagram
 
 Only tools post. The model's final text is never sent, so a silent turn posts nothing.
 
-A row counts as delivered when the model reports that it started on the row's input, not when `Send` returns. A conversation sends each input as it arrives, without waiting for earlier inputs to start.
+A row counts as delivered when the model reports that it started on the row's input, not when `Send` returns. The reconciler sends each due input without waiting for earlier inputs to start.
 
 ## Sessions
 
-- A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, rest) runs in its own session.
-- Chat inputs name the place, sender, and local time, with ordering context. Each adapter formats a location line with its native IDs. For example, Slack supplies `channel`, `thread_ts`, and `timestamp`. Its send tool takes `channel` and an optional `thread_ts`. Watch results and wake notes arrive as plain inputs without posting targets.
-- A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
-- Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
-- The nightly `rest` schedule sends `procedures/rest.md` as a normal input. The model can also follow it during the day when it judges that its session needs a fresh start.
-- The core `rest` tool marks only its calling session to close at idle. It immediately clears the saved resume token. The process closes once it has no turn or unstarted input and the model CLI reports no background work of its own, such as `run_in_background` Bash or Agent.
-- Inputs that arrive before that idle point still run in the old process. The wait for idle has no deadline. A restart after the call starts fresh even if the old process never reached idle.
-- Only the tool closes a session for rest, not the end of the procedure. Other sessions keep their context until their own model calls it.
+Every instance uses one model session, `main`, for all accepted chat inputs, scheduled tasks, `watch` outcomes, and `wake_at` notes.
+A model process is one run of the model CLI, and it resumes `main` from the saved token.
+The reconciler sends due rows in the order they arrived, without priorities.
+An input that arrives during a turn joins that turn.
+Owner notices use separate, model-less `notice:` processes.
+
+Chat headers name the place, sender, and local time, with ordering context.
+Each adapter formats a location line with the native IDs its send tool takes.
+Watch results and wake notes arrive as plain inputs without posting targets.
+
+The model always runs in `model.workdir`.
+A task header names the task and adds `workdir: <path>` if the task names a different workdir.
+The `trust` and conversation rules ([running.md](running.md#configure)) apply to each input.
+
+One turn runs at a time, so a long foreground step delays every conversation.
+Long work can leave the turn through native background tools or `watch`.
+The `watch` tool runs a command and sends its exit code and output to `main` as a new input.
+Codex background commands never wake the model, so the Codex adapter tells the model to use `watch`.
+The `wake_at` tool sends a note to `main` at a given time.
+
+An idle model process closes after `model.idle_timeout`, and the next input resumes `main`.
+The hourly heartbeat counts as input, so with the default config the process stays open until `rest`, a restart, or a failure.
+
+The nightly `rest` schedule sends `procedures/rest.md` to `main` as a task input.
+The model can also follow it during the day when it judges that its context needs a fresh start.
+The core `rest` tool immediately clears the saved resume token and marks `main` to close at idle.
+The process closes once no turn, waiting input, or native background work of the model CLI remains.
+Inputs that arrive before that idle point still run in the old process.
+This wait has no deadline.
+Any process that opens after the call starts fresh, even if the old process never reached idle.
+Completing the procedure without calling `rest` keeps the context.
 
 ## Work and failure
 
 Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at` note, or a `watch` outcome.
 
-- A row that fails to send, or that the model refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
-- A schedule fire whose turn fails, heartbeat and rest included, runs again in the same task session 15 minutes later, and 30 minutes after a second failure. A failed turn on a chat, `watch`, or `wake_at` row does not run again.
-- Delivery failures and turn failures count against one budget of three attempts per row, so an earlier delivery failure moves a fire's first turn retry to the 30-minute delay. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
-- Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
-- A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input using its posting instructions. A turn cut at its timeout does not continue. Tasks notify the owner.
-- Conversation sessions run concurrently. Scheduled tasks run one at a time.
+- A row that fails to send, or that the model CLI refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
+- A schedule fire that opens a turn runs again after 15 minutes if the turn fails. A second failure delays its next attempt by 30 minutes. A failed turn on a chat, `watch`, or `wake_at` row does not run again.
+- Delivery failures and turn failures count against one budget of three attempts per row. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
+- An input that opens a turn sets its timeout: `model.turn_timeout` (2 h), or `tasks.timeout` (30 min) for a task. Later inputs share that deadline.
+- After a restart, crash, model exit, or timeout, an interrupted turn continues once with a note. The note asks the model to finish each unfinished input using its posting instructions. A continuation cut short does not create another continuation.
 - A failed row never stops the process. Only a failure of SQLite or of the tool-hub listener does.
 
 ## Interfaces
@@ -123,7 +145,7 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 
 Any human or bot that reaches the agent starts turns: in DMs, in every channel the bot is in, and on traQ in mentions elsewhere. Anyone who can add the bot to a channel widens that set. A `messaging` entry's optional `trust` narrows it to an allowlist, and the owner is always on it. A conversation override can replace that trust, require a mention, or ignore the conversation. A sender that the adapter reports as neither human nor bot never starts a turn. Configuration: [running.md](running.md#configure).
 
-Every session, scheduled tasks included, gets the same tools: the hub's tools, external MCP tools, and the model CLI's native tools with every permission prompt allowed. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
+For every input, `main` uses the hub's tools, external MCP tools, and the model CLI's native tools. The model CLI allows every permission prompt. Native tools run as the Unix user that runs noctiluca, because reviews and builds need a shell. The model judges what to change.
 
 Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 

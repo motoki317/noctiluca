@@ -44,20 +44,20 @@ func TestGroupRefreshKeepsSessionAndAcceptsNewUsers(t *testing.T) {
 	f.messaging.in <- e
 	s := take(t, f.model.opened)
 	take(t, s.inputs)
-	require.True(t, f.hub.active("test:room"))
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	take(t, calls)
 	responses <- response{err: errors.New("temporary outage")}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- e
 	take(t, s.inputs)
-	require.True(t, f.hub.active("test:room"))
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	take(t, calls)
 	responses <- response{members: []string{"owner", "member"}}
 	take(t, calls)
 	e.Sender.ID = "member"
 	f.messaging.in <- e
 	take(t, s.inputs)
-	require.True(t, f.hub.active("test:room"))
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	select {
 	case <-f.hub.closed:
 		t.Fatal("closed a session after membership expanded")
@@ -76,7 +76,7 @@ func TestGroupUpdatesKeepSessionAndRejectRemovedUsers(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- message("test:room", "owner", "still accepted")
 	require.Contains(t, take(t, s.inputs).Text, "still accepted")
-	require.True(t, f.hub.active("test:room"))
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	select {
 	case <-f.model.opened:
 		t.Fatal("replaced the live session")
@@ -101,19 +101,15 @@ func TestEntryTrustRefreshAndRestore(t *testing.T) {
 	f.messaging.in <- e
 	require.Contains(t, take(t, s.inputs).Text, "accepted without restart")
 	require.NoError(t, s.Close())
-	require.Equal(t, domain.SessionKey("test:direct"), take(t, f.hub.closed))
-	item, err := f.core.(*core).workItem(t.Context(), "test:direct")
-	require.NoError(t, err)
-	require.Equal(t, domain.SessionKey("test:direct"), item.SessionKey)
-	require.Equal(t, domain.ConversationRef("test:direct"), item.Payload.Context.Conversation)
-	require.True(t, item.Payload.Context.Direct)
+	require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
 	item.SourceKey = "wake-test"
 	item.ReadyAt = time.Now()
 	item.Payload.Input.Text = "wake after close"
 	resumed := take(t, f.model.opened)
-	require.Equal(t, "resume-test:direct", resumed.config.ResumeToken)
+	require.Equal(t, "resume-main", resumed.config.ResumeToken)
 	require.Contains(t, take(t, resumed.inputs).Text, "previous turn was interrupted: model process exited")
-	_, err = f.core.(*core).inbox.Enqueue(t.Context(), item)
+	_, err := f.core.(*core).inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
 	f.core.(*core).reconciler.Notify()
 	require.Contains(t, take(t, resumed.inputs).Text, "wake after close")

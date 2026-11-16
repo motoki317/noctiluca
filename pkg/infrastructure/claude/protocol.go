@@ -170,12 +170,12 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 	case "command_lifecycle":
 		inputID, found := pending[f.CommandUUID]
 		if f.State == "started" {
+			p.command = f.CommandUUID
+			start()
 			if found {
 				delete(pending, f.CommandUUID)
 				events = append(events, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: inputID})
 			}
-			p.command = f.CommandUUID
-			start()
 		}
 		if terminalCommand(f.State) && f.CommandUUID == p.command {
 			p.active = false

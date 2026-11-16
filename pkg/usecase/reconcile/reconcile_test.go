@@ -20,18 +20,15 @@ func testProcedure(_ context.Context, name string) (string, error) { return "pro
 type modelFake struct {
 	manualAck bool
 	idle      bool
+	openErr   error
 	send      func(context.Context, domain.UserInput) error
 	opened    chan *sessionFake
 	closeWait <-chan struct{}
 }
 
 func (m *modelFake) Open(ctx context.Context, c domain.ModelSessionConfig) (domain.ModelSession, error) {
-	if c.Key == "fail" {
-		return nil, errors.New("model unavailable")
-	}
-	if c.Key == "slow-open" {
-		<-ctx.Done()
-		return nil, ctx.Err()
+	if m.openErr != nil {
+		return nil, m.openErr
 	}
 	s := &sessionFake{config: c, send: m.send, manualAck: m.manualAck, idle: m.idle, closeWait: m.closeWait, inputs: make(chan domain.UserInput, 4), events: make(chan domain.ModelEvent, 8), closed: make(chan struct{})}
 	m.opened <- s
@@ -54,6 +51,7 @@ type sessionFake struct {
 func (s *sessionFake) Send(ctx context.Context, in domain.UserInput) (err error) {
 	defer func() {
 		if err == nil && !s.manualAck {
+			s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 			s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: in.ID}
 		}
 	}()
@@ -108,10 +106,11 @@ func TestOpenFailureRetriesAndRevokesGrants(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		notes := make(chan string, 10)
 		f := newDeliveryRig(t, Config{RetryDelay: 5 * time.Millisecond, MaxAttempts: 2, NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil }})
+		f.model.openErr = errors.New("model unavailable")
 		f.start(t)
 		id := f.enqueue(t, "fail", "bad")
 		for range 2 {
-			require.Equal(t, domain.SessionKey("fail"), take(t, f.hub.closed))
+			require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
 		}
 		f.status(t, id, "dead")
 		var attempts int
@@ -122,7 +121,7 @@ func TestOpenFailureRetriesAndRevokesGrants(t *testing.T) {
 	})
 }
 
-func TestRejectedConversationRetiresSessionAndRejectsWake(t *testing.T) {
+func TestRejectedConversationKeepsSessionAndRejectsRow(t *testing.T) {
 	var rejected atomic.Bool
 	f := newDeliveryRig(t, Config{Accept: func(domain.SessionContext) bool { return !rejected.Load() }})
 	f.start(t)
@@ -132,43 +131,12 @@ func TestRejectedConversationRetiresSessionAndRejectsWake(t *testing.T) {
 	f.status(t, id, "done")
 	rejected.Store(true)
 	next := f.enqueue(t, "room", "wake")
-	require.Equal(t, domain.SessionKey("room"), take(t, f.hub.closed))
-	take(t, s.closed)
 	f.status(t, next, "dead")
-	record, err := f.sessions.Get(t.Context(), "room")
+	record, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
 	require.NoError(t, err)
 	require.Equal(t, "resume-token", record.ResumeToken)
 	require.Empty(t, f.model.opened)
-}
-
-func TestSlowOpenDoesNotBlockAnotherConversation(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
-		require.NoError(t, err)
-		defer db.Close()
-		inbox := repository.NewInboxRepository(db)
-		for _, key := range []string{"slow-open", "fast"} {
-			item := TaskItem(key, "input", "")
-			item.SessionKey = domain.SessionKey(key)
-			item.Lane = "conv"
-			item.Payload.Context.TaskName = ""
-			_, err := inbox.Enqueue(t.Context(), item)
-			require.NoError(t, err)
-		}
-		m := &modelFake{opened: make(chan *sessionFake, 2)}
-		h := &hubFake{closed: make(chan domain.SessionKey, 4)}
-		r := New(Config{TurnTimeout: 100 * time.Millisecond, MaxAttempts: 1}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), m, h)
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- r.Start(ctx) }()
-		s := take(t, m.opened)
-		require.Equal(t, domain.SessionKey("fast"), s.config.Key)
-		take(t, s.inputs)
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		require.Equal(t, domain.SessionKey("slow-open"), take(t, h.closed))
-		cancel()
-		require.NoError(t, take(t, done))
-	})
+	require.Empty(t, s.closed)
 }
 
 func TestNoticeRetrySurvivesRestart(t *testing.T) {
@@ -216,4 +184,100 @@ func TestToolScheduleUsesDefaultWorkdir(t *testing.T) {
 	jobs, err := schedules.List(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "/work", jobs[0].Workdir)
+}
+
+func TestAllInputsReachMainInReadyOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		notes := make(chan string, 1)
+		f := newDeliveryRig(t, Config{Workdir: "/default", NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
+		f.model.manualAck = true
+		legacy := domain.Session{Key: "room-a", ResumeToken: "old-token", Turn: &domain.SessionTurn{}}
+		require.NoError(t, f.sessions.Save(t.Context(), legacy))
+		at := time.Now()
+		items := []domain.InboxItem{
+			{SourceKey: "second", SessionKey: "room-b", Lane: "conv", ReadyAt: at.Add(-time.Second)},
+			{SourceKey: "first", SessionKey: "room-a", Lane: "conv", ReadyAt: at.Add(-2 * time.Second)},
+			TaskItem("daily", "task", "/task"),
+			{SourceKey: "watch:1", SessionKey: "task:old", Lane: "task", ReadyAt: at},
+			{SourceKey: "wake:1", SessionKey: "room-b", Lane: "conv", ReadyAt: at.Add(time.Minute)},
+		}
+		items[2].SessionKey, items[2].ReadyAt = "task:daily", at.Add(-time.Second)
+		for i := range items {
+			items[i].Payload.Input.Text = items[i].SourceKey
+			id, err := f.inbox.Enqueue(t.Context(), items[i])
+			require.NoError(t, err)
+			items[i].ID = id
+		}
+		_, err := f.inbox.Enqueue(t.Context(), domain.NewOwnerNotice("notice-test", "owner notice"))
+		require.NoError(t, err)
+		f.start(t)
+		s := take(t, f.model.opened)
+		require.Equal(t, domain.MainSessionKey, s.config.Key)
+		require.Equal(t, "/default", s.config.Workdir)
+		require.Empty(t, s.config.ResumeToken)
+		for _, i := range []int{1, 0, 2, 3} {
+			require.Equal(t, items[i].ID, take(t, s.inputs).ID)
+		}
+		synctest.Wait()
+		require.Empty(t, s.inputs)
+		require.Equal(t, "owner notice", take(t, notes))
+		time.Sleep(time.Minute)
+		require.Equal(t, items[4].ID, take(t, s.inputs).ID)
+		require.Empty(t, f.model.opened)
+		saved, err := f.sessions.Get(t.Context(), legacy.Key)
+		require.NoError(t, err)
+		require.Equal(t, legacy, saved)
+		for _, item := range items {
+			s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: item.ID}
+			f.status(t, item.ID, "done")
+		}
+	})
+}
+
+func TestMainExitRedeliversOldKeyInput(t *testing.T) {
+	f := newDeliveryRig(t, Config{})
+	f.model.manualAck = true
+	f.start(t)
+	id := f.enqueue(t, "legacy-room", "unstarted")
+	s := take(t, f.model.opened)
+	require.Equal(t, id, take(t, s.inputs).ID)
+	f.status(t, id, "dispatched")
+	close(s.events)
+	resumed := take(t, f.model.opened)
+	require.Equal(t, domain.MainSessionKey, resumed.config.Key)
+	require.Equal(t, "resume-token", resumed.config.ResumeToken)
+	require.Equal(t, id, take(t, resumed.inputs).ID)
+	resumed.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
+	f.status(t, id, "done")
+	var key string
+	var attempts int
+	require.NoError(t, f.db.QueryRow("SELECT session_key, attempts FROM inbox WHERE id=?", id).Scan(&key, &attempts))
+	require.Equal(t, "legacy-room", key)
+	require.Zero(t, attempts)
+}
+
+func TestNoticeRoutingMatchesRecovery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		notes := make(chan string, 2)
+		f := newDeliveryRig(t, Config{NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
+		items := []domain.InboxItem{
+			domain.NewOwnerNotice("empty", ""),
+			{SourceKey: "legacy", SessionKey: "old-room", Lane: "conv", Payload: domain.InboxPayload{Notice: "unused", Input: domain.UserInput{Text: "work"}}},
+		}
+		for i := range items {
+			items[i].Status = "dispatched"
+			var err error
+			items[i].ID, err = f.inbox.Enqueue(t.Context(), items[i])
+			require.NoError(t, err)
+		}
+		f.start(t)
+		require.Empty(t, take(t, notes))
+		f.status(t, items[0].ID, "done")
+		s := take(t, f.model.opened)
+		require.Equal(t, domain.MainSessionKey, s.config.Key)
+		require.Equal(t, items[1].ID, take(t, s.inputs).ID)
+		f.status(t, items[1].ID, "done")
+		require.Empty(t, f.model.opened)
+		require.Empty(t, notes)
+	})
 }

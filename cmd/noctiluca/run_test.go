@@ -25,6 +25,7 @@ import (
 	sdk "github.com/slack-go/slack"
 	"github.com/stretchr/testify/require"
 
+	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 )
 
@@ -225,7 +226,7 @@ cron:
 	require.NoError(t, err)
 	require.Len(t, outbound, 1)
 	require.Equal(t, "**Hello** from the hub", outbound[0].Message.Text)
-	session, err := repository.NewSessionRepository(db).Get(t.Context(), "slack:D_DIRECT:")
+	session, err := repository.NewSessionRepository(db).Get(t.Context(), domain.MainSessionKey)
 	require.NoError(t, err)
 	require.Equal(t, "run-session", session.ResumeToken)
 	schedules, err := repository.NewScheduleRepository(db).List(t.Context())

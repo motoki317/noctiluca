@@ -63,12 +63,12 @@ func (f *deliveryRig) status(t *testing.T, id int64, want string) {
 		return f.db.QueryRow("SELECT status FROM inbox WHERE id=?", id).Scan(&status) == nil && status == want
 	}, time.Second, time.Millisecond)
 }
-func (f *deliveryRig) turn(t *testing.T, key string, busy bool) domain.Session {
+func (f *deliveryRig) turn(t *testing.T, busy bool) domain.Session {
 	t.Helper()
 	var saved domain.Session
 	require.Eventually(t, func() bool {
 		var err error
-		saved, err = f.sessions.Get(t.Context(), domain.SessionKey(key))
+		saved, err = f.sessions.Get(t.Context(), domain.MainSessionKey)
 		return err == nil && (saved.Turn != nil) == busy
 	}, time.Second, time.Millisecond)
 	return saved
@@ -83,7 +83,7 @@ func TestDeliveredConversationNeverReplays(t *testing.T) {
 	f.status(t, id, "done")
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed")}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.turn(t, "room", false)
+	f.turn(t, false)
 	next := f.enqueue(t, "room", "new input")
 	require.Equal(t, "new input", take(t, s.inputs).Text)
 	f.status(t, next, "done")
@@ -136,6 +136,27 @@ func TestPermanentRejectionHasNoRetryOrNotice(t *testing.T) {
 	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%'").Scan(&count))
 	require.Zero(t, count)
 }
+
+func TestConversationFollowupRequiresAcceptRuleBeforeOpen(t *testing.T) {
+	var prepared atomic.Int32
+	f := newDeliveryRig(t, Config{
+		Accept: func(info domain.SessionContext) bool { return info.Conversation != "removed" },
+		Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
+			prepared.Add(1)
+			return item.Payload.Input, nil
+		},
+	})
+	f.start(t)
+	id := f.enqueue(t, "removed", "followup")
+	f.status(t, id, "dead")
+	require.Empty(t, f.model.opened)
+	require.Zero(t, prepared.Load())
+	var attempts int
+	var reason string
+	require.NoError(t, f.db.QueryRow("SELECT attempts,last_error FROM inbox WHERE id=?", id).Scan(&attempts, &reason))
+	require.Zero(t, attempts)
+	require.Equal(t, "session no longer has an accept rule", reason)
+}
 func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 	for _, text := range []string{"", "procedure instructions"} {
 		t.Run(text, func(t *testing.T) {
@@ -145,7 +166,7 @@ func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 					return text, nil
 				},
 			})
-			require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: "task:heartbeat", ResumeToken: "saved"}))
+			require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: domain.MainSessionKey, ResumeToken: "saved"}))
 			f.start(t)
 			item := TaskItem("heartbeat", "run", "")
 			item.Payload.Procedure = "heartbeat"
@@ -158,7 +179,7 @@ func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
 			}
 			f.status(t, id, "done")
 			if text == "" {
-				require.Equal(t, "saved", f.turn(t, "task:heartbeat", false).ResumeToken)
+				require.Equal(t, "saved", f.turn(t, false).ResumeToken)
 				require.Empty(t, f.model.opened)
 			}
 			var attempts int
@@ -192,84 +213,18 @@ func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {
 	f.status(t, first, "done")
 	next := f.enqueue(t, "room", "rejected")
 	f.status(t, next, "dead")
-	f.turn(t, "room", true)
+	f.turn(t, true)
 	select {
 	case <-s.closed:
 		t.Fatal("rejected input killed accepted turn")
 	default:
 	}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.turn(t, "room", false)
+	f.turn(t, false)
 	third := f.enqueue(t, "room", "third accepted")
 	require.Equal(t, "third accepted", take(t, s.inputs).Text)
 	f.status(t, third, "done")
 	require.Empty(t, f.model.opened)
-}
-func TestTaskDeadlineNotifiesWithoutContinuing(t *testing.T) {
-	// Runner scheduling must not consume the deadline used to expire the hung task.
-	synctest.Test(t, func(t *testing.T) {
-		notes := make(chan string, 4)
-		f := newDeliveryRig(t, Config{TaskTimeout: 50 * time.Millisecond, NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
-		stop := f.start(t)
-		item := TaskItem("hung", "work", "")
-		id, err := f.inbox.Enqueue(t.Context(), item)
-		require.NoError(t, err)
-		f.runner.Notify()
-		s := take(t, f.model.opened)
-		take(t, s.inputs)
-		f.status(t, id, "done")
-		take(t, s.closed)
-		require.Contains(t, take(t, notes), domain.TurnDeadlineExceeded)
-		require.Eventually(t, func() bool {
-			active, err := f.inbox.Active(t.Context())
-			return err == nil && len(active) == 0
-		}, time.Second, time.Millisecond)
-		stop()
-		stop = f.start(t)
-		defer stop()
-		require.Never(t, func() bool { return len(f.model.opened) > 0 || len(notes) > 0 }, 120*time.Millisecond, time.Millisecond)
-		var marked int
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND error LIKE '%turn deadline exceeded%'", item.SessionKey).Scan(&marked))
-		require.Equal(t, 1, marked)
-	})
-}
-
-func TestLateTaskDeliveryIsReportedNotContinued(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		notes := make(chan string, 4)
-		f := newDeliveryRig(t, Config{TaskTimeout: 50 * time.Millisecond, NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
-		release := make(chan struct{})
-		unblock := sync.OnceFunc(func() { close(release) })
-		defer unblock()
-		f.model.send = func(context.Context, domain.UserInput) error { <-release; return nil }
-		stop := f.start(t)
-		item := TaskItem("hung", "work", "")
-		id, err := f.inbox.Enqueue(t.Context(), item)
-		require.NoError(t, err)
-		f.runner.Notify()
-		s := take(t, f.model.opened)
-		// Hold Send until retirement so success cannot beat the delivery deadline.
-		require.Equal(t, item.SessionKey, take(t, f.hub.closed))
-		unblock()
-		take(t, s.closed)
-		f.status(t, id, "done")
-		require.Contains(t, take(t, notes), domain.DeliveryDeadlineExceeded)
-		stop()
-		f.start(t)
-		synctest.Wait()
-		active, err := f.inbox.Active(t.Context())
-		require.NoError(t, err)
-		require.Empty(t, active)
-		require.Nil(t, f.turn(t, string(item.SessionKey), false).Turn)
-		require.Empty(t, f.model.opened)
-		require.Empty(t, notes)
-		var inputs, marked, attempts int
-		require.NoError(t, f.db.QueryRow("SELECT count(*),sum(attempts) FROM inbox WHERE session_key=?", item.SessionKey).Scan(&inputs, &attempts))
-		require.Equal(t, 1, inputs)
-		require.Zero(t, attempts)
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key=? AND error LIKE '%delivery deadline exceeded%'", item.SessionKey).Scan(&marked))
-		require.Equal(t, 1, marked)
-	})
 }
 
 func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
@@ -288,12 +243,12 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				_, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				p := &process{key: item.SessionKey, lane: item.Lane, info: item.Payload.Context, delivering: &item, cancel: cancel, model: &sessionFake{}}
+				p := &process{key: item.SessionKey, delivering: &item, cancel: cancel, model: &sessionFake{}}
 				r.live[p.key] = p
 				require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true}))
 				require.NoError(t, r.handle(t.Context(), result{process: p, event: &domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}}))
 				f.status(t, id, "done")
-				saved, err := f.sessions.Get(t.Context(), item.SessionKey)
+				saved, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
 				require.NoError(t, err)
 				require.NotNil(t, saved.Turn)
 				require.Equal(t, remaining <= 0, p.closing)
@@ -305,7 +260,7 @@ func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
 				active, err := f.inbox.Active(t.Context())
 				require.NoError(t, err)
 				require.Len(t, active, 1)
-				require.Contains(t, active[0].Payload.Notice, domain.DeliveryDeadlineExceeded)
+				require.Contains(t, active[0].Payload.Input.Text, domain.DeliveryDeadlineExceeded)
 			})
 		})
 	}
@@ -318,7 +273,7 @@ func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
 			f.start(t)
 			item := TaskItem("interrupted", "work", "")
 			if lane == "conv" {
-				item.SessionKey, item.Lane = "room", "conv"
+				item.SessionKey, item.Lane = domain.MainSessionKey, "conv"
 				item.Payload.Context = domain.SessionContext{Conversation: "room"}
 			}
 			id, err := f.inbox.Enqueue(t.Context(), item)
@@ -332,7 +287,7 @@ func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
 			require.Contains(t, take(t, s.inputs).Text, "previous turn was interrupted")
 			require.Equal(t, "resume-token", s.config.ResumeToken)
 			require.Eventually(t, func() bool {
-				saved, err := f.sessions.Get(t.Context(), item.SessionKey)
+				saved, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
 				return err == nil && saved.Turn != nil && saved.Turn.Continuations == 1
 			}, time.Second, time.Millisecond)
 			close(s.events)
@@ -346,39 +301,6 @@ func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
 			require.Empty(t, f.model.opened)
 		})
 	}
-}
-
-func TestConversationFollowupRequiresAcceptRuleBeforeOpen(t *testing.T) {
-	var prepared atomic.Int32
-	f := newDeliveryRig(t, Config{
-		Accept: func(info domain.SessionContext) bool { return info.Conversation != "removed" },
-		Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
-			prepared.Add(1)
-			return item.Payload.Input, nil
-		},
-	})
-	info := domain.SessionContext{Conversation: "removed"}
-	item := domain.InboxItem{SourceKey: "original", SessionKey: "removed", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info}}
-	id, err := f.inbox.Enqueue(t.Context(), item)
-	require.NoError(t, err)
-	_, err = f.inbox.Claim(t.Context(), id, time.Now())
-	require.NoError(t, err)
-	require.NoError(t, f.inbox.Delivered(t.Context(), id, domain.Session{Key: item.SessionKey, Context: &info, Turn: &domain.SessionTurn{InputID: id, Deadline: time.Now().Add(time.Hour)}}))
-	require.NoError(t, f.sessions.Recover(t.Context()))
-	active, err := f.inbox.Active(t.Context())
-	require.NoError(t, err)
-	require.Len(t, active, 1)
-	followup := active[0]
-	require.Nil(t, followup.Payload.Event)
-	f.start(t)
-	f.status(t, followup.ID, "dead")
-	require.Empty(t, f.model.opened)
-	require.Zero(t, prepared.Load())
-	var attempts int
-	var reason string
-	require.NoError(t, f.db.QueryRow("SELECT attempts,last_error FROM inbox WHERE id=?", followup.ID).Scan(&attempts, &reason))
-	require.Zero(t, attempts)
-	require.Equal(t, "session no longer has an accept rule", reason)
 }
 
 func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
@@ -405,9 +327,9 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 				}
 				f := newDeliveryRig(t, cfg)
 				stop := f.start(t)
-				item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
+				item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
 				if notice {
-					item.Payload.Notice = "owner note"
+					item = domain.NewOwnerNotice("unsent", "owner note")
 				}
 				id, err := f.inbox.Enqueue(t.Context(), item)
 				require.NoError(t, err)
@@ -499,7 +421,7 @@ func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
 		var failures, inputs, notices int
 		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&failures))
 		require.Equal(t, 3, failures)
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE session_key=?", late.SessionKey).Scan(&inputs))
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key=?", late.SourceKey).Scan(&inputs))
 		require.Equal(t, 1, inputs)
 		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%'").Scan(&notices))
 		require.Equal(t, 1, notices)
@@ -521,7 +443,7 @@ func TestDeliveryFailureUsesClosingReason(t *testing.T) {
 		t.Run(reason+"/"+cause.Error(), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDeliveryRig(t, Config{RetryDelay: time.Second})
-				item := domain.InboxItem{SourceKey: "unsent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now()}
+				item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now()}
 				id, err := f.inbox.Enqueue(t.Context(), item)
 				require.NoError(t, err)
 				item.ID = id
@@ -531,7 +453,7 @@ func TestDeliveryFailureUsesClosingReason(t *testing.T) {
 				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
 				_, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				p := &process{key: item.SessionKey, lane: item.Lane, delivering: &item, cancel: cancel}
+				p := &process{key: item.SessionKey, delivering: &item, cancel: cancel}
 				r.live[p.key] = p
 				if reason != "" {
 					r.retire(p, reason)
@@ -575,9 +497,9 @@ func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 			}
 			f.config.NotifyOwner = func(context.Context, string) error { return send() }
 			stop := f.start(t)
-			item := domain.InboxItem{SourceKey: "sent", SessionKey: "session", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "once"}, Context: domain.SessionContext{}}}
+			item := domain.InboxItem{SourceKey: "sent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "once"}, Context: domain.SessionContext{}}}
 			if notice {
-				item.Payload.Notice = "once"
+				item = domain.NewOwnerNotice("sent", "once")
 			}
 			id, err := f.inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
@@ -601,15 +523,17 @@ func TestAutonomousTurnHasDeadlineWithoutNewInboxItem(t *testing.T) {
 		take(t, s.inputs)
 		f.status(t, id, "done")
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.turn(t, "room", false)
+		f.turn(t, false)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
-		saved := f.turn(t, "room", true)
+		saved := f.turn(t, true)
 		require.WithinDuration(t, time.Now().Add(150*time.Millisecond), saved.Turn.Deadline, 100*time.Millisecond)
 		take(t, s.closed)
+		continued := take(t, f.model.opened)
+		require.Contains(t, take(t, continued.inputs).Text, "previous turn was interrupted: "+domain.TurnDeadlineExceeded)
 		f.status(t, id, "done")
 		var count int
 		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 2, count)
 	})
 }

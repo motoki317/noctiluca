@@ -35,7 +35,6 @@ type core struct {
 	config           Config
 	messaging        *messagingRouter
 	events           domain.EventRepository
-	sessions         domain.SessionRepository
 	inbox            domain.InboxRepository
 	hub              domain.ToolHub
 	reconciler       *reconcile.Reconciler
@@ -58,7 +57,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	if err != nil {
 		return nil, err
 	}
-	c := &core{config: config, messaging: router, events: events, sessions: sessions, inbox: inbox, hub: hub, external: external, done: make(chan struct{})}
+	c := &core{config: config, messaging: router, events: events, inbox: inbox, hub: hub, external: external, done: make(chan struct{})}
 	for _, instance := range router.instances {
 		if filter, ok := instance.config.Adapter.(domain.ConversationFilter); ok {
 			filter.SetConversationFilter(func(ref domain.ConversationRef) bool {
@@ -76,7 +75,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
 		return memoryusecase.Prompt(memory, c.toolNotes(ctx), prompt)(ctx, session)
 	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner}, inbox, schedules, sessions, events, model, hub)
-	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
+	c.watcher = watch.New(watches, inbox, c.reconciler.Notify)
 	tools := c.reconciler.Tools()
 	tools = append(tools, c.watcher.Tools()...)
 	if err := hub.AddSource("core", tools); err != nil {
@@ -191,7 +190,7 @@ func (c *core) receive(ctx context.Context, event domain.InboundEvent) error {
 	_, accepted := c.accepted(event)
 	c.mu.Unlock()
 	event.Accepted = &accepted
-	item := domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.SessionKey(channel(event)), Lane: "conv", ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: channel(event), Direct: event.Direct, Workdir: c.config.Workdir}}}
+	item := domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: channel(event), Direct: event.Direct, Workdir: c.config.Workdir}}}
 	if !accepted {
 		item.Status = "done"
 	}
@@ -206,25 +205,6 @@ func channel(event domain.InboundEvent) domain.ConversationRef {
 		return event.Parent
 	}
 	return event.Conversation
-}
-
-func (c *core) workItem(ctx context.Context, key domain.SessionKey) (domain.InboxItem, error) {
-	info, ok := c.reconciler.Context(key)
-	if !ok {
-		saved, err := c.sessions.Get(ctx, key)
-		if err != nil {
-			return domain.InboxItem{}, err
-		}
-		if saved.Context == nil {
-			return domain.InboxItem{}, errors.New("session context unavailable")
-		}
-		info = *saved.Context
-	}
-	lane := "conv"
-	if info.TaskName != "" {
-		lane = "task"
-	}
-	return domain.InboxItem{SessionKey: key, Lane: lane, Payload: domain.InboxPayload{Context: info}}, nil
 }
 
 func (c *core) notifyOwner(ctx context.Context, text string) error {
@@ -250,7 +230,7 @@ func (c *core) notifyOwner(ctx context.Context, text string) error {
 }
 
 func (c *core) acceptSession(info domain.SessionContext) bool {
-	if info.TaskName != "" {
+	if info.Conversation == "" {
 		return true
 	}
 	c.mu.Lock()

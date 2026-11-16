@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -213,7 +214,7 @@ func TestConversationFlow(t *testing.T) {
 	s := take(t, f.model.opened)
 	require.NotContains(t, take(t, s.inputs).Text, "fresh context")
 	require.Contains(t, s.config.SystemPrompt, "fresh context")
-	require.True(t, f.hub.active("test:room"))
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	f.messaging.in <- message("test:room", "member", "steer")
@@ -229,17 +230,18 @@ func TestConversationFlow(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "background done"}
 	f.messaging.in <- message("test:room", "denied", "still recorded")
 	f.messaging.in <- message("test:dm", "owner", "private")
-	dm := take(t, f.model.opened)
-	take(t, dm.inputs)
-	require.True(t, f.hub.active("test:dm"))
+	require.Contains(t, take(t, s.inputs).Text, "private")
+	require.Empty(t, f.model.opened)
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	inbound, err := f.events.ListInbound(t.Context(), "test:room", 30)
 	require.NoError(t, err)
 	require.Len(t, inbound, 3)
 	require.NoError(t, s.Close())
-	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
-	records, err := f.events.ListModel(t.Context(), "test:room", 30)
+	require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
+	records, err := f.events.ListModel(t.Context(), domain.MainSessionKey, 30)
 	require.NoError(t, err)
-	require.Equal(t, domain.ModelEventBackgroundDone, records[0].Event.Kind)
+	// The exit may record an interruption after the background event.
+	require.True(t, slices.ContainsFunc(records, func(r domain.ModelRecord) bool { return r.Event.Kind == domain.ModelEventBackgroundDone }))
 	select {
 	case posted := <-f.messaging.out:
 		t.Fatalf("unexpected post: %+v", posted)
@@ -277,16 +279,16 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 		t.Fatal("closed a busy session")
 	case <-time.After(80 * time.Millisecond):
 	}
-	require.True(t, f.hub.active("test:room"))
+	require.True(t, f.hub.active(domain.MainSessionKey))
 	s.idle.Store(true)
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "done"}
-	require.Equal(t, domain.SessionKey("test:room"), take(t, f.hub.closed))
-	saved, err := f.sessions.Get(t.Context(), "test:room")
+	require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
+	saved, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
 	require.NoError(t, err)
-	require.Equal(t, "resume-test:room", saved.ResumeToken)
+	require.Equal(t, "resume-main", saved.ResumeToken)
 	f.messaging.in <- e
 	resumed := take(t, f.model.opened)
-	require.Equal(t, "resume-test:room", resumed.config.ResumeToken)
+	require.Equal(t, "resume-main", resumed.config.ResumeToken)
 	require.NotEqual(t, s.config.ToolHub.BearerToken, resumed.config.ToolHub.BearerToken)
 }
 

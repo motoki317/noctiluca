@@ -118,7 +118,8 @@ func TestMultipleMessagingRoutesInputsAndOwner(t *testing.T) {
 	require.Contains(t, take(t, first.inputs).Text, "beta user (owner)")
 	require.Equal(t, sourceCall{"beta:room", "primary"}, take(t, beta.info))
 	alpha.in <- message("alpha:room", "primary", "same ID on another messaging entry")
-	second := take(t, f.model.opened)
+	second := first
+	require.Empty(t, f.model.opened)
 	require.NotContains(t, take(t, second.inputs).Text, "(owner)")
 	require.Equal(t, sourceCall{"alpha:room", "primary"}, take(t, alpha.info))
 	alpha.in <- message("alpha:room", "secondary", "second owner")

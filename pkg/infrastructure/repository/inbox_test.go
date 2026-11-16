@@ -140,3 +140,22 @@ func TestInboxFailedTurnRollsBackWithoutNotice(t *testing.T) {
 	require.Zero(t, attempts)
 	require.Empty(t, lastError)
 }
+
+func TestDeadNoticeClassificationUsesSessionKey(t *testing.T) {
+	r := repository.NewInboxRepository(openDB(t))
+	for _, item := range []domain.InboxItem{
+		domain.NewOwnerNotice("empty", ""),
+		{SourceKey: "legacy", SessionKey: "room", Lane: "conv", Payload: domain.InboxPayload{Notice: "unused"}},
+	} {
+		item.Status = "dispatched"
+		id, err := r.Enqueue(t.Context(), item)
+		require.NoError(t, err)
+		dead, err := r.Finish(t.Context(), id, "failed", 1, time.Now())
+		require.NoError(t, err)
+		require.True(t, dead)
+	}
+	active, err := r.Active(t.Context())
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Contains(t, active[0].Payload.Notice, "for room failed after 1 attempts")
+}

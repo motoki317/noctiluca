@@ -33,9 +33,7 @@ func setup(t *testing.T) (domain.WatchRepository, domain.InboxRepository, func()
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	watches, inbox := repository.NewWatchRepository(db), repository.NewInboxRepository(db)
 	return watches, inbox, func() domain.Background {
-		return New(watches, inbox, func(_ context.Context, key domain.SessionKey) (domain.InboxItem, error) {
-			return domain.InboxItem{SessionKey: key, Lane: "conv", Payload: domain.InboxPayload{Context: domain.SessionContext{Conversation: "origin"}}}, nil
-		}, func() {})
+		return New(watches, inbox, func() {})
 	}
 }
 func nextNote(t *testing.T, inbox domain.InboxRepository, count int) string {
@@ -58,7 +56,7 @@ func start(t *testing.T, w domain.Background) (context.CancelFunc, chan error) {
 	return cancel, done
 }
 func toolContext(t *testing.T) context.Context {
-	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: "origin"})
+	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
 }
 
 func TestWakeupPersistsWithoutDelivery(t *testing.T) {
@@ -75,7 +73,7 @@ func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, items[0].ReadyAt.Equal(at))
 	require.Equal(t, "pending", items[0].Status)
-	require.Equal(t, domain.SessionKey("origin"), items[0].SessionKey)
+	require.Equal(t, domain.MainSessionKey, items[0].SessionKey)
 	cancel()
 	require.NoError(t, take(t, done))
 }
@@ -122,7 +120,7 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	require.Contains(t, nextNote(t, inbox, 2), "interrupted by restart; exit unknown")
 	items, err := inbox.Active(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, domain.SessionKey("origin"), items[1].SessionKey)
+	require.Equal(t, domain.MainSessionKey, items[1].SessionKey)
 	pending, err = watches.Unfinished(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, pending)

@@ -50,6 +50,7 @@ type session struct {
 type runningTurn struct {
 	id      string
 	ready   chan struct{}
+	started chan struct{}
 	refused bool
 }
 
@@ -218,17 +219,20 @@ func (s *session) read(stdout io.ReadCloser) {
 			readErr = err
 			break
 		}
+		var started *runningTurn
 		s.mu.Lock()
 		switch f.Method {
 		case "turn/started":
 			if s.current == nil {
-				s.current = &runningTurn{id: n.Turn.ID}
+				s.current = &runningTurn{id: n.Turn.ID, started: make(chan struct{})}
 			} else if s.current.id == "" {
 				s.current.id = n.Turn.ID
 				s.current.markReady()
 			}
+			started = s.current
 		case "turn/completed":
 			if s.current != nil && s.current.id == n.Turn.ID {
+				started = s.current
 				s.current = nil
 			} else {
 				events = nil
@@ -257,6 +261,13 @@ func (s *session) read(stdout io.ReadCloser) {
 		s.mu.Unlock()
 		for _, event := range events {
 			s.emit(event)
+		}
+		if started != nil {
+			select {
+			case <-started.started:
+			default:
+				close(started.started)
+			}
 		}
 		if f.Method == "turn/completed" {
 			s.wakeInputs()

@@ -7,6 +7,8 @@ import (
 
 type SessionKey string
 
+const MainSessionKey SessionKey = "main"
+
 type MCPEndpoint struct {
 	URL         string
 	BearerToken string
@@ -62,7 +64,8 @@ type ModelSession interface {
 	// For each Send that returns nil, the session emits exactly one
 	// ModelEventInputStarted or ModelEventInputRefused for the input's ID, unless it
 	// closes first. Refusals include Err. Several inputs can await acknowledgement, and
-	// acknowledgements can arrive in any order, before or after their turn's other events.
+	// acknowledgements can arrive in any order. InputStarted follows TurnStarted,
+	// but can arrive after TurnFinished.
 	Send(ctx context.Context, input UserInput) error
 	Events() <-chan ModelEvent
 	ResumeToken() string

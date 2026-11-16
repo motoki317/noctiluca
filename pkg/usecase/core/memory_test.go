@@ -29,7 +29,7 @@ func TestMemoryPromptLoadsOncePerProcess(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "core.md"), []byte("Updated index"), 0600))
 	model.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	require.Eventually(t, func() bool {
-		records, err := f.events.ListModel(t.Context(), "test:dm", 1)
+		records, err := f.events.ListModel(t.Context(), domain.MainSessionKey, 1)
 		return err == nil && len(records) == 1 && records[0].Event.Kind == domain.ModelEventTurnFinished
 	}, time.Second, time.Millisecond)
 	f.messaging.in <- message("test:dm", "owner", "second")

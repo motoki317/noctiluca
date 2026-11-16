@@ -33,7 +33,13 @@ func inputTestServer(mode string, emit func(any), notify func(string, any)) func
 				count++
 				active = fmt.Sprintf("turn-%d", count)
 				response.Result, _ = json.Marshal(map[string]any{"turn": map[string]string{"id": active}})
-				notify("turn/started", map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": active}})
+				note := map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": active}}
+				if mode == "input-start-early" {
+					params, _ := json.Marshal(note)
+					held = &rpcFrame{Method: "turn/started", Params: params}
+				} else {
+					notify("turn/started", note)
+				}
 			} else {
 				response.Result, _ = json.Marshal(map[string]string{"turnId": active})
 				if strings.Contains(mode, "refuse") && count == 1 {
@@ -277,4 +283,16 @@ func TestTurnStartRefused(t *testing.T) {
 		require.True(t, s.Idle())
 		require.Empty(t, s.events)
 	}
+}
+
+func TestInputResponseBeforeTurnStarted(t *testing.T) {
+	s, _ := openInputSession(t, "input-start-early")
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "first"}))
+	require.Equal(t, "turn/start:first", nextEvent(t, s).Text)
+	require.Empty(t, s.events)
+	control(t, s, "release", nil)
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1}, nextEvent(t, s))
+	control(t, s, "complete", nil)
+	require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
 }

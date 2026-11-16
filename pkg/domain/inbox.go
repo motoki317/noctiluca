@@ -2,8 +2,15 @@ package domain
 
 import (
 	"context"
+	"strings"
 	"time"
 )
+
+const NoticeSessionPrefix = "notice:"
+
+func (key SessionKey) IsNotice() bool {
+	return strings.HasPrefix(string(key), NoticeSessionPrefix)
+}
 
 type InboxPayload struct {
 	Continuations int    `json:",omitempty"`
@@ -31,7 +38,7 @@ type InboxItem struct {
 func NewOwnerNotice(source, text string) InboxItem {
 	return InboxItem{
 		SourceKey:  source,
-		SessionKey: SessionKey("notice:" + source),
+		SessionKey: SessionKey(NoticeSessionPrefix + source),
 		Lane:       "conv",
 		ReadyAt:    time.Now(),
 		Payload: InboxPayload{

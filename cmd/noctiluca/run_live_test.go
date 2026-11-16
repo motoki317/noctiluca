@@ -120,12 +120,12 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Equal(t, thread, post.Get("thread_ts"))
 		require.Contains(t, post.Get("text"), word)
 	}
-	idle := func(t *testing.T, key domain.SessionKey) domain.Session {
+	idle := func(t *testing.T) domain.Session {
 		t.Helper()
 		var saved domain.Session
 		require.Eventually(t, func() bool {
 			var err error
-			saved, err = repository.NewSessionRepository(app.db).Get(t.Context(), key)
+			saved, err = repository.NewSessionRepository(app.db).Get(t.Context(), domain.MainSessionKey)
 			return err == nil && saved.Turn == nil && saved.ResumeToken != ""
 		}, 90*time.Second, 20*time.Millisecond)
 		return saved
@@ -144,7 +144,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	run("1_DM_PONG", func(t *testing.T) {
 		send(t, "D_OWNER", "", "reply with the word PONG using slack_send")
 		reply(t, "D_OWNER", "", "PONG")
-		token = idle(t, "slack:D_OWNER:").ResumeToken
+		token = idle(t).ResumeToken
 	})
 	stop()
 	liveNoProcesses(t, dir)
@@ -152,7 +152,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	run("5_restart_resume", func(t *testing.T) {
 		send(t, "D_OWNER", "", "Recall the single word I asked you to reply with in my first message in this conversation. Reply with only that word using slack_send. Do not read files.")
 		reply(t, "D_OWNER", "", "PONG")
-		require.Equal(t, token, idle(t, "slack:D_OWNER:").ResumeToken)
+		require.Equal(t, token, idle(t).ResumeToken)
 		data, err := os.ReadFile(filepath.Join(dir, "processes"))
 		require.NoError(t, err)
 		require.Contains(t, string(data), "--resume "+token)
@@ -177,12 +177,12 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		unblock()
 		reply(t, "D_OWNER", "", "QUEUE_FIRST")
 		reply(t, "D_OWNER", "", "QUEUE_SECOND")
-		idle(t, "slack:D_OWNER:")
+		idle(t)
 		require.Equal(t, "done", status())
 		// Whether Claude answers it in the same turn or the next one is its own choice; it must reach the running process.
 		require.Equal(t, before, launches(), "second message must reach the running process")
 	})
-	run("a_concurrent_threads", func(t *testing.T) {
+	run("a_shared_session_threads", func(t *testing.T) {
 		send(t, "C_ROOM", "200.000001", "<@U_BOT> What is 2 + 3? Please answer with just the number.")
 		send(t, "C_ROOM", "201.000001", "<@U_BOT> What is the capital of France? Please answer with just the city.")
 		seen := map[string]bool{}
@@ -201,9 +201,9 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 				t.Fatalf("wrong reply thread: %+v", post)
 			}
 		}
-		idle(t, "slack:C_ROOM:")
+		idle(t)
 		var sessions int
-		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM sessions WHERE key LIKE 'slack:C_ROOM:%'").Scan(&sessions))
+		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM sessions WHERE key NOT LIKE 'notice:%'").Scan(&sessions))
 		require.Equal(t, 1, sessions)
 	})
 	run("follow_up_does_not_repeat", func(t *testing.T) {
@@ -229,7 +229,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 			require.Equal(t, "500.000001", post.Get("thread_ts"))
 			texts = append(texts, post.Get("text"))
 		}
-		idle(t, "slack:C_ROOM:")
+		idle(t)
 		for len(slack.posts) > 0 {
 			texts = append(texts, liveTake(t, slack.posts).Get("text"))
 		}
@@ -239,11 +239,11 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	})
 	run("c_unaddressed_chatter", func(t *testing.T) {
 		var before int
-		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&before))
+		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'").Scan(&before))
 		send(t, "C_ROOM", "", "<@U_COLLEAGUE> Lunch was great! Let's meet by the coffee machine later.")
 		require.Eventually(t, func() bool {
 			var after int
-			return app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&after) == nil && after > before
+			return app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'").Scan(&after) == nil && after > before
 		}, 90*time.Second, 20*time.Millisecond)
 		select {
 		case post := <-slack.posts:
@@ -254,11 +254,11 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	run("d_native_background_and_autonomous_turn", func(t *testing.T) {
 		started := time.Now()
 		var before int
-		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&before))
+		require.NoError(t, app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'").Scan(&before))
 		send(t, "C_ROOM", "300.000001", "<@U_BOT> Run exactly sleep 20; echo BGDONE using Bash with run_in_background=true. End your turn immediately after launching, without a chat acknowledgement, waiting, polling, or using watch. When the native completion notification arrives, report the output here.")
 		var launched time.Time
 		require.Eventually(t, func() bool {
-			events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), "slack:C_ROOM:", 100)
+			events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), domain.MainSessionKey, 100)
 			if err != nil {
 				return false
 			}
@@ -280,7 +280,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		}, 30*time.Second, 20*time.Millisecond)
 		require.Eventually(t, func() bool {
 			var after int
-			return app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_finished'").Scan(&after) == nil && after > before
+			return app.db.QueryRow("SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'").Scan(&after) == nil && after > before
 		}, 10*time.Second, 20*time.Millisecond)
 		t.Logf("first turn ended %s after request; %s after background launch", time.Since(started).Round(time.Millisecond), time.Since(launched).Round(time.Millisecond))
 		send(t, "C_ROOM", "301.000001", "<@U_BOT> What is 7 + 8? Reply with just the number.")
@@ -289,19 +289,19 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Less(t, time.Since(launched), 20*time.Second, "second thread was blocked by background work")
 		reply(t, "C_ROOM", "300.000001", "BGDONE")
 		t.Logf("background result replied %s after launch", time.Since(launched).Round(time.Millisecond))
-		idle(t, "slack:C_ROOM:")
+		idle(t)
 		var autonomous int
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='turn_started' AND id > (SELECT max(id) FROM model_events WHERE session_key='slack:C_ROOM:' AND kind='background_done')`).Scan(&autonomous))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_started' AND id > (SELECT max(id) FROM model_events WHERE session_key='main' AND kind='background_done')`).Scan(&autonomous))
 		require.Positive(t, autonomous, "completion must start a turn without another input")
 	})
 	run("4_watch_completion", func(t *testing.T) {
 		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
 		reply(t, "D_WATCH", "", "DONE")
-		idle(t, "slack:D_WATCH:")
+		idle(t)
 		var finishedBeforeExit, finished int
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:D_WATCH:' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))
 		require.Positive(t, finishedBeforeExit, "watch turn must finish before command exit")
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='slack:D_WATCH:' AND kind='turn_finished'`).Scan(&finished))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'`).Scan(&finished))
 		require.GreaterOrEqual(t, finished, 2)
 		var command, outcome string
 		require.NoError(t, app.db.QueryRow("SELECT command,outcome FROM watches").Scan(&command, &outcome))
@@ -315,8 +315,8 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		post := liveTake(t, slack.posts)
 		require.Contains(t, post.Get("text"), "NATIVE_READ_OK")
 		require.Contains(t, post.Get("text"), dir)
-		idle(t, "slack:D_NATIVE:")
-		events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), "slack:D_NATIVE:", 100)
+		idle(t)
+		events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), domain.MainSessionKey, 100)
 		require.NoError(t, err)
 		used := map[string]bool{}
 		for _, event := range events {
