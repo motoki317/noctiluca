@@ -246,16 +246,16 @@ func TestUnstartedTaskRedeliversWithoutContinuation(t *testing.T) {
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 		synctest.Wait()
 		events := repository.NewEventRepository(f.db)
-		before, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
+		before, err := events.ListModel(t.Context(), item.SessionKey, 1)
 		require.NoError(t, err)
-		require.True(t, before.Running)
+		require.Equal(t, domain.ModelEventTurnStarted, before[0].Event.Kind)
 		close(s.events)
 		take(t, s.closed)
 		s = take(t, f.model.opened)
 		require.Equal(t, id, take(t, s.inputs).ID)
-		after, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
+		after, err := events.ListModel(t.Context(), item.SessionKey, 1)
 		require.NoError(t, err)
-		require.False(t, after.Running)
+		require.Equal(t, domain.ModelEventError, after[0].Event.Kind)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 		f.status(t, id, "done")

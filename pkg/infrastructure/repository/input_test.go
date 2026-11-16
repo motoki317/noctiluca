@@ -17,6 +17,8 @@ func TestInputContextUsesPostingOrderAndDeliveredHistory(t *testing.T) {
 	at := time.Date(2026, 11, 6, 7, 29, 1, 0, time.UTC)
 	root := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "room", MessageRef: "thread", Sender: domain.Sender{ID: "person", Kind: domain.SenderHuman}, Text: "Thread subject", ReceivedAt: at.Add(-time.Hour)}
 	require.NoError(t, r.SaveInbound(t.Context(), root))
+	accepted := true
+	require.NoError(t, r.SaveInbound(t.Context(), domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Sender: root.Sender, Accepted: &accepted, ReceivedAt: at.Add(-time.Second)}))
 	for _, event := range []domain.ModelRecord{
 		{SessionKey: "room", Event: domain.ModelEvent{Kind: domain.ModelEventTurnStarted}, RecordedAt: at.Add(-time.Second)},
 		{SessionKey: "room", Event: domain.ModelEvent{Kind: domain.ModelEventTurnFinished}, RecordedAt: at.Add(2 * time.Second)},
@@ -59,7 +61,40 @@ func TestInputContextCountsDeliveredContinuations(t *testing.T) {
 	require.True(t, info.ThreadSeen)
 	other, err := r.InputContext(t.Context(), "other", "thread", time.Now())
 	require.NoError(t, err)
-	require.False(t, other.ThreadSeen)
+	require.True(t, other.ThreadSeen)
+	unseen, err := r.InputContext(t.Context(), "room", "other-thread", time.Now())
+	require.NoError(t, err)
+	require.False(t, unseen.ThreadSeen)
+}
+
+func TestInputContextIsPerConversationWithinOneSession(t *testing.T) {
+	db := openDB(t)
+	events := repository.NewEventRepository(db)
+	inbox := repository.NewInboxRepository(db)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	yes, no := true, false
+	first := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "room-a", Sender: domain.Sender{Kind: domain.SenderHuman}, Accepted: &yes, ReceivedAt: at}
+	require.NoError(t, events.SaveInbound(t.Context(), first))
+	_, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "first", SessionKey: "shared", Lane: "conv", Status: "done", Payload: domain.InboxPayload{Event: &first}})
+	require.NoError(t, err)
+	require.NoError(t, events.SaveInbound(t.Context(), domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "room-b", Sender: first.Sender, Accepted: &no, ReceivedAt: at}))
+	require.NoError(t, events.SaveModel(t.Context(), domain.ModelRecord{SessionKey: "shared", Event: domain.ModelEvent{Kind: domain.ModelEventTurnStarted}, RecordedAt: at}))
+	for _, conversation := range []domain.ConversationRef{"room-a", "room-b"} {
+		info, err := events.InputContext(t.Context(), "shared", conversation, at.Add(time.Second))
+		require.NoError(t, err)
+		require.Equal(t, conversation == "room-a", info.ThreadSeen)
+		require.Equal(t, conversation == "room-a", info.Running)
+	}
+	info, err := events.InputContext(t.Context(), "shared", "room-a", at)
+	require.NoError(t, err)
+	require.False(t, info.Running, "the current message is not an earlier unanswered input")
+	info, err = events.InputContext(t.Context(), "idle", "room-a", at.Add(time.Second))
+	require.NoError(t, err)
+	require.False(t, info.Running, "an unanswered message alone does not mean the handling session is running")
+	require.NoError(t, events.SaveOutbound(t.Context(), domain.SentMessage{Conversation: "room-a", SentAt: at.Add(2 * time.Second)}))
+	info, err = events.InputContext(t.Context(), "shared", "room-a", at.Add(3*time.Second))
+	require.NoError(t, err)
+	require.False(t, info.Running, "a send closes the unanswered input while the session keeps running")
 }
 
 func TestInputContextUsesCurrentRootText(t *testing.T) {

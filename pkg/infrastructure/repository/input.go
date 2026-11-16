@@ -11,9 +11,9 @@ import (
 
 func (r *eventRepository) InputContext(ctx context.Context, key domain.SessionKey, conversation domain.ConversationRef, at time.Time) (domain.InputContext, error) {
 	var info domain.InputContext
-	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE session_key=? AND status='done'
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE status='done'
 		AND ((json_extract(payload, '$.Event.Accepted')=1 AND json_extract(payload, '$.Event.Conversation')=?)
-        OR (json_extract(payload, '$.Event') IS NULL AND json_extract(payload, '$.Target')=?)))`, key, conversation, conversation).Scan(&info.ThreadSeen)
+        OR (json_extract(payload, '$.Event') IS NULL AND json_extract(payload, '$.Target')=?)))`, conversation, conversation).Scan(&info.ThreadSeen)
 	if err != nil {
 		return info, err
 	}
@@ -34,6 +34,14 @@ func (r *eventRepository) InputContext(ctx context.Context, key domain.SessionKe
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return info, err
 	}
-	info.Running = kind == domain.ModelEventTurnStarted
+	if kind == domain.ModelEventTurnStarted {
+		err = r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events WHERE conversation=?
+			AND kind='message' AND accepted=1 AND received_at<?
+			AND received_at>COALESCE((SELECT max(sent_at) FROM sends WHERE conversation=? AND sent_at<=?),''))`,
+			conversation, at.UTC(), conversation, at.UTC()).Scan(&info.Running)
+		if err != nil {
+			return info, err
+		}
+	}
 	return info, nil
 }
