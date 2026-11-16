@@ -116,7 +116,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	reply := func(t *testing.T, channel, thread, word string) {
 		t.Helper()
 		post := liveTake(t, slack.posts)
-		require.Equal(t, channel, post.Get("channel"))
+		require.Equal(t, channel, post.Get("channel"), "post text: %s", post.Get("text"))
 		require.Equal(t, thread, post.Get("thread_ts"))
 		require.Contains(t, post.Get("text"), word)
 	}
@@ -295,7 +295,8 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Positive(t, autonomous, "completion must start a turn without another input")
 	})
 	run("4_watch_completion", func(t *testing.T) {
-		id := send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
+		// Real Slack has one DM per user pair, but the fake Slack gives the owner several, and the Slack tool notes name D_OWNER as the owner DM. Without the channel, haiku sometimes reports there.
+		id := send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output in this DM, channel D_WATCH.", config.Model.Workdir))
 		reply(t, "D_WATCH", "", "DONE")
 		idle(t)
 		var finishedBeforeExit, finished int
