@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -120,6 +121,16 @@ func TestExampleConfig(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "bot-example")
 	_, _, err = c.validateRun()
 	require.NoError(t, err)
+}
+
+func TestRemovedTimeoutConfig(t *testing.T) {
+	c, err := loadConfig(writeConfig(t, slackEntry))
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, c.Model.IdleTimeout)
+	for _, fields := range []string{"tasks: {timeout: 30m}\n", "model: {turn_timeout: 2h}\n"} {
+		_, err = loadConfig(writeConfig(t, slackEntry+fields))
+		require.ErrorContains(t, err, "invalid config")
+	}
 }
 
 func TestEntryAndConversationTrustRules(t *testing.T) {

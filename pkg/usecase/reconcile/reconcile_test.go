@@ -102,6 +102,45 @@ func take[T any](t *testing.T, ch <-chan T) T {
 	}
 }
 
+func TestTurnHasNoDeadlineAndCrashContinuesOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		notes := make(chan string, 4)
+		f := newDeliveryRig(t, Config{NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil }})
+		f.start(t)
+		id, err := f.inbox.Enqueue(t.Context(), TaskItem("long", "silent command", ""))
+		require.NoError(t, err)
+		f.runner.Notify()
+		s := take(t, f.model.opened)
+		require.Equal(t, id, take(t, s.inputs).ID)
+		f.status(t, id, "done")
+		before := f.turn(t, true)
+		time.Sleep(3 * time.Hour)
+		synctest.Wait()
+		require.Equal(t, before.Turn, f.turn(t, true).Turn)
+		require.Empty(t, notes)
+		require.Empty(t, s.closed)
+		require.Empty(t, f.hub.closed)
+		require.Empty(t, f.model.opened)
+
+		close(s.events)
+		take(t, s.closed)
+		s = take(t, f.model.opened)
+		require.Equal(t, "resume-token", s.config.ResumeToken)
+		continued := take(t, s.inputs)
+		require.Contains(t, continued.Text, "previous turn was interrupted: model process exited")
+		f.status(t, continued.ID, "done")
+		require.Equal(t, 1, f.turn(t, true).Turn.Continuations)
+		close(s.events)
+		take(t, s.closed)
+		synctest.Wait()
+		var continuations int
+		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'interrupted:%'").Scan(&continuations))
+		require.Equal(t, 1, continuations)
+		require.Empty(t, f.model.opened)
+		require.Empty(t, notes)
+	})
+}
+
 func TestOpenFailureRetriesAndRevokesGrants(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		notes := make(chan string, 10)
@@ -147,7 +186,7 @@ func TestNoticeRetrySurvivesRestart(t *testing.T) {
 	item := TaskItem("failed", "work", "")
 	id, err := inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
-	_, err = inbox.Claim(t.Context(), id, time.Now())
+	_, err = inbox.Claim(t.Context(), id)
 	require.NoError(t, err)
 	_, err = inbox.Finish(t.Context(), id, "bad model", 1, time.Now())
 	require.NoError(t, err)

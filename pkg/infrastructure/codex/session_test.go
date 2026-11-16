@@ -286,7 +286,7 @@ func TestTurnStream(t *testing.T) {
 	require.Eventually(t, s.Idle, time.Second, time.Millisecond)
 }
 
-func TestTurnTimeoutInterruptsBeforeProcessExit(t *testing.T) {
+func TestCancellationInterruptsBeforeProcessExit(t *testing.T) {
 	for _, mode := range []string{"interrupt-blocked", "response-only"} {
 		t.Run(mode, func(t *testing.T) {
 			path, dir := fakeServer(t, mode)

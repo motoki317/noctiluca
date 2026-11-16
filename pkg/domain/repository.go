@@ -11,9 +11,6 @@ var ErrNotFound = errors.New("not found")
 var ErrRejected = errors.New("input rejected")
 var ErrPersistence = errors.New("persistence unavailable")
 
-const TurnDeadlineExceeded = "turn deadline exceeded"
-const DeliveryDeadlineExceeded = "delivery deadline exceeded"
-
 type SentMessage struct {
 	ID           string
 	Conversation ConversationRef
@@ -57,7 +54,6 @@ type ModelRecord struct {
 type SessionTurn struct {
 	InputID       int64 `json:",omitempty"`
 	Continuations int
-	Deadline      time.Time
 	Failure       string `json:",omitempty"`
 }
 

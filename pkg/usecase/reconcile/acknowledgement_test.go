@@ -26,7 +26,6 @@ func TestInputsAwaitTheirOwnStart(t *testing.T) {
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
 		f.status(t, first, "done")
-		deadline := f.turn(t, true).Turn.Deadline
 		require.Equal(t, first, f.turn(t, true).Turn.InputID)
 		second := f.enqueue(t, "room", "second")
 		third := f.enqueue(t, "room", "third")
@@ -40,7 +39,6 @@ func TestInputsAwaitTheirOwnStart(t *testing.T) {
 		f.status(t, second, "dispatched")
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 		f.status(t, second, "done")
-		require.Equal(t, deadline, f.turn(t, true).Turn.Deadline)
 		require.Equal(t, first, f.turn(t, true).Turn.InputID)
 		require.Empty(t, s.inputs)
 		require.Empty(t, f.model.opened)
@@ -48,10 +46,10 @@ func TestInputsAwaitTheirOwnStart(t *testing.T) {
 }
 
 func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
-	for _, reason := range []string{"deadline", "exit", "recovery"} {
+	for _, reason := range []string{"exit", "recovery"} {
 		t.Run(reason, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{TurnTimeout: time.Second})
+				f := newDeliveryRig(t, Config{})
 				f.model.manualAck = true
 				stop := f.start(t)
 				first := f.enqueue(t, "room", "first")
@@ -74,7 +72,7 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 				case "recovery":
 					stop()
 					for _, id := range []int64{second, third} {
-						claimed, err := f.inbox.Claim(t.Context(), id, time.Now().Add(time.Hour))
+						claimed, err := f.inbox.Claim(t.Context(), id)
 						require.NoError(t, err)
 						require.True(t, claimed)
 					}
@@ -119,7 +117,7 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 		t.Run(lane, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				notes := make(chan string, 2)
-				f := newDeliveryRig(t, Config{TurnTimeout: time.Hour, RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
+				f := newDeliveryRig(t, Config{RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
 					NotifyOwner: func(_ context.Context, note string) error { notes <- note; return nil },
 					Prepare: func(_ context.Context, item domain.InboxItem) (domain.UserInput, error) {
 						return domain.UserInput{Text: "prepared " + item.Payload.Input.Text}, nil
@@ -177,7 +175,7 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 
 func TestRefusedOpeningInputAllowsIdleClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{IdleTimeout: 100 * time.Millisecond, TurnTimeout: time.Hour, RetryDelay: time.Hour})
+		f := newDeliveryRig(t, Config{IdleTimeout: 100 * time.Millisecond, RetryDelay: time.Hour})
 		f.model.manualAck = true
 		f.model.idle = true
 		f.start(t)
@@ -281,9 +279,9 @@ func TestUnstartedTaskRedeliversWithoutContinuation(t *testing.T) {
 	})
 }
 
-func TestBufferedStartSurvivesDeliveryDeadline(t *testing.T) {
+func TestBufferedStartSurvivesShutdown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{TurnTimeout: time.Second, RetryDelay: time.Hour})
+		f := newDeliveryRig(t, Config{})
 		f.model.manualAck = true
 		sent := make(chan domain.UserInput, 2)
 		f.model.send = func(ctx context.Context, input domain.UserInput) error {
@@ -303,7 +301,6 @@ func TestBufferedStartSurvivesDeliveryDeadline(t *testing.T) {
 		require.Equal(t, second, take(t, sent).ID)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: first}
-		take(t, s.closed)
 		stop()
 		f.status(t, first, "done")
 		f.status(t, second, "pending")
@@ -312,34 +309,6 @@ func TestBufferedStartSurvivesDeliveryDeadline(t *testing.T) {
 			require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
 			require.Zero(t, attempts)
 		}
-	})
-}
-
-func TestLateSuccessfulSendWithoutStartFailsOnce(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{TaskTimeout: time.Second, RetryDelay: time.Hour, NotifyOwner: func(context.Context, string) error { return nil }})
-		f.model.manualAck = true
-		f.model.send = func(ctx context.Context, _ domain.UserInput) error {
-			<-ctx.Done()
-			return nil
-		}
-		stop := f.start(t)
-		id, err := f.inbox.Enqueue(t.Context(), TaskItem("late", "work", ""))
-		require.NoError(t, err)
-		f.runner.Notify()
-		s := take(t, f.model.opened)
-		take(t, s.closed)
-		synctest.Wait()
-		stop()
-		f.status(t, id, "pending")
-		var attempts int
-		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
-		require.Equal(t, 1, attempts)
-		var rows, notes int
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&rows))
-		require.Equal(t, 1, rows)
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events").Scan(&notes))
-		require.Equal(t, 1, notes)
 	})
 }
 
@@ -365,46 +334,6 @@ func TestLateInputStartDoesNotRecreateTurn(t *testing.T) {
 		var attempts int
 		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
 		require.Zero(t, attempts)
-	})
-}
-
-func TestUnstartedInputDeadlineFailsOnlyExpiredItem(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{TurnTimeout: time.Second, RetryDelay: time.Hour})
-		f.model.manualAck = true
-		sent := make(chan domain.UserInput, 2)
-		f.model.send = func(ctx context.Context, input domain.UserInput) error {
-			sent <- input
-			if input.Text == "later" {
-				<-ctx.Done()
-				return ctx.Err()
-			}
-			return nil
-		}
-		stop := f.start(t)
-		first := f.enqueue(t, "room", "silent")
-		s := take(t, f.model.opened)
-		require.Equal(t, first, take(t, sent).ID)
-		time.Sleep(100 * time.Millisecond)
-		second := f.enqueue(t, "room", "later")
-		require.Equal(t, second, take(t, sent).ID)
-		take(t, s.closed)
-		synctest.Wait()
-		stop()
-		f.status(t, first, "pending")
-		var attempts int
-		var failure string
-		require.NoError(t, f.db.QueryRow("SELECT attempts,last_error FROM inbox WHERE id=?", first).Scan(&attempts, &failure))
-		require.Equal(t, 1, attempts)
-		require.Equal(t, context.DeadlineExceeded.Error(), failure)
-		f.status(t, second, "pending")
-		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", second).Scan(&attempts))
-		require.Zero(t, attempts)
-		var marked int
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM model_events WHERE error LIKE '%delivery deadline exceeded%'").Scan(&marked))
-		require.Equal(t, 1, marked)
-		continued := take(t, f.model.opened)
-		require.Equal(t, domain.MainSessionKey, continued.config.Key)
 	})
 }
 

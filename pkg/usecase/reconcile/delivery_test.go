@@ -207,45 +207,6 @@ func TestRejectedSteerLeavesCurrentTurnRunning(t *testing.T) {
 	require.Empty(t, f.model.opened)
 }
 
-func TestTaskDeliveryDeadlineBeforeRetirement(t *testing.T) {
-	for _, remaining := range []time.Duration{0, time.Nanosecond} {
-		t.Run(remaining.String(), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{})
-				item := TaskItem("late", "work", "")
-				id, err := f.inbox.Enqueue(t.Context(), item)
-				require.NoError(t, err)
-				item.ID = id
-				item.Deadline = time.Now().Add(remaining)
-				claimed, err := f.inbox.Claim(t.Context(), id, item.Deadline)
-				require.NoError(t, err)
-				require.True(t, claimed)
-				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
-				_, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				p := &process{key: item.SessionKey, delivering: &item, cancel: cancel, model: &sessionFake{}}
-				r.live[p.key] = p
-				require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true}))
-				require.NoError(t, r.handle(t.Context(), result{process: p, event: &domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: id}}))
-				f.status(t, id, "done")
-				saved, err := f.sessions.Get(t.Context(), domain.MainSessionKey)
-				require.NoError(t, err)
-				require.NotNil(t, saved.Turn)
-				require.Equal(t, remaining <= 0, p.closing)
-				if remaining > 0 {
-					return
-				}
-				require.Equal(t, domain.DeliveryDeadlineExceeded, p.reason)
-				require.NoError(t, r.handle(t.Context(), result{process: p, exited: true}))
-				active, err := f.inbox.Active(t.Context())
-				require.NoError(t, err)
-				require.Len(t, active, 1)
-				require.Contains(t, active[0].Payload.Input.Text, domain.DeliveryDeadlineExceeded)
-			})
-		})
-	}
-}
-
 func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
 	for _, lane := range []string{"conv", "task"} {
 		t.Run(lane, func(t *testing.T) {
@@ -283,187 +244,6 @@ func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
-	for _, notice := range []bool{false, true} {
-		t.Run(map[bool]string{false: "input", true: "notice"}[notice], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				started := make(chan time.Time, 3)
-				notes := make(chan string, 4)
-				fail := func(ctx context.Context) error {
-					started <- time.Now()
-					<-ctx.Done()
-					return ctx.Err()
-				}
-				cfg := Config{TurnTimeout: 40 * time.Millisecond, RetryDelay: 100 * time.Millisecond, MaxAttempts: 3}
-				cfg.NotifyOwner = func(ctx context.Context, text string) error {
-					if text == "owner note" {
-						return fail(ctx)
-					}
-					notes <- text
-					return nil
-				}
-				f := newDeliveryRig(t, cfg)
-				f.model.send = func(ctx context.Context, _ domain.UserInput) error { return fail(ctx) }
-				stop := f.start(t)
-				item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
-				if notice {
-					item = domain.NewOwnerNotice("unsent", "owner note")
-				}
-				id, err := f.inbox.Enqueue(t.Context(), item)
-				require.NoError(t, err)
-				f.runner.Notify()
-				var retryAt time.Time
-				for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
-					at := take(t, started)
-					if !notice {
-						take(t, f.model.opened)
-					}
-					if attempt > 1 {
-						require.True(t, at.Equal(retryAt), "retry must wait for its backoff")
-					}
-					require.Equal(t, item.SessionKey, take(t, f.hub.closed))
-					synctest.Wait()
-					var status, failure string
-					var attempts int
-					require.NoError(t, f.db.QueryRow("SELECT status,attempts,retry_at,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &retryAt, &failure))
-					require.Equal(t, attempt, attempts)
-					require.Equal(t, context.DeadlineExceeded.Error(), failure)
-					require.True(t, retryAt.Equal(at.Add(cfg.TurnTimeout+cfg.RetryDelay*time.Duration(1<<(attempt-1)))))
-					if attempt < cfg.MaxAttempts {
-						require.Equal(t, "pending", status)
-					} else {
-						require.Equal(t, "dead", status)
-					}
-					require.Empty(t, started)
-				}
-				if !notice {
-					require.Contains(t, take(t, notes), "failed after 3 attempts")
-				}
-				stop()
-				f.start(t)
-				synctest.Wait()
-				active, err := f.inbox.Active(t.Context())
-				require.NoError(t, err)
-				require.Empty(t, active)
-				require.Empty(t, started)
-				require.Empty(t, f.model.opened)
-				require.Empty(t, notes)
-				var failures int
-				require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%'").Scan(&failures))
-				if notice {
-					require.Zero(t, failures)
-				} else {
-					require.Equal(t, 1, failures)
-				}
-			})
-		})
-	}
-}
-
-func TestLatePrepareFailsOnceAndDoesNotStarveQueuedTask(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		notes := make(chan string, 4)
-		var attempts atomic.Int32
-		f := newDeliveryRig(t, Config{TaskTimeout: 50 * time.Millisecond, RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
-			NotifyOwner: func(_ context.Context, text string) error { notes <- text; return nil },
-			Prepare: func(ctx context.Context, item domain.InboxItem) (domain.UserInput, error) {
-				if item.Payload.Context.TaskName == "late" {
-					attempts.Add(1)
-					<-ctx.Done()
-					return domain.UserInput{}, ctx.Err()
-				}
-				return item.Payload.Input, nil
-			},
-		})
-		late := TaskItem("late", "work", "")
-		id, err := f.inbox.Enqueue(t.Context(), late)
-		require.NoError(t, err)
-		next := TaskItem("next", "next task", "")
-		nextID, err := f.inbox.Enqueue(t.Context(), next)
-		require.NoError(t, err)
-		stop := f.start(t)
-		s := take(t, f.model.opened)
-		require.Equal(t, next.SessionKey, s.config.Key)
-		require.Equal(t, "next task", take(t, s.inputs).Text)
-		require.EqualValues(t, 1, attempts.Load())
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.status(t, nextID, "done")
-		f.status(t, id, "dead")
-		require.EqualValues(t, 1, attempts.Load())
-		require.Contains(t, take(t, notes), "failed after 1 attempts")
-		stop()
-		f.start(t)
-		synctest.Wait()
-		active, err := f.inbox.Active(t.Context())
-		require.NoError(t, err)
-		require.Empty(t, active)
-		require.Empty(t, f.model.opened)
-		require.Empty(t, notes)
-		var failures, inputs, notices int
-		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&failures))
-		require.Equal(t, 1, failures)
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key=?", late.SourceKey).Scan(&inputs))
-		require.Equal(t, 1, inputs)
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%'").Scan(&notices))
-		require.Equal(t, 1, notices)
-	})
-}
-
-func TestDeliveryFailureUsesClosingReason(t *testing.T) {
-	for _, tc := range []struct {
-		reason string
-		cause  error
-	}{
-		{"", context.Canceled},
-		{"", errors.Join(errors.New("send failed"), context.DeadlineExceeded)},
-		{domain.DeliveryDeadlineExceeded, context.Canceled},
-		{"shutdown", context.Canceled},
-		{domain.TurnDeadlineExceeded, context.Canceled},
-	} {
-		reason, cause := tc.reason, tc.cause
-		t.Run(reason+"/"+cause.Error(), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newDeliveryRig(t, Config{RetryDelay: time.Second})
-				item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now()}
-				id, err := f.inbox.Enqueue(t.Context(), item)
-				require.NoError(t, err)
-				item.ID = id
-				claimed, err := f.inbox.Claim(t.Context(), id, time.Now())
-				require.NoError(t, err)
-				require.True(t, claimed)
-				r := New(f.config, f.inbox, nil, f.sessions, nil, f.model, &hubFake{closed: make(chan domain.SessionKey, 1)})
-				_, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				p := &process{key: item.SessionKey, delivering: &item, cancel: cancel}
-				r.live[p.key] = p
-				if reason != "" {
-					r.retire(p, reason)
-				}
-				require.NoError(t, r.handle(t.Context(), result{process: p, delivered: true, err: cause}))
-				require.NoError(t, r.handle(t.Context(), result{process: p, exited: true}))
-				var status, failure string
-				var attempts int
-				var retryAt time.Time
-				require.NoError(t, f.db.QueryRow("SELECT status,attempts,retry_at,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &retryAt, &failure))
-				require.Equal(t, "pending", status)
-				if reason == "" || reason == domain.DeliveryDeadlineExceeded {
-					require.Equal(t, 1, attempts)
-					require.True(t, retryAt.Equal(time.Now().Add(f.config.RetryDelay)))
-					if reason == domain.DeliveryDeadlineExceeded || errors.Is(cause, context.DeadlineExceeded) {
-						require.Equal(t, domain.DeliveryDeadlineExceeded, p.reason)
-						require.Contains(t, failure, context.DeadlineExceeded.Error())
-					}
-				} else {
-					require.Zero(t, attempts)
-					require.True(t, retryAt.IsZero())
-					require.Empty(t, failure)
-					require.Equal(t, reason, p.reason)
-				}
-			})
-		})
-	}
-}
-
 func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 	for _, notice := range []bool{false, true} {
 		t.Run(map[bool]string{false: "input", true: "notice"}[notice], func(t *testing.T) {
@@ -495,26 +275,56 @@ func TestSuccessfulDeliverySurvivesShutdown(t *testing.T) {
 	}
 }
 
-func TestAutonomousTurnHasDeadlineWithoutNewInboxItem(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newDeliveryRig(t, Config{TurnTimeout: 150 * time.Millisecond})
-		f.start(t)
-		id := f.enqueue(t, "room", "start background work")
-		s := take(t, f.model.opened)
-		take(t, s.inputs)
-		f.status(t, id, "done")
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-		f.turn(t, false)
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}
-		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
-		saved := f.turn(t, true)
-		require.WithinDuration(t, time.Now().Add(150*time.Millisecond), saved.Turn.Deadline, 100*time.Millisecond)
-		take(t, s.closed)
-		continued := take(t, f.model.opened)
-		require.Contains(t, take(t, continued.inputs).Text, "previous turn was interrupted: "+domain.TurnDeadlineExceeded)
-		f.status(t, id, "done")
-		var count int
-		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox").Scan(&count))
-		require.Equal(t, 2, count)
-	})
+func TestDeliveryFailuresKeepBackoff(t *testing.T) {
+	for _, notice := range []bool{false, true} {
+		t.Run(map[bool]string{false: "input", true: "notice"}[notice], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				notes := make(chan string, 4)
+				started := make(chan time.Time, 4)
+				fail := func() error { started <- time.Now(); return errors.New("delivery failed") }
+				cfg := Config{RetryDelay: 100 * time.Millisecond, MaxAttempts: 3}
+				cfg.NotifyOwner = func(_ context.Context, text string) error {
+					if text == "owner note" {
+						return fail()
+					}
+					notes <- text
+					return nil
+				}
+				f := newDeliveryRig(t, cfg)
+				f.model.send = func(context.Context, domain.UserInput) error { return fail() }
+				stop := f.start(t)
+				item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
+				if notice {
+					item = domain.NewOwnerNotice("unsent", "owner note")
+				}
+				id, err := f.inbox.Enqueue(t.Context(), item)
+				require.NoError(t, err)
+				f.runner.Notify()
+				var retry time.Time
+				for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+					at := take(t, started)
+					if attempt > 1 {
+						require.True(t, retry.Equal(at))
+					}
+					f.status(t, id, map[bool]string{false: "pending", true: "dead"}[attempt == cfg.MaxAttempts])
+					var attempts int
+					require.NoError(t, f.db.QueryRow("SELECT attempts,retry_at FROM inbox WHERE id=?", id).Scan(&attempts, &retry))
+					require.Equal(t, attempt, attempts)
+					require.True(t, retry.Equal(at.Add(cfg.RetryDelay*time.Duration(1<<(attempt-1)))))
+					if attempt < cfg.MaxAttempts {
+						time.Sleep(time.Until(retry))
+					}
+				}
+				if !notice {
+					require.Contains(t, take(t, notes), "failed after 3 attempts: delivery failed")
+				}
+				synctest.Wait()
+				stop()
+				active, err := f.inbox.Active(t.Context())
+				require.NoError(t, err)
+				require.Empty(t, active)
+				require.Empty(t, notes)
+			})
+		})
+	}
 }

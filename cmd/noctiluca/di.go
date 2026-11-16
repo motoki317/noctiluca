@@ -143,7 +143,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	agent, err := core.New(core.Config{
 		IdleTimeout: config.Model.IdleTimeout,
 		Workdir:     config.Model.Workdir,
-		Jobs:        jobs, Procedure: procedure, TaskTimeout: config.Tasks.Timeout, TurnTimeout: config.Model.TurnTimeout,
+		Jobs:        jobs, Procedure: procedure,
 	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {

@@ -13,12 +13,12 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
+const operationTimeout = 30 * time.Minute
+
 type Config struct {
 	Workdir     string
 	Accept      func(domain.SessionContext) bool
 	IdleTimeout time.Duration
-	TurnTimeout time.Duration
-	TaskTimeout time.Duration
 	RetryDelay  time.Duration
 	MaxAttempts int
 	Prompt      domain.PromptAssembler
@@ -55,7 +55,6 @@ type process struct {
 	closeAtIdle bool
 	closing     bool
 	reason      string
-	retiredAt   time.Time
 	last        time.Time
 }
 
@@ -73,12 +72,6 @@ type result struct {
 func New(config Config, inbox domain.InboxRepository, schedules domain.ScheduleRepository, sessions domain.SessionRepository, events domain.EventRepository, model domain.ModelAdapter, hub domain.ToolHub) *Reconciler {
 	if config.IdleTimeout <= 0 {
 		config.IdleTimeout = time.Hour
-	}
-	if config.TurnTimeout <= 0 {
-		config.TurnTimeout = 2 * time.Hour
-	}
-	if config.TaskTimeout <= 0 {
-		config.TaskTimeout = 30 * time.Minute
 	}
 	if config.RetryDelay <= 0 {
 		config.RetryDelay = time.Second
@@ -145,35 +138,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	now := time.Now()
 	delay := 24 * time.Hour
 	due := func(at time.Time) { delay = min(delay, max(time.Duration(0), at.Sub(now))) }
-	for _, p := range r.live {
-		if p.closing {
-			continue
-		}
-		for _, item := range p.unstarted {
-			if !now.Before(item.Deadline) {
-				r.retire(p, domain.DeliveryDeadlineExceeded)
-				break
-			}
-			due(item.Deadline)
-		}
-		if p.closing {
-			continue
-		}
-		if p.turn != nil {
-			if !now.Before(p.turn.Deadline) {
-				r.retire(p, domain.TurnDeadlineExceeded)
-				continue
-			}
-			due(p.turn.Deadline)
-		}
-		if p.delivering != nil {
-			if !now.Before(p.delivering.Deadline) {
-				r.retire(p, domain.DeliveryDeadlineExceeded)
-				continue
-			}
-			due(p.delivering.Deadline)
-		}
-	}
 	schedules, err := r.schedules.List(ctx)
 	if err != nil {
 		return 0, err
@@ -261,8 +225,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			r.Notify()
 			continue
 		}
-		item.Deadline = now.Add(r.timeout(item))
-		claimed, err := r.inbox.Claim(ctx, item.ID, item.Deadline)
+		claimed, err := r.inbox.Claim(ctx, item.ID)
 		if err != nil {
 			return 0, err
 		}
@@ -295,7 +258,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		p.delivering = &item
 		p.last = now
 		p.inputs <- item
-		due(item.Deadline)
 	}
 	for _, p := range r.live {
 		if p.closeAtIdle && p.idle() {
@@ -306,14 +268,11 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 }
 
 func (p *process) idle() bool {
-	return !p.closing && p.delivering == nil && len(p.unstarted) == 0 && p.turn == nil && p.model != nil && p.model.Idle()
+	return !p.closing && !p.busy() && p.model != nil && p.model.Idle()
 }
 
-func (r *Reconciler) timeout(item domain.InboxItem) time.Duration {
-	if item.Payload.Context.TaskName != "" && item.Payload.Notice == "" {
-		return r.config.TaskTimeout
-	}
-	return r.config.TurnTimeout
+func (p *process) busy() bool {
+	return p.delivering != nil || len(p.unstarted) != 0 || p.turn != nil
 }
 
 func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoint domain.MCPEndpoint) {
@@ -349,22 +308,24 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 		case <-ctx.Done():
 			return
 		case item := <-p.inputs:
-			sendCtx, cancel := context.WithDeadline(ctx, item.Deadline)
 			if p.key.IsNotice() {
 				var err error
 				if r.config.NotifyOwner == nil {
 					err = errors.New("owner notification destination unavailable")
 				} else {
-					err = r.config.NotifyOwner(sendCtx, item.Payload.Notice)
+					noticeCtx, cancel := context.WithTimeout(ctx, operationTimeout)
+					err = r.config.NotifyOwner(noticeCtx, item.Payload.Notice)
+					cancel()
 				}
-				cancel()
 				emit(result{delivered: true, skipped: true, err: err})
 				return
 			}
 			input := item.Payload.Input
 			var err error
+			// Preparation must not block the pump indefinitely.
+			prepareCtx, cancel := context.WithTimeout(ctx, operationTimeout)
 			if r.config.Procedure != nil && item.Payload.Procedure != "" {
-				input.Text, err = r.config.Procedure(sendCtx, item.Payload.Procedure)
+				input.Text, err = r.config.Procedure(prepareCtx, item.Payload.Procedure)
 				if err == nil && input.Text == "" {
 					cancel()
 					emit(result{delivered: true, skipped: true})
@@ -373,10 +334,10 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			}
 			if err == nil && r.config.Prepare != nil {
 				item.Payload.Input = input
-				input, err = r.config.Prepare(sendCtx, item)
+				input, err = r.config.Prepare(prepareCtx, item)
 			}
+			cancel()
 			if err != nil {
-				cancel()
 				emit(result{delivered: true, skipped: true, err: err})
 				continue
 			}
@@ -384,7 +345,9 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				prompt := "Use the messaging send tools to post messages. Final assistant text is private."
 				if r.config.Prompt != nil {
 					var extra string
-					extra, err = r.config.Prompt(sendCtx, domain.ToolSession{Key: p.key})
+					promptCtx, cancel := context.WithTimeout(ctx, operationTimeout)
+					extra, err = r.config.Prompt(promptCtx, domain.ToolSession{Key: p.key})
+					cancel()
 					prompt += "\n\n" + extra
 				}
 				if err == nil {
@@ -400,9 +363,8 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				if item.LastError != "" {
 					input.Text = fmt.Sprintf("An earlier attempt at this input failed: %s. Check what it already did before you repeat a step.\n\n%s", strings.Join(strings.Fields(item.LastError), " "), input.Text)
 				}
-				err = model.Send(sendCtx, input)
+				err = model.Send(ctx, input)
 			}
-			cancel()
 			emit(result{delivered: true, err: err})
 			if err != nil {
 				if errors.Is(err, domain.ErrRejected) {
@@ -443,17 +405,6 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		return nil
 	}
 	if out.exited {
-		// The pump forwards buffered events before this exit, so a row that started before
-		// the close is already done and no longer unstarted.
-		if p.reason == domain.DeliveryDeadlineExceeded {
-			for _, item := range p.unstarted {
-				if !p.retiredAt.Before(item.Deadline) {
-					if err := r.fail(ctx, item, context.DeadlineExceeded, r.config.MaxAttempts); err != nil {
-						return err
-					}
-				}
-			}
-		}
 		reason := p.reason
 		if reason == "" {
 			reason = "model process exited"
@@ -475,32 +426,22 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		item := p.delivering
 		p.delivering = nil
 		if out.err != nil {
-			if p.closing && (p.reason != domain.DeliveryDeadlineExceeded || p.retiredAt.Before(item.Deadline)) {
+			if p.closing {
 				return nil
 			}
 			if out.skipped && !p.key.IsNotice() {
 				return r.fail(ctx, *item, out.err, 1)
 			}
-			cause := out.err
-			if p.reason == domain.DeliveryDeadlineExceeded {
-				// Retirement cancels delivery, which can hide the deadline in its error.
-				cause = context.DeadlineExceeded
-			}
-			if err := r.fail(ctx, *item, cause, r.config.MaxAttempts); err != nil {
+			if err := r.fail(ctx, *item, out.err, r.config.MaxAttempts); err != nil {
 				return err
 			}
-			if errors.Is(cause, context.DeadlineExceeded) {
-				r.retire(p, domain.DeliveryDeadlineExceeded)
-			} else if !errors.Is(cause, domain.ErrRejected) || p.model == nil {
-				r.retire(p, cause.Error())
+			if !errors.Is(out.err, domain.ErrRejected) || p.model == nil {
+				r.retire(p, out.err.Error())
 			}
 			return nil
 		}
-		if item.Payload.Context.TaskName != "" && !out.skipped && !time.Now().Before(item.Deadline) {
-			r.retire(p, domain.DeliveryDeadlineExceeded)
-		}
 		if !out.skipped && p.turn == nil {
-			p.turn = &domain.SessionTurn{InputID: item.ID, Deadline: time.Now().Add(r.timeout(*item))}
+			p.turn = &domain.SessionTurn{InputID: item.ID}
 		}
 		if !out.skipped {
 			if p.unstarted == nil {
@@ -555,7 +496,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	case domain.ModelEventTurnStarted:
 		p.turnStarted = true
 		if p.turn == nil {
-			p.turn = &domain.SessionTurn{Deadline: p.last.Add(r.config.TurnTimeout)}
+			p.turn = &domain.SessionTurn{}
 			for id := range p.unstarted {
 				if p.turn.InputID == 0 || id < p.turn.InputID {
 					p.turn.InputID = id
@@ -604,7 +545,6 @@ func (r *Reconciler) retire(p *process, reason string) {
 	p.closing = true
 	r.mu.Unlock()
 	p.reason = reason
-	p.retiredAt = time.Now()
 	r.hub.CloseSession(p.key)
 	p.cancel()
 }

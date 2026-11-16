@@ -15,12 +15,11 @@ func deliveredTurn(t *testing.T, db *sql.DB, item domain.InboxItem) int64 {
 	inbox := repository.NewInboxRepository(db)
 	id, err := inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
-	deadline := time.Now().Add(time.Hour)
-	claimed, err := inbox.Claim(t.Context(), id, deadline)
+	claimed, err := inbox.Claim(t.Context(), id)
 	require.NoError(t, err)
 	require.True(t, claimed)
 	require.NoError(t, inbox.Delivered(t.Context(), id, domain.Session{Key: item.SessionKey, ResumeToken: "resume", Context: &item.Payload.Context,
-		Turn: &domain.SessionTurn{InputID: id, Deadline: deadline}}))
+		Turn: &domain.SessionTurn{InputID: id}}))
 	return id
 }
 
@@ -30,6 +29,9 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	sessions := repository.NewSessionRepository(db)
 	item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now()}
 	deliveredTurn(t, db, item)
+	// An expired deadline in legacy turn JSON must not suppress recovery.
+	_, err := db.Exec(`UPDATE sessions SET turn_json=json_set(turn_json,'$.Deadline','2000-01-01T00:00:00Z') WHERE key=?`, domain.MainSessionKey)
+	require.NoError(t, err)
 	require.NoError(t, sessions.Recover(t.Context()))
 	require.NoError(t, sessions.Recover(t.Context()))
 	active, err := inbox.Active(t.Context())
@@ -41,7 +43,7 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	require.Equal(t, 1, continued.Payload.Continuations)
 	require.Nil(t, continued.Payload.Event)
 	require.Contains(t, continued.Payload.Input.Text, "finish each unfinished part")
-	_, err = inbox.Claim(t.Context(), continued.ID, time.Now())
+	_, err = inbox.Claim(t.Context(), continued.ID)
 	require.NoError(t, err)
 	require.NoError(t, inbox.Delivered(t.Context(), continued.ID, domain.Session{Key: domain.MainSessionKey, ResumeToken: "resume", Turn: &domain.SessionTurn{InputID: continued.ID, Continuations: 1}}))
 	require.NoError(t, sessions.Recover(t.Context()))
@@ -54,8 +56,8 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	require.Equal(t, "resume", saved.ResumeToken)
 }
 
-func TestInterruptContinuesRegardlessOfTaskOrDeadline(t *testing.T) {
-	for _, reason := range []string{"model process exited", domain.TurnDeadlineExceeded, domain.DeliveryDeadlineExceeded} {
+func TestInterruptContinuesRegardlessOfTaskOrReason(t *testing.T) {
+	for _, reason := range []string{"model process exited", "shutdown"} {
 		for _, lane := range []string{"conv", "task"} {
 			t.Run(reason+"/"+lane, func(t *testing.T) {
 				db := openDB(t)
@@ -77,7 +79,7 @@ func TestInterruptContinuesRegardlessOfTaskOrDeadline(t *testing.T) {
 }
 
 func TestUnsentHandoffReturnsPending(t *testing.T) {
-	for _, reason := range []string{"restart", domain.DeliveryDeadlineExceeded} {
+	for _, reason := range []string{"restart", "model process exited"} {
 		t.Run(reason, func(t *testing.T) {
 			db := openDB(t)
 			inbox := repository.NewInboxRepository(db)
@@ -85,7 +87,7 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 			item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
 			id, err := inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
-			_, err = inbox.Claim(t.Context(), id, time.Now())
+			_, err = inbox.Claim(t.Context(), id)
 			require.NoError(t, err)
 			if reason == "restart" {
 				require.NoError(t, sessions.Recover(t.Context()))
@@ -115,10 +117,10 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 			item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}, Input: domain.UserInput{Text: "original"}}}
 			id, err := inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
-			claimed, err := inbox.Claim(t.Context(), id, time.Now().Add(time.Hour))
+			claimed, err := inbox.Claim(t.Context(), id)
 			require.NoError(t, err)
 			require.True(t, claimed)
-			turn := &domain.SessionTurn{InputID: id, Deadline: time.Now().Add(time.Hour)}
+			turn := &domain.SessionTurn{InputID: id}
 			if status == "legacy" {
 				turn.InputID = 0
 			}
@@ -137,7 +139,7 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 				item.SourceKey = "queued"
 				queued, err := inbox.Enqueue(t.Context(), item)
 				require.NoError(t, err)
-				_, err = inbox.Claim(t.Context(), queued, time.Now().Add(time.Hour))
+				_, err = inbox.Claim(t.Context(), queued)
 				require.NoError(t, err)
 			}
 			events := repository.NewEventRepository(db)
@@ -187,7 +189,7 @@ func TestInterruptResetsOldKeysAndKeepsNoticeIndependent(t *testing.T) {
 		id, err := inbox.Enqueue(t.Context(), item)
 		require.NoError(t, err)
 		ids[key] = id
-		claimed, err := inbox.Claim(t.Context(), id, time.Now())
+		claimed, err := inbox.Claim(t.Context(), id)
 		require.NoError(t, err)
 		require.True(t, claimed)
 	}
@@ -202,12 +204,12 @@ func TestInterruptResetsOldKeysAndKeepsNoticeIndependent(t *testing.T) {
 		status(key, "pending")
 	}
 	status("notice:owner", "dispatched")
-	_, err := inbox.Claim(t.Context(), ids["old-room"], time.Now())
+	_, err := inbox.Claim(t.Context(), ids["old-room"])
 	require.NoError(t, err)
 	require.NoError(t, sessions.Interrupt(t.Context(), "notice:owner", "exit"))
 	status("old-room", "dispatched")
 	status("notice:owner", "pending")
-	_, err = inbox.Claim(t.Context(), ids["notice:owner"], time.Now())
+	_, err = inbox.Claim(t.Context(), ids["notice:owner"])
 	require.NoError(t, err)
 	require.NoError(t, sessions.Recover(t.Context()))
 	status("old-room", "pending")
