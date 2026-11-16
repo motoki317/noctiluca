@@ -48,18 +48,28 @@ func TestInputContextUsesPostingOrderAndDeliveredHistory(t *testing.T) {
 	}
 }
 
-func TestInputContextCountsDeliveredContinuations(t *testing.T) {
-	db := openDB(t)
-	r := repository.NewEventRepository(db)
-	inbox := repository.NewInboxRepository(db)
-	_, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "watch:1", SessionKey: "room", Lane: "conv", Status: "done", Payload: domain.InboxPayload{Target: "thread"}})
-	require.NoError(t, err)
-	info, err := r.InputContext(t.Context(), "room", "thread", time.Now())
-	require.NoError(t, err)
-	require.True(t, info.ThreadSeen)
-	other, err := r.InputContext(t.Context(), "other", "thread", time.Now())
-	require.NoError(t, err)
-	require.False(t, other.ThreadSeen)
+func TestInputContextCountsDeliveredInputsAcrossSessionKeys(t *testing.T) {
+	accepted := true
+	for name, payload := range map[string]domain.InboxPayload{
+		"message":      {Event: &domain.InboundEvent{Accepted: &accepted, Conversation: "thread"}},
+		"continuation": {Target: "thread"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := openDB(t)
+			r := repository.NewEventRepository(db)
+			inbox := repository.NewInboxRepository(db)
+			_, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "input:1", SessionKey: "room", Lane: "conv", Status: "done", Payload: payload})
+			require.NoError(t, err)
+			for _, key := range []domain.SessionKey{"room", "other"} {
+				info, err := r.InputContext(t.Context(), key, "thread", time.Now())
+				require.NoError(t, err)
+				require.True(t, info.ThreadSeen)
+			}
+			other, err := r.InputContext(t.Context(), "other", "unseen", time.Now())
+			require.NoError(t, err)
+			require.False(t, other.ThreadSeen)
+		})
+	}
 }
 
 func TestInputContextUsesCurrentRootText(t *testing.T) {

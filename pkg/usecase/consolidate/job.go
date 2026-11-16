@@ -12,13 +12,12 @@ import (
 var Procedures embed.FS
 
 type Config struct {
-	Enabled           bool     `mapstructure:"enabled"`
-	Cron              string   `mapstructure:"cron"`
-	TZ                string   `mapstructure:"tz"`
-	NegativeReactions []string `mapstructure:"negative_reactions"`
+	Enabled bool   `mapstructure:"enabled"`
+	Cron    string `mapstructure:"cron"`
+	TZ      string `mapstructure:"tz"`
 }
 
-func Checkpoint(repo domain.EpisodeRepository) func(context.Context, string, time.Time) error {
+func Checkpoint(repo domain.ConsolidationRepository) func(context.Context, string, time.Time) error {
 	return func(ctx context.Context, procedure string, at time.Time) error {
 		if procedure == "consolidate" {
 			return repo.SaveLastRun(ctx, at)

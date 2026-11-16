@@ -5,15 +5,14 @@ Consolidation restructures memory; it does not pile up entries.
 
 ## Read
 
-Read recent episodes with `episodes_since`, and `short-term.md` in full.
-Treat correction keywords, reactions, repeated calls, edits, deletions, and tool errors as clues to inspect, not proof.
+Read `short-term.md` in full.
 
 ## Give each item one home
 
-Take each lesson from the episodes and each short-term entry:
+Take each short-term entry:
 
 - Open work stays in short-term memory: its request, the ref to post the result at, its done condition, and its latest status, not a history of checks.
-- A rule the owner taught, or one that several episodes or days confirm, goes to long-term memory, stated generally.
+- A rule the owner taught, or one that repeated experience confirms, goes to long-term memory, stated generally.
 - A specific fact or procedure goes to external memory under its theme, including facts the owner taught or corrected.
 - Delete everything else: finished work, logs of past reports, superseded facts.
 
