@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -44,6 +45,11 @@ func TestPromptRemoteBackup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, prompt, bullet)
 	cmd := exec.Command("git", "-C", store.Dir(), "remote", "add", "backup", t.TempDir())
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, "GIT_") {
+			cmd.Env = append(cmd.Env, env)
+		}
+	}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
 	prompt, err = assemble(t.Context(), domain.ToolSession{})

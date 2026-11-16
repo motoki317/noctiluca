@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
@@ -17,6 +18,11 @@ func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, "GIT_") {
+			cmd.Env = append(cmd.Env, env)
+		}
+	}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
 	return string(out)
@@ -27,6 +33,25 @@ func setup(t *testing.T) (domain.MemoryStore, string) {
 	s, err := memory.New(t.Context(), memory.Config{Path: dir})
 	require.NoError(t, err)
 	return s, dir
+}
+
+func TestGitIgnoresInheritedEnvironment(t *testing.T) {
+	_, decoy := setup(t)
+	config := filepath.Join(decoy, ".git", "config")
+	before, err := os.ReadFile(config)
+	require.NoError(t, err)
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	t.Setenv("GIT_WORK_TREE", decoy)
+	t.Setenv("GIT_COMMON_DIR", filepath.Join(decoy, ".git"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(decoy, ".git", "index"))
+
+	dir := t.TempDir()
+	git(t, dir, "init", "--quiet")
+	git(t, dir, "remote", "add", "backup", t.TempDir())
+	require.DirExists(t, filepath.Join(dir, ".git"))
+	after, err := os.ReadFile(config)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
 }
 
 func TestHasRemote(t *testing.T) {
