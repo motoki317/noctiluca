@@ -4,15 +4,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
-	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/motoki317/noctiluca/pkg/usecase/reconcile"
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSharedScheduleAndEpisodeTools(t *testing.T) {
+func TestSharedScheduleTools(t *testing.T) {
 	h := startHub(t, toolhub.Config{})
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "test.db")})
 	require.NoError(t, err)
@@ -20,7 +18,6 @@ func TestSharedScheduleAndEpisodeTools(t *testing.T) {
 	schedules := repository.NewScheduleRepository(db)
 	r := reconcile.New(reconcile.Config{}, nil, nil, schedules, nil, nil, nil, nil)
 	require.NoError(t, h.AddSource("schedules", r.Tools()))
-	require.NoError(t, h.AddSource("episodes", []domain.Tool{consolidate.EpisodesTool(repository.NewEpisodeRepository(db), nil)}))
 	endpoint, err := h.OpenSession("room")
 	require.NoError(t, err)
 	c := client(t, endpoint)
@@ -32,5 +29,4 @@ func TestSharedScheduleAndEpisodeTools(t *testing.T) {
 	jobs, err = schedules.List(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, jobs)
-	require.False(t, call(t, c, "episodes_since", map[string]any{}).IsError)
 }

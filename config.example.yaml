@@ -68,7 +68,6 @@ consolidate:
   enabled: false
   cron: '0 4 * * *'
   tz: UTC
-  negative_reactions: ['-1', thumbsdown]
 
 cron: []
 # cron:

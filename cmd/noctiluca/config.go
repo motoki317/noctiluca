@@ -166,7 +166,6 @@ func loadConfig(path string) (Config, error) {
 		"toolhub.listen": "127.0.0.1:0", "heartbeat.enabled": true, "heartbeat.interval": "1h",
 		"tasks.timeout":       "30m",
 		"consolidate.enabled": false, "consolidate.cron": "0 4 * * *", "consolidate.tz": "UTC",
-		"consolidate.negative_reactions": []string{"-1", "thumbsdown"},
 	} {
 		v.SetDefault(key, value)
 	}
