@@ -295,13 +295,13 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Positive(t, autonomous, "completion must start a turn without another input")
 	})
 	run("4_watch_completion", func(t *testing.T) {
-		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
+		id := send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
 		reply(t, "D_WATCH", "", "DONE")
 		idle(t)
 		var finishedBeforeExit, finished int
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?) AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`, id).Scan(&finishedBeforeExit))
 		require.Positive(t, finishedBeforeExit, "watch turn must finish before command exit")
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'`).Scan(&finished))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?)`, id).Scan(&finished))
 		require.GreaterOrEqual(t, finished, 2)
 		var command, outcome string
 		require.NoError(t, app.db.QueryRow("SELECT command,outcome FROM watches").Scan(&command, &outcome))
