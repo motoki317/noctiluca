@@ -39,21 +39,26 @@ func TestFailureSignals(t *testing.T) {
 
 func TestMineCompactsEpisodesAndCanonicalizesCalls(t *testing.T) {
 	entries := []domain.EpisodeEntry{
-		{ID: "event:1", SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: strings.Repeat("日", 300), Sender: domain.Sender{ID: "owner", Kind: domain.SenderHuman}},
+		{ID: "event:1", SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: strings.Repeat("日", 300), Sender: domain.Sender{ID: "owner", Kind: domain.SenderHuman}},
 		{SessionKey: "room", ModelKind: domain.ModelEventToolCall, ToolCall: &domain.ToolCall{ID: "a", Name: "read", Input: json.RawMessage(`{"a":1,"b":2}`)}},
 		{SessionKey: "room", ModelKind: domain.ModelEventToolCall, ToolCall: &domain.ToolCall{ID: "b", Name: "read", Input: json.RawMessage(`{ "b":2, "a":1 }`)}},
-		{SessionKey: "room", Sent: true, Text: "Done"},
+		{Conversation: "room", Sent: true, Text: "Done"},
 		{SessionKey: "room", ModelKind: domain.ModelEventTurnFinished},
-		{ID: "event:2", SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: "That's wrong", AfterSend: true, Sender: domain.Sender{Kind: domain.SenderHuman}},
+		{ID: "event:2", SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: "That's wrong", AfterSend: true, Sender: domain.Sender{Kind: domain.SenderHuman}},
 		{SessionKey: "room", ModelKind: domain.ModelEventToolCall, ToolCall: &domain.ToolCall{Name: "read", Input: json.RawMessage(`{"a":1,"b":2}`)}},
 	}
 	got := mine(entries, nil)
-	require.Len(t, got, 2)
+	require.Len(t, got, 4)
 	require.Len(t, []rune(got[0].Input), 201)
-	require.Equal(t, []string{"repeated_tool_call", "user_correction"}, got[0].Signals)
-	require.Equal(t, []string{"read"}, got[0].Tools)
+	require.Equal(t, []string{"user_correction"}, got[0].Signals)
+	require.Empty(t, got[0].Tools)
 	require.Equal(t, "Done", got[0].Reply)
-	require.Equal(t, []string{"user_correction"}, got[1].Signals)
+	require.Equal(t, []string{"repeated_tool_call"}, got[1].Signals)
+	require.Equal(t, []string{"read"}, got[1].Tools)
+	require.Empty(t, got[1].Conversation)
+	require.Equal(t, []string{"user_correction"}, got[2].Signals)
+	require.Equal(t, []string{"read"}, got[3].Tools)
+	require.Empty(t, got[3].Signals, "repeated calls in different turns are independent")
 }
 
 func TestMineErrors(t *testing.T) {
@@ -98,11 +103,6 @@ func TestMineErrors(t *testing.T) {
 			wantSignals: []string{"tool_error"},
 		},
 		{
-			name:   "empty tool result",
-			kind:   domain.ModelEventToolResult,
-			errors: []string{""},
-		},
-		{
 			name:        "empty model error",
 			kind:        domain.ModelEventError,
 			errors:      []string{""},
@@ -143,35 +143,38 @@ func TestMineErrors(t *testing.T) {
 
 func TestQueuedInputDoesNotBorrowThePreviousTurnsReply(t *testing.T) {
 	entries := []domain.EpisodeEntry{
-		{ID: "a", SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: "first"},
+		{ID: "a", SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: "first"},
 		{SessionKey: "room", ModelKind: domain.ModelEventTurnStarted},
 		{SessionKey: "room", ModelKind: domain.ModelEventToolResult, Error: "first error"},
-		{ID: "b", SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: "queued second"},
+		{ID: "b", SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: "queued second"},
 		{SessionKey: "room", ModelKind: domain.ModelEventError, Error: "second error"},
 		{SessionKey: "room", ModelKind: domain.ModelEventToolCall, ToolCall: &domain.ToolCall{Name: "reply", Input: json.RawMessage(`{"text":"answer to first"}`)}},
-		{SessionKey: "room", Sent: true, Text: "answer to first"},
+		{Conversation: "room", Sent: true, Text: "answer to first"},
 	}
 	got := mine(entries, nil)
-	require.Len(t, got, 2)
-	require.Equal(t, []string{"first error"}, got[0].Errors)
-	require.Equal(t, []string{"second error"}, got[1].Errors)
-	for _, episode := range got {
-		require.True(t, episode.Ambiguous)
-		require.Contains(t, episode.Signals, "tool_error")
-		require.Empty(t, episode.Tools)
-		require.Empty(t, episode.Reply)
+	require.Len(t, got, 3)
+	require.Equal(t, []string{"first error", "second error"}, got[1].Errors)
+	require.Equal(t, []string{"reply"}, got[1].Tools)
+	require.Contains(t, got[1].Signals, "tool_error")
+	require.False(t, got[1].Ambiguous)
+	for _, index := range []int{0, 2} {
+		require.True(t, got[index].Ambiguous)
+		require.Empty(t, got[index].Errors)
+		require.Empty(t, got[index].Signals)
+		require.Empty(t, got[index].Tools)
+		require.Empty(t, got[index].Reply)
 	}
 }
 
 func TestOverlapRemainsAmbiguousAcrossQueuedTurns(t *testing.T) {
 	entries := []domain.EpisodeEntry{
-		{SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: "A"},
+		{SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: "A"},
 		{SessionKey: "room", ModelKind: domain.ModelEventTurnStarted},
-		{SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: "B"},
+		{SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: "B"},
 		{SessionKey: "room", ModelKind: domain.ModelEventTurnFinished},
-		{SessionKey: "room", InboundKind: domain.InboundEventMessage, Text: "C"},
+		{SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Text: "C"},
 		{SessionKey: "room", ModelKind: domain.ModelEventTurnStarted},
-		{SessionKey: "room", Sent: true, Text: "answer B"},
+		{Conversation: "room", Sent: true, Text: "answer B"},
 	}
 	got := mine(entries, nil)
 	require.Len(t, got, 3)
@@ -184,14 +187,29 @@ func TestOverlapRemainsAmbiguousAcrossQueuedTurns(t *testing.T) {
 func TestIgnoredChatDoesNotExcludeAcceptedTurns(t *testing.T) {
 	yes, no := true, false
 	entries := []domain.EpisodeEntry{
-		{SessionKey: "room", InboundKind: domain.InboundEventMessage, Accepted: &no, Text: "ambient"},
-		{SessionKey: "room", InboundKind: domain.InboundEventMessage, Accepted: &yes, Text: "accepted mention"},
+		{SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Accepted: &no, Text: "ambient"},
+		{SessionKey: "room", Conversation: "room", InboundKind: domain.InboundEventMessage, Accepted: &yes, Text: "accepted mention"},
 		{SessionKey: "room", ModelKind: domain.ModelEventTurnStarted},
-		{SessionKey: "room", Sent: true, Text: "answer"},
+		{Conversation: "room", Sent: true, Text: "answer"},
 	}
 	got := mine(entries, nil)
 	require.Len(t, got, 2)
 	require.True(t, got[0].ContextOnly)
 	require.False(t, got[1].Ambiguous)
 	require.Equal(t, "answer", got[1].Reply)
+}
+
+func TestTurnFinishedClosesOnlyItsHandledConversations(t *testing.T) {
+	got := mine([]domain.EpisodeEntry{
+		{SessionKey: "session-a", Conversation: "room-a", InboundKind: domain.InboundEventMessage, Text: "first-a"},
+		{SessionKey: "session-b", Conversation: "room-b", InboundKind: domain.InboundEventMessage, Text: "first-b"},
+		{SessionKey: "session-a", ModelKind: domain.ModelEventTurnFinished},
+		{SessionKey: "session-a", Conversation: "room-a", InboundKind: domain.InboundEventMessage, Text: "second-a"},
+		{SessionKey: "session-b", Conversation: "room-b", InboundKind: domain.InboundEventMessage, Text: "second-b"},
+	}, nil)
+	require.Len(t, got, 4)
+	require.False(t, got[0].Ambiguous)
+	require.False(t, got[2].Ambiguous)
+	require.True(t, got[1].Ambiguous)
+	require.True(t, got[3].Ambiguous)
 }

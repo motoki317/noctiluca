@@ -34,24 +34,32 @@ func (r *episodeRepository) SaveLastRun(ctx context.Context, at time.Time) error
 	return err
 }
 
+// The existing inbox index needs status before it can look up ready_at.
+const conversationEvents = `WITH conversation_events AS (
+ SELECT e.*, COALESCE(i.session_key,'') AS session_key FROM events e LEFT JOIN inbox i
+ ON i.ready_at=e.received_at AND json_extract(i.payload,'$.Event.Conversation')=e.conversation
+ AND json_extract(i.payload,'$.Event.Kind')=e.kind AND json_extract(i.payload,'$.Event.MessageRef')=e.message_ref
+ AND i.status IN (SELECT DISTINCT status FROM inbox)
+) `
+
 func (r *episodeRepository) Since(ctx context.Context, since, until time.Time) ([]domain.EpisodeEntry, error) {
 	if !until.After(since) {
 		return nil, errors.New("episode window must end after its start")
 	}
-	rows, err := r.db.QueryContext(ctx, `
- SELECT source, id, session_key, at, kind, sender_id, sender_kind, text, tool_call, error, after_send, deleted, accepted FROM (
- SELECT 'event' AS source, e.id, e.conversation AS session_key, e.received_at AS at, e.kind,
+	rows, err := r.db.QueryContext(ctx, conversationEvents+`
+ SELECT source, id, session_key, conversation, at, kind, sender_id, sender_kind, text, tool_call, error, after_send, deleted, accepted FROM (
+ SELECT 'event' AS source, e.id, e.session_key, e.conversation, e.received_at AS at, e.kind,
  e.sender_id, e.sender_kind, e.text, 'null' AS tool_call, '' AS error,
  COALESCE((SELECT s.sent_at FROM sends s WHERE s.conversation=e.conversation AND s.sent_at<=e.received_at
  ORDER BY s.sent_at DESC, s.id DESC LIMIT 1), '') >
  COALESCE((SELECT p.received_at FROM events p WHERE p.conversation=e.conversation
  AND (p.received_at,p.id)<(e.received_at,e.id) ORDER BY p.received_at DESC,p.id DESC LIMIT 1), '') AS after_send, e.deleted, e.accepted
- FROM events e WHERE e.received_at>=? AND e.received_at<?
+ FROM conversation_events e WHERE e.received_at>=? AND e.received_at<?
  UNION ALL
- SELECT 'send', id, conversation, sent_at, '', '', '', text, 'null', '', 0, 0, NULL
+ SELECT 'send', id, '', conversation, sent_at, '', '', '', text, 'null', '', 0, 0, NULL
  FROM sends WHERE sent_at>=? AND sent_at<?
  UNION ALL
- SELECT 'model', id, session_key, recorded_at, kind, '', '', text, tool_call, error, 0, 0, NULL
+ SELECT 'model', id, session_key, '', recorded_at, kind, '', '', text, tool_call, error, 0, 0, NULL
  FROM model_events WHERE recorded_at>=? AND recorded_at<? AND session_key!='task:consolidate'
  ) ORDER BY at, source, id`, since.UTC(), until.UTC(), since.UTC(), until.UTC(), since.UTC(), until.UTC())
 	if err != nil {
@@ -63,7 +71,7 @@ func (r *episodeRepository) Since(ctx context.Context, since, until time.Time) (
 		var entry domain.EpisodeEntry
 		var source, kind, call string
 		var id int64
-		if err := rows.Scan(&source, &id, &entry.SessionKey, &entry.At, &kind, &entry.Sender.ID,
+		if err := rows.Scan(&source, &id, &entry.SessionKey, &entry.Conversation, &entry.At, &kind, &entry.Sender.ID,
 			&entry.Sender.Kind, &entry.Text, &call, &entry.Error, &entry.AfterSend, &entry.Deleted, &entry.Accepted); err != nil {
 			return nil, err
 		}
@@ -85,28 +93,55 @@ func (r *episodeRepository) Since(ctx context.Context, since, until time.Time) (
 		return nil, err
 	}
 	// Outcomes can arrive after the run checkpoint while their input precedes it.
-	seen := map[domain.SessionKey]bool{}
-	var preceding []domain.EpisodeEntry
+	first := map[domain.ConversationRef]domain.EpisodeEntry{}
+	var conversations []domain.ConversationRef
 	for _, entry := range entries {
 		if entry.InboundKind == domain.InboundEventMessage && entry.Accepted != nil && !*entry.Accepted {
 			continue
 		}
-		if seen[entry.SessionKey] {
+		if _, seen := first[entry.Conversation]; entry.Conversation == "" || seen {
 			continue
 		}
-		seen[entry.SessionKey] = true
+		first[entry.Conversation] = entry
+		conversations = append(conversations, entry.Conversation)
+	}
+	if len(conversations) == 0 {
+		return entries, nil
+	}
+	refs, err := json.Marshal(conversations)
+	if err != nil {
+		return nil, err
+	}
+	priors := map[domain.ConversationRef]domain.EpisodeEntry{}
+	priorRows, err := r.db.QueryContext(ctx, conversationEvents+`SELECT id,session_key,conversation,received_at,sender_id,sender_kind,text FROM conversation_events WHERE id IN (
+ SELECT (SELECT id FROM events WHERE conversation=j.value AND received_at<? AND kind='message' AND accepted=1 ORDER BY received_at DESC,id DESC LIMIT 1) FROM json_each(?) j
+ )`, since.UTC(), string(refs))
+	if err != nil {
+		return nil, err
+	}
+	defer priorRows.Close()
+	for priorRows.Next() {
 		var prior domain.EpisodeEntry
 		var id int64
-		err := r.db.QueryRowContext(ctx, `SELECT id,received_at,sender_id,sender_kind,text FROM events WHERE conversation=? AND received_at<? AND kind='message' AND accepted=1 ORDER BY received_at DESC,id DESC LIMIT 1`, entry.SessionKey, since.UTC()).Scan(&id, &prior.At, &prior.Sender.ID, &prior.Sender.Kind, &prior.Text)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
+		if err := priorRows.Scan(&id, &prior.SessionKey, &prior.Conversation, &prior.At, &prior.Sender.ID, &prior.Sender.Kind, &prior.Text); err != nil {
 			return nil, err
+		}
+		prior.ID = fmt.Sprintf("event:%d", id)
+		priors[prior.Conversation] = prior
+	}
+	if err := errors.Join(priorRows.Err(), priorRows.Close()); err != nil {
+		return nil, err
+	}
+	var preceding []domain.EpisodeEntry
+	for _, conversation := range conversations {
+		entry := first[conversation]
+		prior, exists := priors[conversation]
+		if !exists {
+			continue
 		}
 		var count int
 		var running bool
-		err = r.db.QueryRowContext(ctx, `SELECT count(*), (SELECT COALESCE(max(recorded_at),'') FROM model_events WHERE session_key=? AND kind='turn_started' AND recorded_at<?) > (SELECT COALESCE(max(recorded_at),'') FROM model_events WHERE session_key=? AND kind='turn_finished' AND recorded_at<?) FROM events WHERE conversation=? AND kind='message' AND accepted=1 AND received_at<? AND received_at>COALESCE((SELECT max(recorded_at) FROM model_events WHERE session_key=? AND kind='turn_finished' AND recorded_at<?),'')`, entry.SessionKey, since.UTC(), entry.SessionKey, since.UTC(), entry.SessionKey, since.UTC(), entry.SessionKey, since.UTC()).Scan(&count, &running)
+		err = r.db.QueryRowContext(ctx, `SELECT count(*), (SELECT COALESCE(max(recorded_at),'') FROM model_events WHERE session_key=? AND kind='turn_started' AND recorded_at<?) > (SELECT COALESCE(max(recorded_at),'') FROM model_events WHERE session_key=? AND kind='turn_finished' AND recorded_at<?) FROM events WHERE conversation=? AND kind='message' AND accepted=1 AND received_at<? AND received_at>max(COALESCE((SELECT max(recorded_at) FROM model_events WHERE session_key=? AND kind='turn_finished' AND recorded_at<?),''),COALESCE((SELECT max(sent_at) FROM sends WHERE conversation=? AND sent_at<?),''))`, prior.SessionKey, since.UTC(), prior.SessionKey, since.UTC(), entry.Conversation, since.UTC(), prior.SessionKey, since.UTC(), entry.Conversation, since.UTC()).Scan(&count, &running)
 		if err != nil {
 			return nil, err
 		}
@@ -116,10 +151,35 @@ func (r *episodeRepository) Since(ctx context.Context, since, until time.Time) (
 		prior.Ambiguous = count > 1
 		accepted := true
 		prior.Accepted = &accepted
-		prior.ID = fmt.Sprintf("event:%d", id)
-		prior.SessionKey = entry.SessionKey
 		prior.InboundKind = domain.InboundEventMessage
+		var finished domain.EpisodeEntry
+		var id int64
+		err = r.db.QueryRowContext(ctx, `SELECT id,recorded_at FROM model_events WHERE session_key=? AND kind='turn_finished' AND recorded_at>=? AND recorded_at<? ORDER BY recorded_at DESC,id DESC LIMIT 1`, prior.SessionKey, prior.At.UTC(), since.UTC()).Scan(&id, &finished.At)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			err = r.db.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE conversation=? AND kind='message' AND accepted=1 AND received_at<=? AND received_at>max(COALESCE((SELECT max(recorded_at) FROM model_events WHERE session_key=? AND kind='turn_finished' AND recorded_at<?),''),COALESCE((SELECT max(sent_at) FROM sends WHERE conversation=? AND sent_at<?),''))`, entry.Conversation, prior.At.UTC(), prior.SessionKey, prior.At.UTC(), entry.Conversation, prior.At.UTC()).Scan(&count)
+			if err != nil {
+				return nil, err
+			}
+			prior.Ambiguous = count > 1
+			finished.ID = fmt.Sprintf("model:%d", id)
+			finished.SessionKey, finished.ModelKind = prior.SessionKey, domain.ModelEventTurnFinished
+			preceding = append(preceding, finished)
+		}
 		preceding = append(preceding, prior)
+		var reply domain.EpisodeEntry
+		err = r.db.QueryRowContext(ctx, `SELECT id,sent_at,text FROM sends WHERE conversation=? AND sent_at>=? AND sent_at<? ORDER BY sent_at DESC,id DESC LIMIT 1`, entry.Conversation, prior.At.UTC(), since.UTC()).Scan(&id, &reply.At, &reply.Text)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		reply.ID = fmt.Sprintf("send:%d", id)
+		reply.Conversation, reply.Sent = entry.Conversation, true
+		preceding = append(preceding, reply)
 	}
 	entries = append(preceding, entries...)
 	slices.SortStableFunc(entries, func(a, b domain.EpisodeEntry) int { return a.At.Compare(b.At) })

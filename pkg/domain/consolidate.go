@@ -6,20 +6,21 @@ import (
 )
 
 type EpisodeEntry struct {
-	Ambiguous   bool
-	Accepted    *bool
-	Deleted     bool
-	ID          string
-	SessionKey  SessionKey
-	At          time.Time
-	InboundKind InboundEventKind
-	Sender      Sender
-	ModelKind   ModelEventKind
-	Text        string
-	ToolCall    *ToolCall
-	Error       string
-	Sent        bool
-	AfterSend   bool
+	Ambiguous    bool
+	Accepted     *bool
+	Deleted      bool
+	ID           string
+	SessionKey   SessionKey
+	Conversation ConversationRef
+	At           time.Time
+	InboundKind  InboundEventKind
+	Sender       Sender
+	ModelKind    ModelEventKind
+	Text         string
+	ToolCall     *ToolCall
+	Error        string
+	Sent         bool
+	AfterSend    bool
 }
 
 type EpisodeRepository interface {

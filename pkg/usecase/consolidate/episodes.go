@@ -13,17 +13,18 @@ import (
 )
 
 type Episode struct {
-	ContextOnly bool              `json:"context_only,omitempty"`
-	Ambiguous   bool              `json:"ambiguous,omitempty"`
-	ID          string            `json:"id"`
-	SessionKey  domain.SessionKey `json:"session"`
-	At          time.Time         `json:"at"`
-	Sender      string            `json:"sender,omitempty"`
-	Input       string            `json:"input,omitempty"`
-	Reply       string            `json:"reply,omitempty"`
-	Tools       []string          `json:"tools,omitempty"`
-	Errors      []string          `json:"errors,omitempty"`
-	Signals     []string          `json:"signals,omitempty"`
+	ContextOnly  bool                   `json:"context_only,omitempty"`
+	Ambiguous    bool                   `json:"ambiguous,omitempty"`
+	ID           string                 `json:"id"`
+	SessionKey   domain.SessionKey      `json:"session"`
+	Conversation domain.ConversationRef `json:"conversation,omitempty"`
+	At           time.Time              `json:"at"`
+	Sender       string                 `json:"sender,omitempty"`
+	Input        string                 `json:"input,omitempty"`
+	Reply        string                 `json:"reply,omitempty"`
+	Tools        []string               `json:"tools,omitempty"`
+	Errors       []string               `json:"errors,omitempty"`
+	Signals      []string               `json:"signals,omitempty"`
 }
 
 type Episodes struct {
@@ -49,50 +50,69 @@ func EpisodesSince(ctx context.Context, repo domain.EpisodeRepository, since, un
 
 func mine(entries []domain.EpisodeEntry, negative []string) []Episode {
 	result := []Episode{}
-	current := map[domain.SessionKey]int{}
-	open := map[domain.SessionKey]bool{}
-	ambiguous := map[domain.SessionKey]bool{}
+	current := map[domain.ConversationRef]int{}
+	open := map[domain.ConversationRef]bool{}
+	ambiguous := map[domain.ConversationRef]bool{}
+	turns := map[domain.SessionKey]int{}
 	calls := map[int]map[[32]byte]bool{}
 	for _, entry := range entries {
-		if entry.Ambiguous {
-			ambiguous[entry.SessionKey] = true
+		if entry.ModelKind == domain.ModelEventTurnStarted || entry.ModelKind == domain.ModelEventTurnFinished {
+			delete(turns, entry.SessionKey)
+			if entry.ModelKind == domain.ModelEventTurnFinished {
+				for conversation, index := range current {
+					if result[index].SessionKey == entry.SessionKey {
+						open[conversation] = false
+					}
+				}
+			}
+			continue
 		}
-		index, exists := current[entry.SessionKey]
+		if entry.ModelKind != "" && entry.ModelKind != domain.ModelEventToolCall && entry.ModelKind != domain.ModelEventError && entry.Error == "" {
+			continue
+		}
+		if entry.Ambiguous {
+			ambiguous[entry.Conversation] = true
+		}
+		index, exists := current[entry.Conversation]
+		if entry.ModelKind != "" {
+			index, exists = turns[entry.SessionKey]
+		}
 		signals := failureSignals(entry, negative)
 		if exists && entry.AfterSend && slices.Contains(signals, "user_correction") {
 			result[index].Signals = add(result[index].Signals, "user_correction")
 		}
 		if entry.InboundKind == domain.InboundEventReaction || (entry.Accepted != nil && !*entry.Accepted && entry.InboundKind == domain.InboundEventMessage) {
-			result = append(result, Episode{ID: entry.ID, SessionKey: entry.SessionKey, At: entry.At, Sender: entry.Sender.ID, Input: excerpt(entry.Text), Signals: signals, ContextOnly: true})
+			result = append(result, Episode{ID: entry.ID, SessionKey: entry.SessionKey, Conversation: entry.Conversation, At: entry.At, Sender: entry.Sender.ID, Input: excerpt(entry.Text), Signals: signals, ContextOnly: true})
 			continue
 		}
-		overlap := exists && entry.InboundKind == domain.InboundEventMessage && open[entry.SessionKey]
+		overlap := exists && entry.InboundKind == domain.InboundEventMessage && open[entry.Conversation]
 		if overlap {
-			ambiguous[entry.SessionKey] = true
+			ambiguous[entry.Conversation] = true
 			result[index].Ambiguous = true
 			result[index].Reply = ""
-			result[index].Tools = nil
 		}
 		if !exists || entry.InboundKind == domain.InboundEventMessage {
 			index = len(result)
-			result = append(result, Episode{ID: entry.ID, SessionKey: entry.SessionKey, At: entry.At, Ambiguous: ambiguous[entry.SessionKey]})
-			current[entry.SessionKey] = index
+			result = append(result, Episode{ID: entry.ID, SessionKey: entry.SessionKey, Conversation: entry.Conversation, At: entry.At, Ambiguous: ambiguous[entry.Conversation]})
+			if entry.ModelKind != "" {
+				turns[entry.SessionKey] = index
+			} else {
+				current[entry.Conversation] = index
+			}
 			calls[index] = map[[32]byte]bool{}
 		}
 		episode := &result[index]
 		if entry.InboundKind == domain.InboundEventMessage {
 			episode.Input = excerpt(entry.Text)
 			episode.Sender = entry.Sender.ID
-			open[entry.SessionKey] = true
+			open[entry.Conversation] = true
 		}
-		if entry.ModelKind == domain.ModelEventTurnStarted {
-			open[entry.SessionKey] = true
-		}
-		if entry.ModelKind == domain.ModelEventTurnFinished {
-			open[entry.SessionKey] = false
-		}
-		if entry.Sent && !episode.Ambiguous {
-			episode.Reply = excerpt(entry.Text)
+		if entry.Sent {
+			open[entry.Conversation] = false
+			delete(ambiguous, entry.Conversation)
+			if !episode.Ambiguous {
+				episode.Reply = excerpt(entry.Text)
+			}
 		}
 		for _, signal := range signals {
 			episode.Signals = add(episode.Signals, signal)
