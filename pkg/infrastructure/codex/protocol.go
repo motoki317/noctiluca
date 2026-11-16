@@ -85,6 +85,7 @@ func notificationEvents(method string, n notification) ([]domain.ModelEvent, err
 	case "item/started", "item/completed":
 		var item struct {
 			Type      string          `json:"type"`
+			Kind      string          `json:"kind"`
 			ID        string          `json:"id"`
 			Server    string          `json:"server"`
 			Tool      string          `json:"tool"`
@@ -97,6 +98,11 @@ func notificationEvents(method string, n notification) ([]domain.ModelEvent, err
 		}
 		call := &domain.ToolCall{ID: item.ID, Name: item.Type, Input: n.Item}
 		switch item.Type {
+		case "subAgentActivity":
+			if method == "item/completed" && item.Kind == "completed" {
+				return []domain.ModelEvent{{Kind: domain.ModelEventBackgroundDone}}, nil
+			}
+			return nil, nil
 		case "mcpToolCall":
 			call.Name, call.Input = "mcp__"+item.Server+"__"+item.Tool, item.Arguments
 		case "commandExecution", "fileChange", "webSearch", "dynamicToolCall":

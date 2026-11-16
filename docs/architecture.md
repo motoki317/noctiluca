@@ -73,6 +73,8 @@ One turn runs at a time, so a long foreground step delays every conversation.
 Long work can leave the turn through native background tools or `watch`.
 The `watch` tool runs a command and sends its exit code and output to `main` as a new input.
 Codex background commands never wake the model, so the Codex adapter tells the model to use `watch`.
+When a Codex subagent finishes while `main` has no turn, the adapter starts a parent turn with a short completion note.
+A subagent that finishes during a running turn needs no extra turn.
 The `wake_at` tool sends a note to `main` at a given time.
 
 An idle model process closes after `model.idle_timeout`, and the next input resumes `main`.

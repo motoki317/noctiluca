@@ -43,7 +43,7 @@ type session struct {
 	threadID     string
 	promptHash   string
 	current      *runningTurn
-	inputs       []domain.UserInput
+	inputs       []sessionInput
 	commands     map[string]*runningCommand
 }
 
@@ -52,6 +52,12 @@ type runningTurn struct {
 	ready   chan struct{}
 	started chan struct{}
 	refused bool
+}
+
+type sessionInput struct {
+	id          int64
+	text        string
+	acknowledge bool
 }
 
 type runningCommand struct {
@@ -220,6 +226,7 @@ func (s *session) read(stdout io.ReadCloser) {
 			break
 		}
 		var started *runningTurn
+		var wake bool
 		s.mu.Lock()
 		switch f.Method {
 		case "turn/started":
@@ -245,6 +252,11 @@ func (s *session) read(stdout io.ReadCloser) {
 		}
 		for i := range events {
 			event := &events[i]
+			if event.Kind == domain.ModelEventBackgroundDone && n.ThreadID == s.threadID && s.current == nil {
+				// The CLI queues a subagent's result without starting an idle parent.
+				s.inputs = append(s.inputs, sessionInput{text: "A subagent finished. Its result is available."})
+				wake = true
+			}
 			if event.Kind == domain.ModelEventToolCall && event.ToolCall.Name == "commandExecution" {
 				if _, exists := s.commands[event.ToolCall.ID]; !exists {
 					s.commands[event.ToolCall.ID] = &runningCommand{turnID: n.TurnID}
@@ -269,7 +281,7 @@ func (s *session) read(stdout io.ReadCloser) {
 				close(started.started)
 			}
 		}
-		if f.Method == "turn/completed" {
+		if wake || f.Method == "turn/completed" {
 			s.wakeInputs()
 		}
 	}
@@ -392,7 +404,7 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 	if s.ctx.Err() != nil {
 		return errors.New("codex session is closed")
 	}
-	s.inputs = append(s.inputs, domain.UserInput{ID: input.ID, Text: text})
+	s.inputs = append(s.inputs, sessionInput{id: input.ID, text: text, acknowledge: true})
 	s.wakeInputs()
 	return nil
 }
