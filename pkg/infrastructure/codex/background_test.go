@@ -57,3 +57,49 @@ func TestBackgroundCommandCompletion(t *testing.T) {
 	require.Equal(t, domain.ModelEventToolResult, repeated.Kind)
 	require.True(t, s.Idle(), "duplicate starts or completions must not retain a command")
 }
+
+func TestSubagentCompletionWakesOnlyIdleParent(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "running"}[running], func(t *testing.T) {
+			s, dir := openInputSession(t, "input-normal")
+			sendAndStart(t, s, "delegate")
+			if !running {
+				control(t, s, "complete", nil)
+				require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
+				require.True(t, s.Idle())
+			}
+			for _, params := range []string{
+				`{"threadId":"other-thread","turnId":"turn-1","item":{"type":"subAgentActivity","kind":"completed"}}`,
+				`{"threadId":"thread-1","turnId":"turn-1","item":{"type":"subAgentActivity","kind":"started"}}`,
+			} {
+				control(t, s, "notify", rpcFrame{Method: "item/completed", Params: json.RawMessage(params)})
+			}
+			completed := json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"type":"subAgentActivity","kind":"completed","agentThreadId":"child-1"}}`)
+			control(t, s, "notify", rpcFrame{Method: "item/started", Params: completed})
+			require.Empty(t, s.events, "only a completed activity on the parent thread can wake it")
+			control(t, s, "notify", rpcFrame{Method: "item/completed", Params: completed})
+			require.Equal(t, domain.ModelEventBackgroundDone, nextEvent(t, s).Kind)
+			if !running {
+				require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+				require.Equal(t, "turn/start:A subagent finished. Its result is available.", nextEvent(t, s).Text)
+			}
+			require.False(t, s.Idle())
+			control(t, s, "complete", nil)
+			require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
+			require.Eventually(t, s.Idle, time.Second, time.Millisecond)
+			require.Empty(t, s.events, "an internal wake note has no inbox acknowledgement")
+			require.NoError(t, s.Close())
+			starts := 0
+			for _, frame := range requests(t, dir) {
+				if frame.Method == "turn/start" {
+					starts++
+					var params struct{ ThreadID string }
+					require.NoError(t, json.Unmarshal(frame.Params, &params))
+					require.Equal(t, "thread-1", params.ThreadID)
+				}
+				require.NotEqual(t, "turn/steer", frame.Method, "a completion during a running turn needs no input")
+			}
+			require.Equal(t, map[bool]int{false: 2, true: 1}[running], starts)
+		})
+	}
+}

@@ -172,12 +172,12 @@ func TestLiveSubagentHubAndWakeup(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("subagent did not call read_probe: ", ctx.Err())
 	}
-	readThread := func(id string) liveThread {
+	readThread := func(ctx context.Context, id string) liveThread {
 		var result struct{ Thread liveThread }
 		require.NoError(t, s.call(ctx, "thread/read", map[string]any{"threadId": id, "includeTurns": true}, &result))
 		return result.Thread
 	}
-	parent := readThread(s.threadID)
+	parent := readThread(ctx, s.threadID)
 	var childID string
 	for _, turn := range parent.Turns {
 		for _, item := range turn.Items {
@@ -194,7 +194,7 @@ func TestLiveSubagentHubAndWakeup(t *testing.T) {
 	defer ticker.Stop()
 	var child liveThread
 	for {
-		child = readThread(childID)
+		child = readThread(ctx, childID)
 		if len(child.Turns) > 0 {
 			status := child.Turns[len(child.Turns)-1].Status
 			require.NotContains(t, []string{"failed", "interrupted"}, status, "child turn failed")
@@ -226,21 +226,20 @@ func TestLiveSubagentHubAndWakeup(t *testing.T) {
 	require.True(t, answer, "child must return the value that only the hub supplied")
 	t.Logf("subagent %s read noctiluca.read_probe and finished after the parent turn", childID)
 	const observationWindow = 15 * time.Second
-	observation := time.NewTimer(observationWindow)
-	defer observation.Stop()
-observe:
-	for starts.Load() == 1 {
+	observation, cancelObservation := context.WithTimeout(ctx, observationWindow)
+	defer cancelObservation()
+	for starts.Load() == 1 || len(readThread(observation, s.threadID).Turns) <= len(parent.Turns) {
 		select {
-		case <-observation.C:
-			break observe
+		case <-observation.Done():
+			t.Fatal("subagent completion did not start a parent turn within ", observationWindow)
 		case err := <-eventErrors:
 			t.Fatal(err)
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
 		case <-ticker.C:
 		}
 	}
-	t.Logf("parent_turn_started=%t within %s after child completion (P9 observation)", starts.Load() > 1, observationWindow)
+	require.NoError(t, observation.Err(), "parent turn must start within the observation window")
+	require.Greater(t, starts.Load(), int32(1), "subagent completion must start a parent turn")
+	t.Logf("parent turn started within %s after child completion", observationWindow)
 	require.False(t, parentRead.Load(), "the parent must not substitute its own read for the child's")
 }
 
