@@ -9,7 +9,7 @@ import (
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/memory"
-	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
+	memoryusecase "github.com/motoki317/noctiluca/pkg/usecase/memory"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,10 +50,10 @@ func TestHasRemoteWithoutURL(t *testing.T) {
 
 func TestSeedDefaultProcedures(t *testing.T) {
 	dir := t.TempDir()
-	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
-	for _, name := range []string{"procedures/consolidate.md", "procedures/hillclimb.md", "procedures/rest.md"} {
-		want, err := consolidate.Procedures.ReadFile(name)
+	for _, name := range []string{"procedures/hillclimb.md", "procedures/rest.md"} {
+		want, err := memoryusecase.Procedures.ReadFile(name)
 		require.NoError(t, err)
 		got, err := os.ReadFile(filepath.Join(dir, name))
 		require.NoError(t, err)
@@ -65,36 +65,36 @@ func TestSeedDefaultProcedures(t *testing.T) {
 	}
 	require.Empty(t, git(t, dir, "status", "--porcelain"))
 	head := git(t, dir, "rev-parse", "HEAD")
-	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
 	require.Equal(t, head, git(t, dir, "rev-parse", "HEAD"))
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "procedures/hillclimb.md")))
-	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
 	require.Empty(t, git(t, dir, "status", "--porcelain"))
 }
 
 func TestSeedingPreservesExistingFilesAndIndex(t *testing.T) {
 	_, dir := setup(t)
-	for _, name := range []string{"procedures/consolidate.md", "topics/other.md"} {
+	for _, name := range []string{"procedures/rest.md", "topics/other.md"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("staged"), 0640))
 		git(t, dir, "add", "--", name)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("unstaged"), 0640))
 	}
-	before, err := os.Stat(filepath.Join(dir, "procedures/consolidate.md"))
+	before, err := os.Stat(filepath.Join(dir, "procedures/rest.md"))
 	require.NoError(t, err)
-	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
-	require.Equal(t, "3\n", git(t, dir, "rev-list", "--count", "HEAD"))
-	require.Equal(t, "procedures/rest.md\n", git(t, dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))
-	for _, name := range []string{"procedures/consolidate.md", "topics/other.md"} {
+	require.Equal(t, "2\n", git(t, dir, "rev-list", "--count", "HEAD"))
+	require.Equal(t, "procedures/hillclimb.md\n", git(t, dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))
+	for _, name := range []string{"procedures/rest.md", "topics/other.md"} {
 		require.Equal(t, "staged", git(t, dir, "show", ":"+name))
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		require.NoError(t, err)
 		require.Equal(t, "unstaged", string(data))
 	}
-	after, err := os.Stat(filepath.Join(dir, "procedures/consolidate.md"))
+	after, err := os.Stat(filepath.Join(dir, "procedures/rest.md"))
 	require.NoError(t, err)
 	require.Equal(t, before.ModTime(), after.ModTime())
 	require.Equal(t, before.Mode(), after.Mode())
@@ -105,7 +105,7 @@ func TestSeedingCanRestartAfterGitFailure(t *testing.T) {
 		for _, indexed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/indexed=%t", lock, indexed), func(t *testing.T) {
 				_, dir := setup(t)
-				name := "procedures/consolidate.md"
+				name := "procedures/rest.md"
 				if indexed {
 					require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("staged"), 0600))
 					git(t, dir, "add", "--", name)
@@ -113,13 +113,13 @@ func TestSeedingCanRestartAfterGitFailure(t *testing.T) {
 				}
 				before := git(t, dir, "ls-files", "--stage")
 				require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", lock), nil, 0600))
-				_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+				_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 				require.Error(t, err)
 				require.NoFileExists(t, filepath.Join(dir, name))
 				require.Equal(t, before, git(t, dir, "ls-files", "--stage"))
 				require.Equal(t, "1\n", git(t, dir, "rev-list", "--count", "HEAD"))
 				require.NoError(t, os.Remove(filepath.Join(dir, ".git", lock)))
-				_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: consolidate.Procedures})
+				_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 				require.NoError(t, err)
 				require.Empty(t, git(t, dir, "status", "--porcelain"))
 			})

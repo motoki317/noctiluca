@@ -71,7 +71,7 @@ func (r *Reconciler) Tools() []domain.Tool {
 			if err := ValidateCron(s.Cron); err != nil {
 				return nil, err
 			}
-			if s.Name == "heartbeat" || s.Name == "consolidate" || strings.TrimSpace(s.Prompt) == "" {
+			if s.Name == "heartbeat" || s.Name == "rest" || strings.TrimSpace(s.Prompt) == "" {
 				return nil, errors.New("reserved task name or empty prompt")
 			}
 			if err := r.Install(ctx, []domain.Schedule{s}); err != nil {
@@ -91,5 +91,6 @@ func (r *Reconciler) Tools() []domain.Tool {
 			r.Notify()
 			return json.Marshal(map[string]string{"name": in.Name})
 		}},
+		{Name: "rest", Description: "After saving and restructuring memory with procedures/rest.md, close this session when it becomes idle. The next process starts fresh.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`), Handler: r.rest},
 	}
 }

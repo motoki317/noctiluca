@@ -219,7 +219,11 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 				slog.WarnContext(s.ctx, "Claude idle compaction failed", "session", s.token)
 			}
 		}
+		wasIdle := s.idle()
 		events := s.parser.events(f, s.pending)
+		if !wasIdle && s.idle() && len(events) == 0 {
+			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone})
+		}
 		s.mu.Unlock()
 		for _, event := range events {
 			s.emit(event)

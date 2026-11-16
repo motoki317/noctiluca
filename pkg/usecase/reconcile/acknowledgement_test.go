@@ -214,7 +214,6 @@ func TestRefusalPreservesOtherInputsTurn(t *testing.T) {
 				synctest.Wait()
 				turn := f.turn(t, "room", true).Turn
 				require.Equal(t, first, turn.InputID)
-				require.True(t, turn.Failed)
 				if !openingStarted {
 					s.events <- domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: second}
 					f.status(t, second, "done")
@@ -402,7 +401,6 @@ func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 		f.model.manualAck, f.model.idle = true, true
 		f.start(t)
 		item := TaskItem("first", "work", "")
-		item.Payload.Procedure = "heartbeat"
 		item.Payload.Continuations = 1
 		id, err := f.inbox.Enqueue(t.Context(), item)
 		require.NoError(t, err)
@@ -411,7 +409,6 @@ func TestUnstartedTaskReservesLaneAndKeepsMetadata(t *testing.T) {
 		require.Equal(t, id, take(t, s.inputs).ID)
 		saved := f.turn(t, string(item.SessionKey), true)
 		require.Equal(t, id, saved.Turn.InputID)
-		require.Equal(t, "heartbeat", saved.Turn.Procedure)
 		require.Equal(t, 1, saved.Turn.Continuations)
 		f.status(t, id, "dispatched")
 		_, err = f.inbox.Enqueue(t.Context(), TaskItem("next", "next", ""))

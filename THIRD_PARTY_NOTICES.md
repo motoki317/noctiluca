@@ -91,15 +91,14 @@ No upstream implementation code was copied.
 ## Research and design
 
 These credits acknowledge ideas, not copied research code or paper text. They do not apply noctiluca's MIT License to the referenced works.
-The original procedure text in `pkg/usecase/consolidate/procedures/` uses these ideas under noctiluca's MIT License. [docs/design.md](docs/design.md#memory) says how consolidation uses them.
+The procedure text in `pkg/usecase/memory/procedures/` is original and MIT-licensed.
 
 | Source | Influence on noctiluca |
 |---|---|
 | [ACE](https://arxiv.org/abs/2510.04618) | Small changes to individual memory items instead of whole-document rewrites. |
-| [Reflexion](https://arxiv.org/abs/2303.11366) | Reusable lessons from failures and corrective feedback. |
-| [ReasoningBank](https://arxiv.org/abs/2509.25140) | Generalized strategies from successful and failed trajectories. |
+| [Reflexion](https://arxiv.org/abs/2303.11366) | Corrective feedback distilled into principles for future work. |
 | [Letta MemFS](https://docs.letta.com/letta-agent/concepts/memfs) | Memory stored as files in a Git repository. |
-| [Letta sleep-time compute](https://arxiv.org/abs/2504.13171) | Memory consolidation as background work. |
+| [Letta sleep-time compute](https://arxiv.org/abs/2504.13171) | Scheduled rest saves context and restructures memory. |
 | [GEPA](https://arxiv.org/abs/2507.19457) | Per-case evaluation that protects previously passing cases. |
 | [Voyager](https://arxiv.org/abs/2305.16291) | A library of reusable procedures. |
 | [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/) | Fresh cases, checkable claims, held-out evaluation, noise measurement, and rollback of unsuccessful changes. |

@@ -27,8 +27,8 @@ func TestProtocol(t *testing.T) {
 		{`{"type":"stream_event","parent_tool_use_id":"tool-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"child"}}}`, nil},
 		{`{"type":"assistant","parent_tool_use_id":"tool-1","message":{"content":[{"type":"tool_use","name":"child"}]}}`, nil},
 		{`{"type":"result","subtype":"success"}`, []domain.ModelEventKind{domain.ModelEventTurnFinished}},
-		{`{"type":"system","subtype":"task_notification","task_id":"task-1","status":"completed","summary":"done"}`, []domain.ModelEventKind{domain.ModelEventBackgroundDone}},
-		{`{"type":"stream_event","event":{"type":"message_start"}}`, []domain.ModelEventKind{domain.ModelEventTurnStarted}},
+		{`{"type":"system","subtype":"task_notification","task_id":"task-1","status":"completed","summary":"done"}`, []domain.ModelEventKind{domain.ModelEventBackgroundDone, domain.ModelEventTurnStarted}},
+		{`{"type":"stream_event","event":{"type":"message_start"}}`, nil},
 	}
 	for _, tc := range cases {
 		f, err := parseFrame([]byte(tc.line))
@@ -127,19 +127,25 @@ func TestFailedResultDoesNotExposeBody(t *testing.T) {
 }
 
 func TestAutonomousTurnWithoutInput(t *testing.T) {
-	var p parser
+	s := session{parser: parser{tasks: map[string]struct{}{"background": {}}}}
+	p := &s.parser
+	p.events(frame{Type: "command_lifecycle", CommandUUID: "previous", State: "started"}, nil)
 	p.events(frame{Type: "result", Subtype: "success"}, nil)
 	events := p.events(frame{Type: "system", Subtype: "task_notification", TaskID: "background", Status: "completed"}, nil)
+	require.False(t, s.Idle())
+	require.Len(t, events, 2)
 	require.Equal(t, domain.ModelEventBackgroundDone, events[0].Kind)
+	require.Equal(t, domain.ModelEventTurnStarted, events[1].Kind)
+	require.Empty(t, p.events(frame{Type: "command_lifecycle", CommandUUID: "previous", State: "completed"}, nil))
+	require.False(t, s.Idle())
 	f, err := parseFrame([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"reply","name":"reply","input":{"target":"thread","text":"done"}}]}}`))
 	require.NoError(t, err)
 	events = p.events(f, nil)
-	require.Len(t, events, 2)
-	require.Equal(t, domain.ModelEventTurnStarted, events[0].Kind)
-	require.Equal(t, domain.ModelEventToolCall, events[1].Kind)
-	require.True(t, p.active)
+	require.Len(t, events, 1)
+	require.Equal(t, domain.ModelEventToolCall, events[0].Kind)
+	require.False(t, s.Idle())
 	require.Equal(t, domain.ModelEventTurnFinished, p.events(frame{Type: "result"}, nil)[0].Kind)
-	require.False(t, p.active)
+	require.True(t, s.Idle())
 }
 
 func TestInputLifecycle(t *testing.T) {

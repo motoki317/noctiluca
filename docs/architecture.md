@@ -55,24 +55,22 @@ A row counts as delivered when the model reports that it started on the row's in
 
 ## Sessions
 
-- A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, consolidation) runs in its own session.
+- A channel is one session: its top-level posts and all its threads. A DM is one session per peer. Each scheduled task (heartbeat, cron job, rest) runs in its own session.
 - Chat inputs name the place, sender, and local time, with ordering context. Each adapter formats a location line with its native IDs. For example, Slack supplies `channel`, `thread_ts`, and `timestamp`. Its send tool takes `channel` and an optional `thread_ts`. Watch results and wake notes arrive as plain inputs without posting targets.
 - A session's turns run one at a time, so the shipped tool notes tell the model to move long work out of the turn: into Claude's own `run_in_background` Bash or Agent, or into the `watch` tool, which runs a command and sends its exit code and output to the session as a new input. Codex's background commands never wake the model, so the Codex adapter tells the model to use `watch`. `wake_at` sends a note to the session at a given time. The turn then ends in seconds.
 - Model processes are disposable. An idle one closes after `model.idle_timeout`. The next input resumes it from the saved resume token.
-- With consolidation enabled, heartbeat and cron tasks keep context across fires within a day. The consolidation fire marks the day boundary. A task's last fire is the one whose next fire falls at or after that boundary. After that fire, its rest waits for the session's unfinished watches, dispatched inputs, and pending inputs due before its next fire. The model process must also be idle. Pending inputs due at or after the next fire do not hold rest. Without another scheduled fire, only dispatched or currently due inputs and unfinished watches hold rest. The rest uses `procedures/rest.md` in the same live process. Once queued, it runs ahead of other tasks and of its own session's later inputs. If the task's next fire comes while a watch or background job of the last fire still runs, nothing is queued yet, so that fire resumes the old context and the task rests after a later last fire.
-
-  noctiluca remembers only in memory that a task owes a rest it has not queued yet. A queued rest is an inbox row and survives a restart. After a restart, a task that never rested keeps its token until a later last-fire turn rests it. Without a consolidation schedule, heartbeat and cron sessions keep resuming across fires.
-- When consolidation fires, conversation sessions with resume tokens first get rest turns to write down what only their contexts know. Rest turns share the task slot and run one at a time. The consolidation turn waits for every conversation rest that can start. A busy conversation rests once it is idle, possibly after consolidation. Due inputs run before the conversation's rest. Later inputs keep running while its rest waits.
-- A successful rest or consolidation turn clears the session's resume token. The process takes no new input and holds the task slot until it becomes idle or reaches the turn deadline, even with background work. Then it closes, and the next input opens a fresh model session.
+- The nightly `rest` schedule sends `procedures/rest.md` as a normal input. The model can also follow it during the day when it judges that its session needs a fresh start.
+- The core `rest` tool marks only its calling session to close at idle. It immediately clears the saved resume token. The process closes once it has no turn or unstarted input and the model CLI reports no background work of its own, such as `run_in_background` Bash or Agent.
+- Inputs that arrive before that idle point still run in the old process. The wait for idle has no deadline. A restart after the call starts fresh even if the old process never reached idle.
+- Only the tool closes a session for rest, not the end of the procedure. Other sessions keep their context until their own model calls it.
 
 ## Work and failure
 
 Every unit of work is an inbox row: a chat input, a schedule firing, a `wake_at` note, or a `watch` outcome.
 
 - A row that fails to send, or that the model refuses, is retried with backoff. A row whose model process closes before it starts, for example when noctiluca restarts, is sent again without counting an attempt. If noctiluca crashes before it records a start, that row is sent again.
-- A schedule fire whose turn fails, heartbeat and consolidation included, runs again in the same task session 15 minutes later, and 30 minutes after a second failure. A failed turn on a chat, `watch`, `wake_at`, or rest row does not run again.
+- A schedule fire whose turn fails, heartbeat and rest included, runs again in the same task session 15 minutes later, and 30 minutes after a second failure. A failed turn on a chat, `watch`, or `wake_at` row does not run again.
 - Delivery failures and turn failures count against one budget of three attempts per row, so an earlier delivery failure moves a fire's first turn retry to the 30-minute delay. After the third failed attempt the row is dead, and the owner gets one DM with the cause.
-- A pending fire retry that is due before the task's next fire holds the task's end-of-day rest.
 - Conversation turns are cut at `model.turn_timeout` (2 h), task turns at `tasks.timeout` (30 min).
 - A turn cut short by a restart, crash, or model exit continues once with a note. In a conversation, the note asks the model to finish each unfinished input using its posting instructions. A turn cut at its timeout does not continue. Tasks notify the owner.
 - Conversation sessions run concurrently. Scheduled tasks run one at a time.
@@ -119,7 +117,7 @@ The model never receives tool definitions directly. It gets the tool hub's URL a
 | Where | What |
 |---|---|
 | SQLite | events and sends (with full-text search), inbox, sessions and resume tokens, schedules, watches, OAuth tokens |
-| memory Git repo | `owner/` (the owner's handwritten files) and the agent's `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. noctiluca sends `procedures/heartbeat.md`, `procedures/consolidate.md`, and `procedures/rest.md` as the input of the heartbeat, the consolidation, and each rest turn. |
+| memory Git repo | `owner/` (the owner's handwritten files) and the agent's `core.md`, both loaded into the system prompt when a model process opens. Any other path is read on demand. |
 
 ## Trust model
 

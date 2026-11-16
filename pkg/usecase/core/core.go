@@ -75,7 +75,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	}
 	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
 		return memoryusecase.Prompt(memory, c.toolNotes(ctx), prompt)(ctx, session)
-	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner}, inbox, watches, schedules, sessions, events, model, hub)
+	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
 	tools := c.reconciler.Tools()
 	tools = append(tools, c.watcher.Tools()...)

@@ -22,8 +22,8 @@ import (
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/slack"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/traq"
-	"github.com/motoki317/noctiluca/pkg/usecase/consolidate"
 	"github.com/motoki317/noctiluca/pkg/usecase/core"
+	memoryusecase "github.com/motoki317/noctiluca/pkg/usecase/memory"
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
 )
 
@@ -73,7 +73,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 			result = errors.Join(result, hub.Shutdown(stopCtx))
 		}
 	}()
-	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir, Defaults: consolidate.Procedures})
+	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir, Defaults: memoryusecase.Procedures})
 	if err != nil {
 		return nil, err
 	}
@@ -118,10 +118,10 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	if config.Heartbeat.Enabled {
 		jobs = append(jobs, domain.Schedule{Name: "heartbeat", Cron: "@every " + config.Heartbeat.Interval.String(), TZ: "UTC", Workdir: config.Model.Workdir})
 	}
-	if config.Consolidate.Enabled {
-		jobs = append(jobs, domain.Schedule{Name: "consolidate", Cron: config.Consolidate.Cron, TZ: config.Consolidate.TZ, Workdir: config.Model.Workdir})
+	if config.Rest.Enabled {
+		jobs = append(jobs, domain.Schedule{Name: "rest", Cron: config.Rest.Cron, TZ: config.Rest.TZ, Workdir: config.Model.Workdir})
 	}
-	for name, enabled := range map[string]bool{"heartbeat": config.Heartbeat.Enabled, "consolidate": config.Consolidate.Enabled} {
+	for name, enabled := range map[string]bool{"heartbeat": config.Heartbeat.Enabled, "rest": config.Rest.Enabled} {
 		if !enabled {
 			if err := repository.NewScheduleRepository(db).Delete(ctx, name); err != nil {
 				return nil, err
