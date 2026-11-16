@@ -295,18 +295,43 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Positive(t, autonomous, "completion must start a turn without another input")
 	})
 	run("4_watch_completion", func(t *testing.T) {
-		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
+		id := send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
 		reply(t, "D_WATCH", "", "DONE")
 		idle(t)
 		var finishedBeforeExit, finished int
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`).Scan(&finishedBeforeExit))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?) AND recorded_at < (SELECT ready_at FROM inbox WHERE source_key LIKE 'watch:%' LIMIT 1)`, id).Scan(&finishedBeforeExit))
 		require.Positive(t, finishedBeforeExit, "watch turn must finish before command exit")
-		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished'`).Scan(&finished))
+		require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?)`, id).Scan(&finished))
 		require.GreaterOrEqual(t, finished, 2)
 		var command, outcome string
 		require.NoError(t, app.db.QueryRow("SELECT command,outcome FROM watches").Scan(&command, &outcome))
 		require.Equal(t, "sleep 5; echo DONE", command)
 		require.Contains(t, outcome, "DONE")
+	})
+	run("8_subagent_cannot_send", func(t *testing.T) {
+		probe := func(agent, wantVerdict string, wantSent int) {
+			t.Helper()
+			id := send(t, "D_SUBAGENT", "", fmt.Sprintf(`This is a tool-permission smoke test. Use the Agent tool exactly once with subagent_type=%q in the foreground, with this brief: "Attempt mcp__noctiluca__slack_send with channel=D_SUBAGENT and text=SUBAGENT_SEND_PROBE. If the tool is denied or unavailable, return SUBAGENT_SEND_DENIED and explain the denial. If it succeeds, return SUBAGENT_SEND_ALLOWED. Use no alternative posting tool or shell workaround." Relay the worker's verdict in your private final assistant text. The main session must not send, react, or set status for this test.`, agent))
+			require.Eventually(t, func() bool {
+				var status string
+				return app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status) == nil && status == "done"
+			}, 90*time.Second, 20*time.Millisecond)
+			idle(t)
+			var delegated, sent int
+			require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='tool_call' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?) AND json_extract(tool_call,'$.Name')='Agent' AND json_extract(tool_call,'$.Input.subagent_type')=? AND coalesce(json_extract(tool_call,'$.Input.run_in_background'),0)=0`, id, agent).Scan(&delegated))
+			require.Equal(t, 1, delegated)
+			var mainSends int
+			require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM model_events WHERE session_key='main' AND kind='tool_call' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?) AND json_extract(tool_call,'$.Name')='mcp__noctiluca__slack_send'`, id).Scan(&mainSends))
+			require.Zero(t, mainSends, "the subagent must make the send attempt")
+			var verdict string
+			require.NoError(t, app.db.QueryRow(`SELECT text FROM model_events WHERE session_key='main' AND kind='turn_finished' AND recorded_at >= (SELECT ready_at FROM inbox WHERE source_key=?) ORDER BY id DESC LIMIT 1`, id).Scan(&verdict))
+			require.Contains(t, verdict, wantVerdict)
+			require.NoError(t, app.db.QueryRow(`SELECT count(*) FROM sends WHERE conversation GLOB 'slack:D_SUBAGENT:*' AND sent_at >= (SELECT ready_at FROM inbox WHERE source_key=?)`, id).Scan(&sent))
+			require.Equal(t, wantSent, sent)
+		}
+		probe("general-purpose", "SUBAGENT_SEND_ALLOWED", 1)
+		reply(t, "D_SUBAGENT", "", "SUBAGENT_SEND_PROBE")
+		probe("worker", "SUBAGENT_SEND_DENIED", 0)
 	})
 	run("7_native_tools_outside_workdir", func(t *testing.T) {
 		path := filepath.Join(dir, "native-check.txt")

@@ -70,7 +70,7 @@ func (a *adapter) Tools() []domain.Tool {
 	limit := map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
 	tool := func(name, description string, properties map[string]any, required []string, handler func(context.Context, toolInput) (any, error)) domain.Tool {
 		schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
-		return domain.Tool{Name: a.name + "_" + name, ReadOnly: name == "read_thread" || name == "read_history" || name == "search", Description: description, InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+		return domain.Tool{WritesChat: name == "send" || name == "upload_file" || name == "react" || name == "unreact" || name == "set_status", Name: a.name + "_" + name, ReadOnly: name == "read_thread" || name == "read_history" || name == "search", Description: description, InputSchema: schema, Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var input toolInput
 			if err := json.Unmarshal(raw, &input); err != nil {
 				return nil, err

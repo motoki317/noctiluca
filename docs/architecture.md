@@ -151,6 +151,8 @@ For every input, `main` uses the hub's tools, external MCP tools, and the model 
 
 Only the prompt tells the model to leave `owner/` untouched, and its native tools can still write there.
 
+Claude defines a `worker` subagent that cannot use the messaging adapters' chat-writing tools: send, upload, react, unreact, and set status. Read tools and downloads remain available. This restriction does not cover forks or other subagent types. Codex ignores the chat-writing tool list.
+
 Owner notices use `DirectMessageProvider` and `Send` on the first `messaging` entry. Model posts use each adapter's send tool. Each adapter's prompt notes name its owner's DM channel. Input headers append ` (owner)` to a sender whose ID matches the `owner` of the entry the message came from, so the model knows who the owner is. The marker grants no permission.
 
 Real isolation needs a separate Unix user for the model, without access to noctiluca's config, tokens, and database. It is out of scope.

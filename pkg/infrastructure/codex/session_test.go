@@ -217,7 +217,7 @@ func TestOpenResumeAndSettings(t *testing.T) {
 		t.Run("resume="+resume, func(t *testing.T) {
 			path, dir := fakeServer(t, "normal")
 			s, err := New(path, "test-model", "low").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir,
-				ResumeToken: resume, SystemPrompt: "System instructions", ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "secret-bearer"}})
+				ResumeToken: resume, SystemPrompt: "System instructions", ChatWritingTools: []string{"entry_send"}, ToolHub: domain.MCPEndpoint{URL: "http://127.0.0.1:1234/mcp", BearerToken: "secret-bearer"}})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			require.True(t, s.Idle())

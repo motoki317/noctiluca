@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -768,6 +769,38 @@ func TestSessionResumeAndConfig(t *testing.T) {
 			_, err := os.Stat(filepath.Dir(inv.Args[i+1]))
 			require.True(t, os.IsNotExist(err))
 		}
+	}
+}
+
+func TestWorkerDisallowsChatWritingTools(t *testing.T) {
+	for _, names := range [][]string{nil, {"entry_send", "other_upload_file"}} {
+		t.Run(fmt.Sprint(names), func(t *testing.T) {
+			path, dir := fakeCLI(t, "echo")
+			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ChatWritingTools: names})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, s.Close()) })
+			inv := readInvocation(t, dir)
+			index := slices.Index(inv.Args, "--agents")
+			require.NotEqual(t, -1, index)
+			var agents map[string]struct {
+				Description     string   `json:"description"`
+				Prompt          string   `json:"prompt"`
+				DisallowedTools []string `json:"disallowedTools"`
+				Tools           []string `json:"tools"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(inv.Args[index+1]), &agents))
+			require.Len(t, agents, 1)
+			worker, ok := agents["worker"]
+			require.True(t, ok)
+			require.NotEmpty(t, worker.Description)
+			require.NotEmpty(t, worker.Prompt)
+			require.Nil(t, worker.Tools, "inherit read, download, and native tools")
+			want := []string{}
+			for _, name := range names {
+				want = append(want, "mcp__noctiluca__"+name)
+			}
+			require.Equal(t, want, worker.DisallowedTools)
+		})
 	}
 }
 

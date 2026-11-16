@@ -382,3 +382,22 @@ func TestHistoryTokenFallbackAndErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestChatWritingTools(t *testing.T) {
+	a := &adapter{name: "entry"}
+	writes := map[string]bool{}
+	for _, tool := range a.Tools() {
+		writes[tool.Name] = tool.WritesChat
+	}
+	require.Equal(t, map[string]bool{
+		"entry_read_thread":   false,
+		"entry_read_history":  false,
+		"entry_search":        false,
+		"entry_download_file": false,
+		"entry_upload_file":   true,
+		"entry_react":         true,
+		"entry_unreact":       true,
+		"entry_set_status":    true,
+		"entry_send":          true,
+	}, writes)
+}

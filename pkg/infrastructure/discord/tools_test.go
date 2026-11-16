@@ -387,3 +387,20 @@ func TestPermissionAndCancellationErrors(t *testing.T) {
 	_, err = a.Send(ctx, "chat:400:", domain.OutboundMessage{Text: "hello"})
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func TestChatWritingTools(t *testing.T) {
+	a := &adapter{name: "entry"}
+	writes := map[string]bool{}
+	for _, tool := range a.Tools() {
+		writes[tool.Name] = tool.WritesChat
+	}
+	require.Equal(t, map[string]bool{
+		"entry_send":          true,
+		"entry_read_history":  false,
+		"entry_read_thread":   false,
+		"entry_search":        false,
+		"entry_react":         true,
+		"entry_download_file": false,
+		"entry_upload_file":   true,
+	}, writes)
+}

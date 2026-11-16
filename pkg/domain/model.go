@@ -15,11 +15,12 @@ type MCPEndpoint struct {
 }
 
 type ModelSessionConfig struct {
-	Key          SessionKey
-	ResumeToken  string
-	SystemPrompt string
-	ToolHub      MCPEndpoint
-	Workdir      string
+	Key              SessionKey
+	ResumeToken      string
+	SystemPrompt     string
+	ToolHub          MCPEndpoint
+	Workdir          string
+	ChatWritingTools []string
 }
 
 type UserInput struct {
