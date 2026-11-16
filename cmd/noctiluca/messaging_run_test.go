@@ -101,6 +101,8 @@ heartbeat: {enabled: false}
 	require.NoError(t, err)
 	app, err := newApplication(t.Context(), c, nil, sdk.OptionAPIURL(api.URL+"/"))
 	require.NoError(t, err)
+	_, err = repository.NewInboxRepository(app.db).Enqueue(t.Context(), domain.NewOwnerNotice("config-order", "ordered notice"))
+	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- app.Start(ctx) }()
@@ -123,6 +125,10 @@ heartbeat: {enabled: false}
 			return nil
 		}
 	}
+	post := takePost()
+	require.Equal(t, "ordered notice", post.Get("text"))
+	require.Equal(t, "D_OWNER", post.Get("channel"))
+	require.Equal(t, "xoxb-support", post.Get("token"))
 	for _, name := range []string{"support", "slack"} {
 		var socket *websocket.Conn
 		select {
@@ -159,10 +165,4 @@ heartbeat: {enabled: false}
 			}
 		}
 	}
-	_, err = repository.NewInboxRepository(app.db).Enqueue(t.Context(), domain.NewOwnerNotice("config-order", "ordered notice"))
-	require.NoError(t, err)
-	post := takePost()
-	require.Equal(t, "ordered notice", post.Get("text"))
-	require.Equal(t, "D_OWNER", post.Get("channel"))
-	require.Equal(t, "xoxb-support", post.Get("token"))
 }
