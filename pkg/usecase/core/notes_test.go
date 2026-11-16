@@ -26,6 +26,23 @@ func (m *adapterNotesMessaging) ToolNotes(ctx context.Context) string {
 	return m.adapter.ToolNotes(ctx)
 }
 
+func TestMainSessionNotes(t *testing.T) {
+	router, err := newMessagingRouter([]Messaging{{Name: "entry", Adapter: newNamedMessaging("entry")}})
+	require.NoError(t, err)
+	notes := (&core{messaging: router}).toolNotes(t.Context())
+	for _, rule := range []string{
+		"Only this session receives inputs and posts.",
+		"Post content from one conversation in another only when that audience is allowed to see it.",
+		"- Never wait on a subagent.",
+	} {
+		require.Contains(t, notes, rule)
+	}
+	require.Contains(t, notes, "\n\nentry:\nUse entry_send with native IDs.")
+	for _, name := range []string{"Claude", "Codex", "Slack", "Discord", "traQ", "spawn_agent", "SendMessage"} {
+		require.NotContains(t, notes, name)
+	}
+}
+
 func TestOwnerDMFailureDoesNotBlockPrompt(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -243,7 +243,9 @@ func TestOpenResumeAndSettings(t *testing.T) {
 			require.Equal(t, threadID, params.ThreadID)
 			require.Equal(t, resume != "", params.ExcludeTurns)
 			require.Equal(t, dir, params.Cwd)
-			require.Equal(t, "System instructions\n\n"+backgroundInstruction, params.DeveloperInstructions)
+			require.Equal(t, "System instructions\n\n"+
+				"In this harness, a command you leave running in the background never reports back to you. Run any command that may outlast the turn with the watch tool, never with nohup or &.\n"+
+				"This main session delegates long or parallel work to subagents with spawn_agent, and these instructions authorize it. Never call wait_agent. Each brief must say that the subagent never posts or calls a messaging tool that writes to chat. Continue a subagent with send_input, and close each finished agent.", params.DeveloperInstructions)
 			require.Equal(t, "test-model", params.Model)
 			require.Equal(t, map[string]any{"features.apps": false, "model_reasoning_effort": "low", "mcp_servers.noctiluca": map[string]any{
 				"url": "http://127.0.0.1:1234/mcp", "http_headers": map[string]any{"Authorization": "Bearer secret-bearer"}}}, params.Config)

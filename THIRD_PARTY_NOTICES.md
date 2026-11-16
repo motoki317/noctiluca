@@ -103,6 +103,8 @@ The procedure text in `pkg/usecase/memory/procedures/` is original and MIT-licen
 | [Voyager](https://arxiv.org/abs/2305.16291) | A library of reusable procedures. |
 | [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/) | Fresh cases, checkable claims, held-out evaluation, noise measurement, and rollback of unsuccessful changes. |
 | [Claude Code memory](https://code.claude.com/docs/en/memory) | A short memory index with documents read on demand. |
+| [Claude Code subagents](https://code.claude.com/docs/en/sub-agents) | Background delegation with standalone briefs, bounded results, and follow-ups to the same subagent. |
+| [Anthropic's multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) | Selective delegation, disjoint work, and evidence checks before the main session uses a draft. |
 | [Mem0](https://arxiv.org/abs/2504.19413) | Each new memory item compared with its existing home and resolved by one of four operations: add, update, delete, or nothing. |
 
 ## Go dependencies

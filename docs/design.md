@@ -12,7 +12,8 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 
 - Durable inbox plus one reconciler. With every unit of work as a SQLite row and one loop that dispatches rows, a failure stays with its row instead of stopping the process.
 - Done once delivered. Platform posts are not idempotent, so a row handed to the model is never replayed. A crash between `Send` and the commit that marks the row done can still repeat one delivery.
-- No waiting inside a turn. A turn that waits holds every conversation. Long work runs in Claude's background tools or `watch`. Timed follow-ups use `wake_at`.
+- No waiting inside a turn. One turn runs at a time, so a turn that waits holds every conversation. Long work runs in background subagents or `watch`, and timed follow-ups use `wake_at`. Small jobs stay local, because delegation costs tokens and context.
+- Subagents draft, and only `main` posts. A subagent gets a standalone brief and disjoint work, and returns a short draft with its evidence. `main` checks the draft and posts it only to an audience allowed to see it, so content crosses conversations in one place ([research credits](../THIRD_PARTY_NOTICES.md#research-and-design)).
 - Tool access lasts as long as the model process, not the turn. OpenClaw tied tool access to a turn, so a background subagent lost its tools when the turn ended.
 
 ## Sessions and replies
