@@ -74,9 +74,11 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 			})
 		}
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: memoryusecase.Prompt(memory, c.toolNotes(), prompt), Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, watches, schedules, sessions, events, model, hub)
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, IdleTimeout: config.IdleTimeout, TurnTimeout: config.TurnTimeout, TaskTimeout: config.TaskTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
+		return memoryusecase.Prompt(memory, c.toolNotes(ctx), prompt)(ctx, session)
+	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner, Completed: config.Completed}, inbox, watches, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.workItem, c.reconciler.Notify)
-	tools := append([]domain.Tool{c.replyTool()}, c.reconciler.Tools()...)
+	tools := c.reconciler.Tools()
 	tools = append(tools, c.watcher.Tools()...)
 	if err := hub.AddSource("core", tools); err != nil {
 		return nil, err
@@ -238,7 +240,7 @@ func (c *core) notifyOwner(ctx context.Context, text string) error {
 		return err
 	}
 	msg := domain.OutboundMessage{Text: text}
-	id, err := c.messaging.Send(ctx, ref, msg)
+	id, err := first.config.Adapter.Send(ctx, ref, msg)
 	if err != nil {
 		return err
 	}

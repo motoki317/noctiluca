@@ -46,7 +46,7 @@ fi
 exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 `), 0700))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "memory", "owner"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory", "owner", "smoke.md"), []byte("This is a smoke test. Follow each user request literally. Post only through the reply tool. Do not read files unless explicitly requested for the smoke test. Do not change files, use external services, or persist test words in memory. When asked to watch a command, call watch, end the turn immediately, and reply only after its exit notification.\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "memory", "owner", "smoke.md"), []byte("This is a smoke test. Follow each user request literally. Post only through slack_send. Do not read files unless explicitly requested for the smoke test. Do not change files, use external services, or persist test words in memory. When asked to watch a command, call watch, end the turn immediately, and reply only after its exit notification.\n"), 0600))
 	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("messaging:\n  - name: slack\n    type: slack\n    owner: U_OWNER\n    slack:\n      app_token: {env: TEST_APP_TOKEN}\n      bot_token: {env: TEST_BOT_TOKEN}\nmodel: {executable: ./claude, name: haiku, turn_timeout: 2m}\nheartbeat: {enabled: false}\n"), 0600))
 	config, err := loadConfig(path)
@@ -142,7 +142,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	start()
 	var token string
 	run("1_DM_PONG", func(t *testing.T) {
-		send(t, "D_OWNER", "", "reply with the word PONG using the reply tool")
+		send(t, "D_OWNER", "", "reply with the word PONG using slack_send")
 		reply(t, "D_OWNER", "", "PONG")
 		token = idle(t, "slack:D_OWNER:").ResumeToken
 	})
@@ -150,7 +150,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	liveNoProcesses(t, dir)
 	start()
 	run("5_restart_resume", func(t *testing.T) {
-		send(t, "D_OWNER", "", "Recall the single word I asked you to reply with in my first message in this conversation. Reply with only that word using the reply tool. Do not read files.")
+		send(t, "D_OWNER", "", "Recall the single word I asked you to reply with in my first message in this conversation. Reply with only that word using slack_send. Do not read files.")
 		reply(t, "D_OWNER", "", "PONG")
 		require.Equal(t, token, idle(t, "slack:D_OWNER:").ResumeToken)
 		data, err := os.ReadFile(filepath.Join(dir, "processes"))
@@ -158,7 +158,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Contains(t, string(data), "--resume "+token)
 	})
 	run("2_queued_input", func(t *testing.T) {
-		send(t, "D_OWNER", "", "Reply with exactly QUEUE_FIRST using the reply tool.")
+		send(t, "D_OWNER", "", "Reply with exactly QUEUE_FIRST using slack_send.")
 		liveTake(t, entered)
 		launches := func() int {
 			data, err := os.ReadFile(filepath.Join(dir, "processes"))
@@ -166,7 +166,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 			return strings.Count(string(data), "\n")
 		}
 		before := launches()
-		id := send(t, "D_OWNER", "", "Reply with exactly QUEUE_SECOND using the reply tool.")
+		id := send(t, "D_OWNER", "", "Reply with exactly QUEUE_SECOND using slack_send.")
 		status := func() string {
 			var status string
 			_ = app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status)
@@ -295,7 +295,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.Positive(t, autonomous, "completion must start a turn without another input")
 	})
 	run("4_watch_completion", func(t *testing.T) {
-		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use the reply tool to report its output.", config.Model.Workdir))
+		send(t, "D_WATCH", "", fmt.Sprintf("Call the watch tool exactly once with command `sleep 5; echo DONE` and cwd %q. Then end this turn immediately without replying or waiting. When the exit notification arrives, use slack_send to report its output.", config.Model.Workdir))
 		reply(t, "D_WATCH", "", "DONE")
 		idle(t, "slack:D_WATCH:")
 		var finishedBeforeExit, finished int
@@ -312,7 +312,6 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		path := filepath.Join(dir, "native-check.txt")
 		require.NoError(t, os.WriteFile(path, []byte("NATIVE_READ_OK"), 0600))
 		send(t, "D_NATIVE", "400.000001", fmt.Sprintf("Read %q using the native Read tool. Run pwd using the native Bash tool from directory %q. Reply here with the file contents and the directory output. These are explicitly authorized smoke-test operations outside the workdir.", path, dir))
-		// The sender is the owner, so `owner` is also a valid target; routing is checked in 1_DM_PONG and a_concurrent_threads.
 		post := liveTake(t, slack.posts)
 		require.Contains(t, post.Get("text"), "NATIVE_READ_OK")
 		require.Contains(t, post.Get("text"), dir)

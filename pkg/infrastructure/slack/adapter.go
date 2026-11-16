@@ -26,6 +26,8 @@ type Config struct {
 }
 
 type adapter struct {
+	ownerDMMu          sync.Mutex
+	ownerDM            string
 	name               string
 	owner              string
 	names              sync.Map
@@ -159,14 +161,6 @@ func Conversation(name, channel, thread string) domain.ConversationRef {
 	return domain.NewConversationRef(name, channel, thread)
 }
 
-func (a *adapter) PostRefs(conversation, message domain.ConversationRef, direct bool) []domain.NamedRef {
-	_, thread, err := a.destination(conversation)
-	if err != nil || direct || message == "" || thread != "" {
-		return nil
-	}
-	return []domain.NamedRef{{Name: "thread", Ref: message}}
-}
-
 func (a *adapter) destination(ref domain.ConversationRef) (string, string, error) {
 	name, channel, thread, ok := domain.ParseConversationRef(ref)
 	if !ok || name != a.name || channel == "" || strings.ContainsAny(channel, " \t\n\r") {
@@ -188,16 +182,6 @@ func (a *adapter) post(ctx context.Context, ref domain.ConversationRef, message 
 		return "", errors.New("broadcast requires a thread")
 	}
 	text := mrkdwn(message.Text)
-	for _, attachment := range message.Attachments {
-		file, _, _, err := a.reader.GetFileInfoContext(ctx, attachment.Ref, 0, 0)
-		if err != nil {
-			return "", slackError("read Slack file failed", err)
-		}
-		if file.Permalink == "" {
-			return "", errors.New("file has no Slack permalink")
-		}
-		text += "\n<" + file.Permalink + "|" + escape(file.Name) + ">"
-	}
 	options := []sdk.MsgOption{sdk.MsgOptionText(text, false)}
 	if thread != "" {
 		options = append(options, sdk.MsgOptionTS(thread))

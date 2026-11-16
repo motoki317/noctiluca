@@ -345,7 +345,6 @@ func TestInterruptedTurnContinuesOnlyOnce(t *testing.T) {
 			if lane == "conv" {
 				item.SessionKey, item.Lane = "room", "conv"
 				item.Payload.Context = domain.SessionContext{Conversation: "room"}
-				item.Payload.Target = "thread"
 			}
 			id, err := f.inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
@@ -384,7 +383,7 @@ func TestConversationFollowupRequiresAcceptRuleBeforeOpen(t *testing.T) {
 		},
 	})
 	info := domain.SessionContext{Conversation: "removed"}
-	item := domain.InboxItem{SourceKey: "original", SessionKey: "removed", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Target: "thread"}}
+	item := domain.InboxItem{SourceKey: "original", SessionKey: "removed", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info}}
 	id, err := f.inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
 	_, err = f.inbox.Claim(t.Context(), id, time.Now())

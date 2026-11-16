@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -46,12 +47,14 @@ func (a *adapter) userName(ctx context.Context, id string) string {
 	return name
 }
 
-func (a *adapter) SourceInfo(ctx context.Context, ref domain.ConversationRef, sender string, root bool) domain.SourceInfo {
+func (a *adapter) SourceInfo(ctx context.Context, event domain.InboundEvent, root bool) domain.SourceInfo {
+	ref, sender := event.Conversation, event.Sender.ID
 	channel, thread, err := a.destination(ref)
 	if err != nil {
 		return domain.SourceInfo{Conversation: string(ref), Sender: sender}
 	}
-	info := domain.SourceInfo{Conversation: channel, Sender: a.userName(ctx, sender), ThreadAt: timestamp(thread)}
+	_, message, _ := a.destination(event.MessageRef)
+	info := domain.SourceInfo{Location: fmt.Sprintf("%s: channel=%s thread_ts=%s timestamp=%s", a.name, channel, thread, message), Conversation: channel, Sender: a.userName(ctx, sender), ThreadAt: timestamp(thread)}
 	if name, ok := a.names.Load(channel); ok {
 		info.Conversation = name.(string)
 	} else {

@@ -32,16 +32,17 @@ func TestSourceInfoNamesAndRoot(t *testing.T) {
 			t.Errorf("unexpected request %s", r.URL.Path)
 		}
 	}, false)
-	info := a.SourceInfo(t.Context(), Conversation("slack", "C1", "1730000000.123456"), "U1", true)
+	info := a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: Conversation("slack", "C1", "1730000000.123456"), MessageRef: Conversation("slack", "C1", "1730000001.000001"), Sender: domain.Sender{ID: "U1"}}, true)
+	require.Equal(t, "slack: channel=C1 thread_ts=1730000000.123456 timestamp=1730000001.000001", info.Location)
 	require.Equal(t, "#general", info.Conversation)
 	require.Equal(t, "Alex", info.Sender)
 	require.Equal(t, "Root question", info.ThreadText)
 	require.Equal(t, time.Unix(1730000000, 123456000), info.ThreadAt)
-	a.SourceInfo(t.Context(), Conversation("slack", "C1", "1730000000.123456"), "U1", false)
+	a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: Conversation("slack", "C1", "1730000000.123456"), MessageRef: Conversation("slack", "C1", "1730000001.000001"), Sender: domain.Sender{ID: "U1"}}, false)
 	require.Equal(t, 1, calls["/users.info"])
 	require.Equal(t, 1, calls["/conversations.info"])
 	require.Equal(t, 1, calls["/conversations.replies"])
-	require.Equal(t, "Alex", a.SourceInfo(t.Context(), Conversation("slack", "D1", ""), "U1", false).Conversation)
+	require.Equal(t, "Alex", a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: Conversation("slack", "D1", ""), Sender: domain.Sender{ID: "U1"}}, false).Conversation)
 }
 
 func TestInboundUsesPostedTime(t *testing.T) {
@@ -81,12 +82,12 @@ func TestSourceInfoRetriesFailedLookups(t *testing.T) {
 		}
 	}, false)
 	ref := Conversation("slack", "C1", "1.2")
-	info := a.SourceInfo(t.Context(), ref, "U1", true)
+	info := a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: ref, Sender: domain.Sender{ID: "U1"}}, true)
 	require.Empty(t, info.ThreadText)
 	require.Equal(t, "U1", info.Sender)
 	require.Equal(t, "C1", info.Conversation)
 	healthy = true
-	info = a.SourceInfo(t.Context(), ref, "U1", false)
+	info = a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: ref, Sender: domain.Sender{ID: "U1"}}, false)
 	require.Equal(t, "Alex", info.Sender)
 	require.Equal(t, "#general", info.Conversation)
 }
@@ -105,7 +106,7 @@ func TestSourceInfoRetriesDMPeerName(t *testing.T) {
 		}
 	}, false)
 	ref := Conversation("slack", "D1", "")
-	require.Equal(t, "U1", a.SourceInfo(t.Context(), ref, "U1", false).Conversation)
+	require.Equal(t, "U1", a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: ref, Sender: domain.Sender{ID: "U1"}}, false).Conversation)
 	healthy = true
-	require.Equal(t, "Alex", a.SourceInfo(t.Context(), ref, "U1", false).Conversation)
+	require.Equal(t, "Alex", a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: ref, Sender: domain.Sender{ID: "U1"}}, false).Conversation)
 }

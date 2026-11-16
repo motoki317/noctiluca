@@ -15,7 +15,8 @@ flowchart LR
   MA1 & MA2 <--> Core[core + reconciler] <--> Model[model adapter] <--> CLI[model CLI]
   Core --- DB[(SQLite inbox)]
   CLI -->|MCP| Hub[tool hub]
-  Hub -->|reply| Core
+  Hub -->|watch, wake_at, schedules| Core
+  Hub -->|send and other adapter tools| MA1 & MA2
   CLI -->|file tools and git| Mem[(memory Git repo)]
   MA1 -.- E1[e.g. Slack]:::example
   Model -.- E2[e.g. Claude Code]:::example

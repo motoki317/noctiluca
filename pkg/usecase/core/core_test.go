@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -38,8 +37,8 @@ func (f *fakeMessaging) Send(_ context.Context, to domain.ConversationRef, messa
 	f.out <- domain.SentMessage{ID: "sent", Conversation: to, Message: message}
 	return "sent", nil
 }
-func (*fakeMessaging) Tools() []domain.Tool { return nil }
-func (*fakeMessaging) ToolNotes() string    { return "" }
+func (*fakeMessaging) Tools() []domain.Tool             { return nil }
+func (*fakeMessaging) ToolNotes(context.Context) string { return "" }
 func (*fakeMessaging) DirectMessage(_ context.Context, user string) (domain.ConversationRef, error) {
 	return domain.ConversationRef("test:dm:" + user), nil
 }
@@ -228,14 +227,6 @@ func TestConversationFlow(t *testing.T) {
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventText, Text: "never post this"}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "background done"}
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test:room"})
-	result, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"target":"test:room","text":"visible"}`))
-	require.NoError(t, err)
-	require.JSONEq(t, `{"id":"sent"}`, string(result))
-	require.Equal(t, "visible", take(t, f.messaging.out).Message.Text)
-	sends, err := f.events.ListOutbound(t.Context(), "test:room", 30)
-	require.NoError(t, err)
-	require.Len(t, sends, 1)
 	f.messaging.in <- message("test:room", "denied", "still recorded")
 	f.messaging.in <- message("test:dm", "owner", "private")
 	dm := take(t, f.model.opened)
@@ -264,7 +255,7 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	s := take(t, f.model.opened)
 	input := take(t, s.inputs)
 	require.Contains(t, input.Text, "test:room · thread | member |")
-	require.Contains(t, input.Text, "\nrefs: conversation=test:thread-a\n\n")
+	require.NotContains(t, input.Text, "refs:")
 	for _, ref := range []domain.ConversationRef{"test:thread-b", "test:room"} {
 		e = message(ref, "member", "queued")
 		if ref != "test:room" {
@@ -278,14 +269,6 @@ func TestChannelThreadsIdleAndResume(t *testing.T) {
 	case <-f.model.opened:
 		t.Fatal("opened a session per thread")
 	default:
-	}
-	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: "test:room"})
-	_, err := f.hub.tools["reply"].Handler(ctx, json.RawMessage(`{"text":"missing target"}`))
-	require.EqualError(t, err, "target is required; copy a ref from the input")
-	for _, target := range []string{"test:thread-a", "test:thread-b", "test:room", "test:room-message"} {
-		_, err = f.hub.tools["reply"].Handler(ctx, json.RawMessage(fmt.Sprintf(`{"target":%q,"text":"answer"}`, target)))
-		require.NoError(t, err)
-		require.Equal(t, domain.ConversationRef(target), take(t, f.messaging.out).Conversation)
 	}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 	// A completed turn can still own background work and its tool grant.

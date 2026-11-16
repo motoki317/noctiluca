@@ -13,4 +13,4 @@ Keep the experiment within the owner's requested scope.
 6. Ask the subagent to evaluate baseline and candidate on both splits. Request held-out aggregates and regression counts only.
 7. Keep a change only when held-out improvement exceeds noise and no previously passing case breaks. Revert flat or regressing results.
 8. Stop after two or three rounds without improvement. Classify remaining failures and report limitations.
-9. Remove temporary worktrees and cases. Report measurements, adopted changes, and reverts to the owner with `reply`.
+9. Remove temporary worktrees and cases. Report measurements, adopted changes, and reverts to the owner through an adapter send tool. Use its notes for the owner DM channel.

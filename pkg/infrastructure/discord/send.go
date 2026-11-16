@@ -18,15 +18,7 @@ func New(name string, config Config, history domain.EventRepository, options ...
 }
 
 func (a *adapter) Send(ctx context.Context, ref domain.ConversationRef, message domain.OutboundMessage) (string, error) {
-	text := message.Text
-	for _, attachment := range message.Attachments {
-		file, err := a.file(ctx, attachment.Ref)
-		if err != nil {
-			return "", err
-		}
-		text += "\n<" + file.URL + ">"
-	}
-	created, err := a.post(ctx, ref, text, nil)
+	created, err := a.post(ctx, ref, message.Text, nil)
 	if err != nil {
 		return "", err
 	}

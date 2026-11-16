@@ -576,7 +576,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				input, err = r.config.Prepare(sendCtx, item)
 			}
 			if err == nil && model == nil {
-				prompt := "Use the reply tool to post messages. Final assistant text is private."
+				prompt := "Use the messaging send tools to post messages. Final assistant text is private."
 				if r.config.Prompt != nil {
 					var extra string
 					extra, err = r.config.Prompt(sendCtx, domain.ToolSession{Key: p.key})

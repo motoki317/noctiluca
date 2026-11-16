@@ -11,25 +11,16 @@ var messagingNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 func ValidMessagingName(name string) bool { return messagingNamePattern.MatchString(name) }
 
 type SourceInfo struct {
+	Location     string
 	Conversation string
 	Sender       string
 	ThreadAt     time.Time
 	ThreadText   string
 }
 
-// SourceInfoProvider resolves opaque refs for readable input headers.
+// SourceInfoProvider supplies readable names and an adapter-native location line.
 type SourceInfoProvider interface {
-	SourceInfo(context.Context, ConversationRef, string, bool) SourceInfo
-}
-
-type NamedRef struct {
-	Name string
-	Ref  ConversationRef
-}
-
-type PostRefProvider interface {
-	// PostRefs names the refs besides the conversation that an input can be answered at.
-	PostRefs(conversation, message ConversationRef, direct bool) []NamedRef
+	SourceInfo(context.Context, InboundEvent, bool) SourceInfo
 }
 
 type OutboundMessage struct {
@@ -42,7 +33,7 @@ type MessagingAdapter interface {
 	Start(ctx context.Context, consume func(context.Context, InboundEvent) error) error
 	Send(ctx context.Context, conversation ConversationRef, message OutboundMessage) (string, error)
 	Tools() []Tool
-	ToolNotes() string
+	ToolNotes(context.Context) string
 }
 
 // UserGroupProvider refreshes accept-rule membership.
@@ -50,7 +41,7 @@ type UserGroupProvider interface {
 	UserGroups(ctx context.Context, ids []string) (map[string][]string, error)
 }
 
-// DirectMessageProvider resolves owner notifications and task replies.
+// DirectMessageProvider resolves owner notification destinations.
 type DirectMessageProvider interface {
 	DirectMessage(context.Context, string) (ConversationRef, error)
 }
@@ -59,3 +50,7 @@ type DirectMessageProvider interface {
 type ConversationFilter interface {
 	SetConversationFilter(func(ConversationRef) bool)
 }
+
+const PostingGuidance = "Post only when addressed (a mention, a request to you, or a DM) or reporting requested work. " +
+	"If the message arrived before your last reply, answer only what it adds. Do not repeat your previous reply. " +
+	"If a follow-up asks to append a phrase, send only that phrase once the answer is posted."

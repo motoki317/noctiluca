@@ -63,10 +63,12 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 		require.Equal(t, name+"_"+suffix, tools[i].Name)
 		require.Equal(t, i < 3, tools[i].ReadOnly)
 	}
-	notes := a.ToolNotes()
-	require.Contains(t, notes, "Post chat and quick answers at `conversation`, and work (commands, investigations, reviews, drafts, and their background results) at `thread`.")
-	require.Contains(t, notes, "for a thread, call support_2_set_status on it, and again when work continues after you post there")
-	require.Contains(t, notes, "for a ref ending in a colon, react to the input `message` with support_2_react")
+	a.owner = "U1"
+	notes := a.ToolNotes(t.Context())
+	require.Contains(t, notes, "Owner DM: use support_2_send with channel=D1 and no thread_ts.")
+	require.Contains(t, notes, "For work, set thread_ts to timestamp")
+	require.Contains(t, tools[len(tools)-1].Description, domain.PostingGuidance)
+
 }
 
 func TestInstanceSocketSourceKeys(t *testing.T) {

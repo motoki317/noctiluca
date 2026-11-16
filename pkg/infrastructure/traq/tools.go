@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,15 +31,32 @@ type toolInput struct {
 	Stamp   string `json:"stamp"`
 }
 
-func (a *adapter) ToolNotes() string {
-	return fmt.Sprintf("traQ has no threads. A ref ending in a colon is a channel. "+
-		"A channel input (a message or a stamp) also has a `quote` ref: posting there posts in the channel and quotes the message. "+
-		"Post chat and quick answers at `conversation`, and a report on requested work at `quote`, so the report shows the request. In a DM, post at `conversation`. "+
-		"With %[1]s_send or %[1]s_upload_file, set quote_message_id to the message ID at the end of the `quote` ref you post to. Tool arguments are bare IDs. "+
-		"Use %[1]s_read_message, %[1]s_read_history, and %[1]s_search for context. "+
-		"Text uses Markdown and @username mentions. The 10000-character limit includes file and quote URLs. "+
-		"A file ID is the UUID in a /files/<id> URL in message text. "+
-		"If an answer needs any tool besides the reply, first show that you started: add a stamp to the input `message` with %[1]s_react.", a.name)
+func (a *adapter) ToolNotes(ctx context.Context) string {
+	notes := fmt.Sprintf(`traQ has no threads. Tool arguments are bare IDs. The input's channel and message_id identify the channel and message.
+Use %[1]s_send to post text. Post chat and quick answers to channel. For a report on requested work, set quote_message_id to message_id.
+In a DM, omit quote_message_id. Use %[1]s_read_message, %[1]s_read_history, and %[1]s_search for context.
+Text uses Markdown and @username mentions. The 10000-character limit includes file and quote URLs.
+A file ID is the UUID in a /files/<id> URL in message text.
+If an answer needs any tool besides %[1]s_send, first show that you started: add a stamp to the input message_id with %[1]s_react.`, a.name)
+	if a.config.Owner == "" {
+		return notes
+	}
+	a.ownerDMMu.Lock()
+	defer a.ownerDMMu.Unlock()
+	if a.ownerDM == "" {
+		ref, err := a.DirectMessage(ctx, a.config.Owner)
+		if err != nil {
+			slog.WarnContext(ctx, "Resolve owner DM for tool notes failed", "messaging", a.name, "error", err)
+			return notes
+		}
+		channel, _, err := a.destination(ref)
+		if err != nil {
+			slog.WarnContext(ctx, "Invalid owner DM for tool notes", "messaging", a.name, "error", err)
+			return notes
+		}
+		a.ownerDM = channel
+	}
+	return notes + fmt.Sprintf("\nOwner DM: use %s_send with channel=%s and no quote_message_id.", a.name, a.ownerDM)
 }
 
 func (a *adapter) Tools() []domain.Tool {
@@ -80,7 +98,7 @@ func (a *adapter) Tools() []domain.Tool {
 		}}
 	}
 	return []domain.Tool{
-		tool("send", "Post Markdown in a channel.", map[string]any{"channel": id, "text": str, "quote_message_id": id}, []string{"channel", "text"}, a.sendTool),
+		tool("send", domain.PostingGuidance+" Post Markdown in a channel.", map[string]any{"channel": id, "text": str, "quote_message_id": id}, []string{"channel", "text"}, a.sendTool),
 		tool("read_history", "Read channel messages, newest first. Continue with next_offset.", map[string]any{"channel": id, "limit": limit, "offset": offset}, []string{"channel"}, a.readHistory),
 		tool("read_message", "Read one message by ID.", map[string]any{"message_id": id}, []string{"message_id"}, a.readMessage),
 		tool("search", "Search traQ messages by words, optionally within a channel.", map[string]any{"query": str, "channel": id, "limit": limit, "offset": offset}, []string{"query"}, a.search),

@@ -35,7 +35,7 @@ func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
 			info.TaskName = "daily"
 			info.Conversation = ""
 		}
-		item := domain.InboxItem{SourceKey: lane, SessionKey: domain.SessionKey(lane), Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Target: "thread", Context: info, Input: domain.UserInput{Text: "never replay"}}}
+		item := domain.InboxItem{SourceKey: lane, SessionKey: domain.SessionKey(lane), Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Input: domain.UserInput{Text: "never replay"}}}
 		deliveredTurn(t, db, item)
 	}
 	require.NoError(t, sessions.Recover(t.Context()))
@@ -50,14 +50,11 @@ func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
 		require.Nil(t, item.Payload.Event)
 		if item.Lane == "conv" {
 			require.True(t, strings.HasPrefix(item.Payload.Input.Text, "previous turn was interrupted: restart\n"))
-			require.Equal(t, domain.ConversationRef("thread"), item.Payload.Target)
 			require.Equal(t, domain.SessionContext{Conversation: "conv"}, item.Payload.Context)
 		} else {
 			require.Equal(t, "previous turn was interrupted: restart", item.Payload.Input.Text)
-			require.Empty(t, item.Payload.Target)
 			require.Equal(t, domain.SessionContext{TaskName: "daily"}, item.Payload.Context)
 		}
-		require.Empty(t, item.Payload.MessageRef)
 	}
 	var done, events int
 	require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE status='done'").Scan(&done))
@@ -85,84 +82,6 @@ func TestRestartContinuesDeliveredTurnsOnce(t *testing.T) {
 	active, err = inbox.Active(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, active)
-}
-
-func TestInterruptedConversationRefs(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		payload   domain.InboxPayload
-		unstarted bool
-		want      domain.ConversationRef
-		message   domain.ConversationRef
-	}{
-		{name: "top level", payload: domain.InboxPayload{Target: "ignored", MessageRef: "ignored", Event: &domain.InboundEvent{Conversation: "room", MessageRef: "message"}}, want: "room", message: "message"},
-		{name: "continuation", payload: domain.InboxPayload{Target: "room", MessageRef: "message"}, want: "room", message: "message"},
-		{name: "empty target", want: "room"},
-		{name: "unstarted opening row", unstarted: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := openDB(t)
-			inbox := repository.NewInboxRepository(db)
-			sessions := repository.NewSessionRepository(db)
-			info := domain.SessionContext{Conversation: "room", Workdir: "/work"}
-			turn := &domain.SessionTurn{Deadline: time.Now().Add(time.Hour)}
-			session := domain.Session{Key: "room", Context: &info, Turn: turn}
-			id, err := inbox.Enqueue(t.Context(), domain.InboxItem{SourceKey: "opening", SessionKey: session.Key, Lane: "conv", ReadyAt: time.Now(), Payload: tc.payload})
-			require.NoError(t, err)
-			turn.InputID = id
-			claimed, err := inbox.Claim(t.Context(), id, turn.Deadline)
-			require.NoError(t, err)
-			require.True(t, claimed)
-			if !tc.unstarted {
-				require.NoError(t, inbox.Delivered(t.Context(), id, session))
-			}
-			require.NoError(t, sessions.Save(t.Context(), session))
-			require.NoError(t, sessions.Interrupt(t.Context(), session.Key, "model process exited"))
-			active, err := inbox.Active(t.Context())
-			require.NoError(t, err)
-			if tc.want == "" {
-				require.Len(t, active, 1)
-				require.Equal(t, "opening", active[0].SourceKey)
-				return
-			}
-			require.Len(t, active, 1)
-			require.Equal(t, tc.want, active[0].Payload.Target)
-			require.Equal(t, tc.message, active[0].Payload.MessageRef)
-			require.Equal(t, info, active[0].Payload.Context)
-			require.Nil(t, active[0].Payload.Event)
-			require.True(t, strings.HasPrefix(active[0].Payload.Input.Text, "previous turn was interrupted: model process exited\n"))
-		})
-	}
-}
-
-func TestRecoverContinuesConversationWithMalformedOpeningPayload(t *testing.T) {
-	db := openDB(t)
-	inbox := repository.NewInboxRepository(db)
-	sessions := repository.NewSessionRepository(db)
-	info := domain.SessionContext{Conversation: "room"}
-	id := deliveredTurn(t, db, domain.InboxItem{SourceKey: "opening", SessionKey: "room", Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: info, Target: "thread"}})
-	malformed := `{"Target":"wrong-thread","MessageRef":"wrong-message","Continuations":"invalid"}`
-	_, err := db.ExecContext(t.Context(), `UPDATE inbox SET payload=? WHERE id=?`, malformed, id)
-	require.NoError(t, err)
-	require.NoError(t, sessions.Recover(t.Context()))
-	require.NoError(t, sessions.Recover(t.Context()))
-	active, err := inbox.Active(t.Context())
-	require.NoError(t, err)
-	require.Len(t, active, 1)
-	require.NotEqual(t, id, active[0].ID)
-	require.Equal(t, "conv", active[0].Lane)
-	require.Equal(t, domain.ConversationRef("room"), active[0].Payload.Target)
-	require.Empty(t, active[0].Payload.MessageRef)
-	require.Equal(t, info, active[0].Payload.Context)
-	require.Equal(t, 1, active[0].Payload.Continuations)
-	require.Nil(t, active[0].Payload.Event)
-	saved, err := sessions.Get(t.Context(), "room")
-	require.NoError(t, err)
-	require.Nil(t, saved.Turn)
-	var status, payload string
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT status,payload FROM inbox WHERE id=?`, id).Scan(&status, &payload))
-	require.Equal(t, "done", status)
-	require.Equal(t, malformed, payload)
 }
 
 func TestInterruptStopReasons(t *testing.T) {
