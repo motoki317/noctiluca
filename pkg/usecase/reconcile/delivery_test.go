@@ -74,26 +74,6 @@ func (f *deliveryRig) turn(t *testing.T, busy bool) domain.Session {
 	return saved
 }
 
-func TestDeliveredConversationNeverReplays(t *testing.T) {
-	f := newDeliveryRig(t, Config{})
-	f.start(t)
-	id := f.enqueue(t, "room", "original")
-	s := take(t, f.model.opened)
-	take(t, s.inputs)
-	f.status(t, id, "done")
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("failed")}
-	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
-	f.turn(t, false)
-	next := f.enqueue(t, "room", "new input")
-	require.Equal(t, "new input", take(t, s.inputs).Text)
-	f.status(t, next, "done")
-	var attempts, notes int
-	require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
-	require.Zero(t, attempts)
-	require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%' OR source_key LIKE 'interrupted:%'").Scan(&notes))
-	require.Zero(t, notes)
-}
-
 func TestClosingProcessReservesSessionKey(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDeliveryRig(t, Config{})
@@ -322,10 +302,8 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 					notes <- text
 					return nil
 				}
-				cfg.Prepare = func(ctx context.Context, item domain.InboxItem) (domain.UserInput, error) {
-					return item.Payload.Input, fail(ctx)
-				}
 				f := newDeliveryRig(t, cfg)
+				f.model.send = func(ctx context.Context, _ domain.UserInput) error { return fail(ctx) }
 				stop := f.start(t)
 				item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
 				if notice {
@@ -337,6 +315,9 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 				var retryAt time.Time
 				for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
 					at := take(t, started)
+					if !notice {
+						take(t, f.model.opened)
+					}
 					if attempt > 1 {
 						require.True(t, at.Equal(retryAt), "retry must wait for its backoff")
 					}
@@ -379,7 +360,7 @@ func TestDeliveryDeadlineRetriesUnsentInputAndNotice(t *testing.T) {
 	}
 }
 
-func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
+func TestLatePrepareFailsOnceAndDoesNotStarveQueuedTask(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		notes := make(chan string, 4)
 		var attempts atomic.Int32
@@ -408,8 +389,8 @@ func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 		f.status(t, nextID, "done")
 		f.status(t, id, "dead")
-		require.EqualValues(t, 3, attempts.Load())
-		require.Contains(t, take(t, notes), "failed after 3 attempts")
+		require.EqualValues(t, 1, attempts.Load())
+		require.Contains(t, take(t, notes), "failed after 1 attempts")
 		stop()
 		f.start(t)
 		synctest.Wait()
@@ -420,7 +401,7 @@ func TestAlwaysLateTaskDoesNotStarveQueuedTask(t *testing.T) {
 		require.Empty(t, notes)
 		var failures, inputs, notices int
 		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&failures))
-		require.Equal(t, 3, failures)
+		require.Equal(t, 1, failures)
 		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key=?", late.SourceKey).Scan(&inputs))
 		require.Equal(t, 1, inputs)
 		require.NoError(t, f.db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'failure:%'").Scan(&notices))

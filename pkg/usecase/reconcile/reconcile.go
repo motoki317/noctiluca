@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
@@ -278,7 +279,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			}
 			endpoint, err := r.hub.OpenSession(item.SessionKey)
 			if err != nil {
-				if err := r.fail(ctx, item, err); err != nil {
+				if err := r.fail(ctx, item, err, r.config.MaxAttempts); err != nil {
 					return 0, err
 				}
 				continue
@@ -374,7 +375,12 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				item.Payload.Input = input
 				input, err = r.config.Prepare(sendCtx, item)
 			}
-			if err == nil && model == nil {
+			if err != nil {
+				cancel()
+				emit(result{delivered: true, skipped: true, err: err})
+				continue
+			}
+			if model == nil {
 				prompt := "Use the messaging send tools to post messages. Final assistant text is private."
 				if r.config.Prompt != nil {
 					var extra string
@@ -442,7 +448,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		if p.reason == domain.DeliveryDeadlineExceeded {
 			for _, item := range p.unstarted {
 				if !p.retiredAt.Before(item.Deadline) {
-					if err := r.fail(ctx, item, context.DeadlineExceeded); err != nil {
+					if err := r.fail(ctx, item, context.DeadlineExceeded, r.config.MaxAttempts); err != nil {
 						return err
 					}
 				}
@@ -472,12 +478,15 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 			if p.closing && (p.reason != domain.DeliveryDeadlineExceeded || p.retiredAt.Before(item.Deadline)) {
 				return nil
 			}
+			if out.skipped && !p.key.IsNotice() {
+				return r.fail(ctx, *item, out.err, 1)
+			}
 			cause := out.err
 			if p.reason == domain.DeliveryDeadlineExceeded {
 				// Retirement cancels delivery, which can hide the deadline in its error.
 				cause = context.DeadlineExceeded
 			}
-			if err := r.fail(ctx, *item, cause); err != nil {
+			if err := r.fail(ctx, *item, cause, r.config.MaxAttempts); err != nil {
 				return err
 			}
 			if errors.Is(cause, context.DeadlineExceeded) {
@@ -516,7 +525,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		}
 		delete(p.unstarted, item.ID)
 		if out.event.Kind == domain.ModelEventInputRefused {
-			if err := r.fail(ctx, item, out.event.Err); err != nil {
+			if err := r.fail(ctx, item, out.event.Err, r.config.MaxAttempts); err != nil {
 				return err
 			}
 			if p.turn != nil && p.turn.InputID == item.ID && len(p.unstarted) == 0 {
@@ -559,14 +568,9 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 		}
 	case domain.ModelEventTurnFinished:
 		p.turnStarted = false
-		turn := p.turn
-		if turn != nil {
-			if turn.Failure != "" && turn.InputID != 0 {
-				if _, unstarted := p.unstarted[turn.InputID]; !unstarted {
-					if _, err := r.inbox.RetryFailedTurn(ctx, turn.InputID, turn.Failure, r.config.MaxAttempts, failedFireRetryDelay, p.last); err != nil {
-						return err
-					}
-				}
+		if p.turn != nil && p.turn.Failure != "" {
+			if _, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice("turn-failure:"+uuid.NewString(), fmt.Sprintf("Turn in %s failed: %s", p.key, p.turn.Failure))); err != nil {
+				return err
 			}
 		}
 		p.turn = nil
@@ -604,13 +608,13 @@ func (r *Reconciler) retire(p *process, reason string) {
 	r.hub.CloseSession(p.key)
 	p.cancel()
 }
-func (r *Reconciler) fail(ctx context.Context, item domain.InboxItem, cause error) error {
+func (r *Reconciler) fail(ctx context.Context, item domain.InboxItem, cause error, limit int) error {
 	if errors.Is(cause, domain.ErrRejected) {
 		r.Notify()
 		return r.inbox.Reject(ctx, item.ID, cause.Error())
 	}
 	retry := time.Now().Add(r.config.RetryDelay * time.Duration(1<<min(item.Attempts, 8)))
-	dead, err := r.inbox.Finish(ctx, item.ID, cause.Error(), r.config.MaxAttempts, retry)
+	dead, err := r.inbox.Finish(ctx, item.ID, cause.Error(), limit, retry)
 	if err != nil {
 		return err
 	}
@@ -618,5 +622,3 @@ func (r *Reconciler) fail(ctx context.Context, item domain.InboxItem, cause erro
 	slog.WarnContext(ctx, "Inbox delivery failed", "item", item.ID, "session", item.SessionKey, "error", cause, "dead", dead)
 	return nil
 }
-
-const failedFireRetryDelay = 15 * time.Minute
