@@ -12,20 +12,19 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 
 - Durable inbox plus one reconciler. With every unit of work as a SQLite row and one loop that dispatches rows, a failure stays with its row instead of stopping the process.
 - Done once delivered. Platform posts are not idempotent, so a row handed to the model is never replayed. A crash between `Send` and the commit that marks the row done can still repeat one delivery.
-- No waiting inside a turn. A turn that waits holds its session. Long work runs in Claude's background tools or `watch`. Timed follow-ups use `wake_at`.
-- Tool access lasts as long as the session, not the turn. OpenClaw tied tool access to a turn, so a background subagent lost its tools when the turn ended.
+- No waiting inside a turn. A turn that waits holds every conversation. Long work runs in Claude's background tools or `watch`. Timed follow-ups use `wake_at`.
+- Tool access lasts as long as the model process, not the turn. OpenClaw tied tool access to a turn, so a background subagent lost its tools when the turn ended.
 
 ## Sessions and replies
 
-- One session per channel. Threads in a channel share context. The cost is that one channel's turns run in order. Background tools keep turns short.
+- One session, `main`, per instance. All conversations, scheduled tasks, and background results share context. Due inputs arrive in FIFO order, without priorities.
 - Adapter send tools are the only posting path. Each adapter puts its native destination IDs in the input header and documents its owner's DM channel. The model remembers where requested work belongs when its background result arrives.
 - Only tools post. OpenClaw posted the final text unless it was a magic `NO_REPLY` string, which caused stray posts.
 
 ## Model adapter
 
-- The official `claude` CLI on the owner's subscription, one process per session, over stream-json. Claude Code already provides shell, subagents, and context compaction.
-- Codex through `codex app-server`, one process per session. `turn/steer` adds input to the running turn. Codex keeps a thread's first developer instructions on resume, so a changed system prompt is added to the resumed thread as a developer message. Earlier instructions stay in the thread's history, including ones since deleted from memory.
-- No per-session roles. The model judges what to change. Details: architecture.md, "Trust model".
+- The official `claude` CLI on the owner's subscription, over stream-json. Claude Code already provides shell, subagents, and context compaction.
+- Codex through `codex app-server`. `turn/steer` adds input to the running turn. Codex keeps a thread's first developer instructions on resume, so a changed system prompt is added to the resumed thread as a developer message. Earlier instructions stay in the thread's history, including ones since deleted from memory.
 
 ## Memory
 
@@ -35,7 +34,7 @@ noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general a
 - The model searches files with its native shell tools. An index is not needed at the current size.
 - Memory has three tiers. Short-term memory holds the exact state of open work and loses each entry when the work ends. Long-term memory holds rules generalized from repeated experience: `core.md`, loaded every time, and leaf files it points to. External memory holds specific facts and procedures by theme: in a knowledge system the owner connected when they may be shared, so that people and other agents can use them, and in local files otherwise. Keeping specific facts out of the loaded core, and every file under 8 KB, bounds what a turn loads as memory grows.
 - The `rest` procedure saves what only the session knows, then restructures memory. It compresses the owner's teachings and corrections into general principles in `core.md` and applies them to current and subsequent work. It gives each fact and open item one home in its tier. It compares each item with that home, then adds, updates, deletes, or changes nothing, following Mem0 (arXiv 2504.19413). Changes to `owner/`, tools, and the harness go to the owner as proposals. OpenClaw's nightly memory job promoted only memories that were searched often, so forgotten knowledge never qualified. Small item-level edits follow ACE (arXiv 2510.04618), which found that whole-document rewrites shrink memory and lose accuracy.
-- The model, not the harness, decides when to rest. It calls the core `rest` tool after saving memory, from the nightly schedule or on its own judgment. The harness only closes the process at idle, so it keeps no rest state of its own.
+- The model, not the harness, decides when to rest. It calls the core `rest` tool after saving memory, from the nightly schedule or on its own judgment. The harness only clears the resume token and closes the process at idle.
 - Measured improvement on request only. The shipped `procedures/hillclimb.md` guides a train/held-out experiment with the model's own tools, following [Automating eval design and hillclimbing with Claude](https://claude.dev/blog/automating-eval-design-and-hillclimbing/). The harness has no evaluation code.
 
 ## Workloads

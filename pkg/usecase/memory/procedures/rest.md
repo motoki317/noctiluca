@@ -1,7 +1,8 @@
 <!-- Original text: MIT (LICENSE). Research ideas: ACE, Reflexion, Letta, and Mem0. Sources retain their own licenses. See THIRD_PARTY_NOTICES.md. -->
 # Save and restructure memory
 
-After `rest`, the next model process knows only its system prompt and what it reads from memory.
+The `main` session holds the context of every conversation, scheduled task, and background result.
+After `rest`, a fresh `main` process knows only its system prompt and what it reads from memory.
 
 ## Save what the next process needs
 
@@ -9,7 +10,7 @@ Read `short-term.md` in full, and add what it lacks:
 
 - Open work and promised follow-ups: each request, its messaging entry and native destination IDs, done condition, and latest status.
 - Pending `watch` commands and `wake_at` notes, and what each is for.
-- Facts learned in this session, under their theme in external memory.
+- Facts learned across conversations, tasks, and background results, under their theme in external memory.
 
 Skip what memory already holds.
 
@@ -62,5 +63,5 @@ With nothing new, post nothing.
 ## Rest
 
 Call the core `rest` tool, then end the turn.
-The process closes after its turn, queued inputs, and native background work finish.
-Inputs that arrive before it closes still run in this session.
+The process closes once no turn, waiting input, or native background work remains.
+Inputs that arrive before it closes still run in the current `main` process.
