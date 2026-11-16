@@ -52,6 +52,7 @@ func TestSeedDefaultProcedures(t *testing.T) {
 	dir := t.TempDir()
 	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
+	require.NoDirExists(t, filepath.Join(dir, "topics"))
 	for _, name := range []string{"procedures/hillclimb.md", "procedures/rest.md"} {
 		want, err := memoryusecase.Procedures.ReadFile(name)
 		require.NoError(t, err)
@@ -77,6 +78,7 @@ func TestSeedDefaultProcedures(t *testing.T) {
 
 func TestSeedingPreservesExistingFilesAndIndex(t *testing.T) {
 	_, dir := setup(t)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "topics"), 0700))
 	for _, name := range []string{"procedures/rest.md", "topics/other.md"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("staged"), 0640))
 		git(t, dir, "add", "--", name)
@@ -139,6 +141,7 @@ func TestReadPaths(t *testing.T) {
 		_, err = s.List(t.Context(), name)
 		require.Error(t, err, name)
 	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "topics"), 0700))
 	require.NoError(t, os.Symlink("../owner/persona.md", filepath.Join(dir, "topics/link.md")))
 	_, err = s.Read(t.Context(), "topics/link.md")
 	require.Error(t, err)
@@ -158,6 +161,7 @@ func TestInitExistingFilesAndReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, root+"\n", git(t, root, "rev-parse", "--show-toplevel"))
 	require.Equal(t, "outside.txt\nowner/persona.md\n", git(t, root, "ls-tree", "-r", "--name-only", "HEAD"))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "topics"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "topics/untracked.md"), []byte("日本語 untracked"), 0600))
 	text, err := s.Read(t.Context(), "topics/untracked.md")
 	require.NoError(t, err)

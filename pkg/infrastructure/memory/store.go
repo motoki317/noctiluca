@@ -45,7 +45,7 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 		return nil, err
 	}
 	defer r.Close()
-	for _, name := range []string{"owner", "topics", "procedures"} {
+	for _, name := range []string{"owner", "procedures"} {
 		if err := safePath(r, name); err != nil {
 			return nil, err
 		}
