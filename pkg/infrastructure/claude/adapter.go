@@ -28,8 +28,7 @@ const MinimumVersion = "2.1.316"
 // AlwaysOfferedToolMeta keeps built-in tool schemas available after CLI compaction.
 var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
 
-// One session serves a whole conversation, so independent requests would otherwise queue behind each other.
-const subagentInstruction = "One session here serves a whole conversation, so new requests can arrive while you work. When you have two or more independent tasks, give each to a background subagent (the Agent tool with run_in_background), so that no task waits on another and you stay free for new input. Do a quick lookup yourself."
+const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the chat-writing tools. Continue a subagent with SendMessage.`
 
 func systemPrompt(prompt string) string {
 	if prompt == "" {

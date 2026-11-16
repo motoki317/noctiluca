@@ -23,8 +23,8 @@ func TestMemoryPromptLoadsOncePerProcess(t *testing.T) {
 	input := take(t, model.inputs)
 	require.NotContains(t, input.Text, "Owner instructions")
 	require.Contains(t, model.config.SystemPrompt, "Owner instructions")
-	require.Contains(t, model.config.SystemPrompt, "Messaging tool notes:")
-	require.NotContains(t, input.Text, "Messaging tool notes:")
+	require.Contains(t, model.config.SystemPrompt, "Session and messaging notes:")
+	require.NotContains(t, input.Text, "Session and messaging notes:")
 	require.Contains(t, model.config.SystemPrompt, "Initial index")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "core.md"), []byte("Updated index"), 0600))
 	model.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
