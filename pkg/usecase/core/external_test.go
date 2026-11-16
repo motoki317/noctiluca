@@ -27,7 +27,7 @@ func (f *fakeExternal) Connect(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-func (f *fakeExternal) Start(ctx context.Context) error {
+func (f *fakeExternal) Start(ctx context.Context, _ func()) error {
 	f.running <- true
 	<-ctx.Done()
 	f.stopped <- true

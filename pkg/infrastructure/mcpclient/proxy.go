@@ -151,7 +151,7 @@ func (m *manager) Connect(ctx context.Context) error {
 		m.remotes = append(m.remotes, r)
 		if err := r.connect(ctx); err != nil {
 			if r.tokens.err() != nil {
-				if err := r.disable(ctx); err != nil {
+				if err := r.disable(ctx, nil); err != nil {
 					return err
 				}
 				continue
@@ -162,7 +162,7 @@ func (m *manager) Connect(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (m *manager) Start(ctx context.Context) error {
+func (m *manager) Start(ctx context.Context, notify func()) error {
 	ctx, finish, beginErr := m.life.Begin(ctx)
 	if beginErr != nil {
 		return beginErr
@@ -171,7 +171,7 @@ func (m *manager) Start(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 	for _, r := range m.remotes {
-		g.Go(func() error { return r.run(ctx) })
+		g.Go(func() error { return r.run(ctx, notify) })
 	}
 	if len(m.remotes) == 0 {
 		<-ctx.Done()
@@ -248,7 +248,7 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 	return r.hub.ReplaceSource("external:"+r.config.Name, tools)
 }
 
-func (r *remote) run(ctx context.Context) error {
+func (r *remote) run(ctx context.Context, notify func()) error {
 	defer r.close()
 	var expiry <-chan time.Time
 	if at := r.tokens.expiresWithoutRefresh(); !at.IsZero() {
@@ -259,12 +259,12 @@ func (r *remote) run(ctx context.Context) error {
 	delay := time.Second
 	for ctx.Err() == nil {
 		if r.tokens.err() != nil {
-			return r.disable(ctx)
+			return r.disable(ctx, notify)
 		}
 		if r.session == nil {
 			if err := r.connect(ctx); err != nil {
 				if r.tokens.err() != nil {
-					return r.disable(ctx)
+					return r.disable(ctx, notify)
 				}
 				r.logger.WarnContext(ctx, "MCP server connection failed; will retry", "server", r.config.Name, "error", err)
 				if !retryAfter(ctx, delay) {
@@ -284,10 +284,10 @@ func (r *remote) run(ctx context.Context) error {
 			case <-ctx.Done():
 				return nil
 			case <-r.tokens.failed:
-				return r.disable(ctx)
+				return r.disable(ctx, notify)
 			case <-expiry:
 				r.tokens.fail("access token expired without a refresh token")
-				return r.disable(ctx)
+				return r.disable(ctx, notify)
 			case <-closed:
 				connected = false
 			case <-r.changed:
@@ -324,7 +324,7 @@ func (r *remote) close() error {
 	return err
 }
 
-func (r *remote) disable(ctx context.Context) error {
+func (r *remote) disable(ctx context.Context, notify func()) error {
 	if err := r.hub.ReplaceSource("external:"+r.config.Name, nil); err != nil {
 		return err
 	}
@@ -332,6 +332,9 @@ func (r *remote) disable(ctx context.Context) error {
 	r.logger.WarnContext(ctx, "Skipping MCP server until re-login", "server", r.config.Name, "error", reason)
 	key := "mcp-auth:" + r.config.Name + ":" + r.loginID
 	_, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice(key, reason))
+	if err == nil && notify != nil {
+		notify()
+	}
 	return err
 }
 

@@ -44,7 +44,7 @@ type ToolHub interface {
 type ExternalTools interface {
 	Shutdown(context.Context) error
 	Connect(ctx context.Context) error
-	Start(ctx context.Context) error
+	Start(ctx context.Context, notify func()) error
 }
 
 var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)

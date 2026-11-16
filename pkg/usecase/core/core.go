@@ -143,7 +143,7 @@ func (c *core) Start(ctx context.Context) (result error) {
 		}
 	}
 	if c.external != nil {
-		g.Go(func() error { return c.external.Start(runCtx) })
+		g.Go(func() error { return c.external.Start(runCtx, c.reconciler.Notify) })
 	}
 	result = g.Wait()
 	if ctx.Err() != nil {

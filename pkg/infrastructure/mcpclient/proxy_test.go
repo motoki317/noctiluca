@@ -69,7 +69,7 @@ func TestProxySharedToolsAndReconnect(t *testing.T) {
 	require.NoError(t, m.Connect(ctx))
 	initial := m.(*manager).remotes[0].session
 	done := make(chan error, 1)
-	go func() { done <- m.Start(ctx) }()
+	go func() { done <- m.Start(ctx, nil) }()
 	defer func() { cancel(); require.NoError(t, <-done) }()
 	owner := hubClient(t, hub, "owner")
 	second := hubClient(t, hub, "second")
@@ -120,7 +120,7 @@ func TestMissingLoginSkipsAndDefaults(t *testing.T) {
 	require.NoError(t, m.Connect(ctx))
 	assert.Zero(t, f.initializations.Load())
 	cancel()
-	require.NoError(t, m.Start(ctx))
+	require.NoError(t, m.Start(ctx, nil))
 }
 
 type failingTokens struct{ domain.OAuthTokenRepository }
