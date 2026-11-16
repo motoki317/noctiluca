@@ -17,7 +17,6 @@ import (
 )
 
 type Config struct {
-	IdleTimeout time.Duration
 	RetryDelay  time.Duration
 	MaxAttempts int
 	Workdir     string
@@ -48,9 +47,6 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	if model == nil || hub == nil || events == nil || sessions == nil || schedules == nil || inbox == nil {
 		return nil, errors.New("core dependencies are required")
 	}
-	if config.IdleTimeout < 0 {
-		return nil, errors.New("timeouts must be positive")
-	}
 	router, err := newMessagingRouter(messaging)
 	if err != nil {
 		return nil, err
@@ -80,7 +76,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 			})
 		}
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, ChatWritingTools: chatWritingTools, IdleTimeout: config.IdleTimeout, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, ChatWritingTools: chatWritingTools, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
 		return memoryusecase.Prompt(memory, c.toolNotes(ctx), prompt)(ctx, session)
 	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.reconciler.Notify)

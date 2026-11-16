@@ -11,6 +11,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIdleProcessStaysOpen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{})
+		f.model.idle = true
+		f.start(t)
+		id := f.enqueue(t, "room", "first input")
+		s := take(t, f.model.opened)
+		take(t, s.inputs)
+		f.status(t, id, "done")
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		f.turn(t, false)
+		require.True(t, s.Idle())
+		time.Sleep(2 * time.Hour)
+		synctest.Wait()
+		require.Empty(t, s.closed)
+		require.Empty(t, f.hub.closed)
+		id = f.enqueue(t, "room", "after idle")
+		require.Equal(t, id, take(t, s.inputs).ID)
+		require.Empty(t, f.model.opened)
+	})
+}
+
 func TestRestClosesAtIdleAndStartsFresh(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDeliveryRig(t, Config{})
