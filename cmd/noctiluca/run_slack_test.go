@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,11 +22,13 @@ type runSlack struct {
 	connections chan *websocket.Conn
 	posts       chan url.Values
 	acks        chan string
+	historyMu   sync.Mutex
+	history     map[string]int
 }
 
 func newRunSlack(t *testing.T, beforePost func(context.Context, url.Values)) *runSlack {
 	t.Helper()
-	s := &runSlack{connections: make(chan *websocket.Conn, 4), posts: make(chan url.Values, 32), acks: make(chan string, 32)}
+	s := &runSlack{connections: make(chan *websocket.Conn, 4), posts: make(chan url.Values, 32), acks: make(chan string, 32), history: make(map[string]int)}
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "https://api.slack.com" }}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -35,7 +38,13 @@ func newRunSlack(t *testing.T, beforePost func(context.Context, url.Values)) *ru
 		case "/conversations.info":
 			require.NoError(t, r.ParseForm())
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": map[string]any{"name": "test-room", "is_im": strings.HasPrefix(r.Form.Get("channel"), "D"), "user": "U_OWNER"}})
-		case "/conversations.history", "/conversations.replies":
+		case "/conversations.history":
+			require.NoError(t, r.ParseForm())
+			s.historyMu.Lock()
+			s.history[r.Form.Get("channel")]++
+			s.historyMu.Unlock()
+			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
+		case "/conversations.replies":
 			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
 		case "/auth.test":
 			_, _ = io.WriteString(w, `{"ok":true,"user_id":"U_BOT","bot_id":"B_BOT"}`)
