@@ -111,7 +111,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 		}
 		header += fmt.Sprintf("Sent at %s, before your reply at %s in %s.\n", at.In(location).Format("15:04:05 MST"), history.LastReply.In(location).Format("15:04:05 MST"), place)
 	} else if history.Running {
-		header += "Sent while your previous turn was running.\n"
+		input.SentDuringTurn = true
 	}
 	if info.Location != "" {
 		header += info.Location + "\n"

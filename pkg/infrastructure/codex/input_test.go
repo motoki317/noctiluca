@@ -117,6 +117,17 @@ func sendAndStart(t *testing.T, s domain.ModelSession, text string) {
 	)
 }
 
+func TestSendMidTurnNotice(t *testing.T) {
+	s, _ := openInputSession(t, "input-normal")
+	text := "An earlier attempt at this input failed: unavailable. Check what it already did before you repeat a step.\n\nhello"
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: text, SentDuringTurn: true}))
+	requireEvents(t, s,
+		domain.ModelEvent{Kind: domain.ModelEventTurnStarted},
+		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1},
+		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/start:This message was sent while your previous turn was running.\n\n" + text},
+	)
+}
+
 func TestSteerTracksInputsThroughCompletion(t *testing.T) {
 	s, dir := openInputSession(t, "input-normal")
 	sendAndStart(t, s, "first")

@@ -27,6 +27,9 @@ type UserInput struct {
 	ID          int64
 	Text        string
 	Attachments []Attachment
+	// SentDuringTurn reports a chat message sent while a turn was running,
+	// unless its header already places it before a later reply.
+	SentDuringTurn bool `json:",omitempty"`
 }
 
 type ModelEventKind string

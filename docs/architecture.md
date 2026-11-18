@@ -62,6 +62,8 @@ An input that arrives during a turn joins that turn.
 Owner notices use separate, model-less `notice:` processes.
 
 Chat headers name the place, sender, and local time, with ordering context.
+The Codex adapter marks a chat message sent while a turn was running, unless the header already says that the message came before a reply in its conversation.
+The Claude adapter adds no mark: the Claude CLI wraps such a message in its own reminder when it delivers the message within the running turn, and starts it unmarked as a new turn when that turn ends first.
 Each adapter formats a location line with the native IDs its send tool takes.
 Watch results and wake notes arrive as plain inputs without posting targets.
 
