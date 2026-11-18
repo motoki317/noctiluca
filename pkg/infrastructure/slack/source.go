@@ -83,7 +83,7 @@ func (a *adapter) SourceInfo(ctx context.Context, event domain.InboundEvent, roo
 			messages, _, _, err = a.reader.GetConversationRepliesContext(ctx, params)
 		}
 		if err == nil && len(messages) > 0 && messages[0].Timestamp == thread {
-			info.ThreadText = messages[0].Text
+			info.ThreadText = messageText(&messages[0].Msg)
 		}
 	}
 	return info

@@ -50,7 +50,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			return event, false
 		}
 		// Unfurls change attachments without changing the user's message.
-		if e.SubType == "message_changed" && e.Message != nil && e.PreviousMessage != nil && e.Message.Text == e.PreviousMessage.Text && slices.EqualFunc(e.Message.Files, e.PreviousMessage.Files, func(a, b sdk.File) bool { return a.ID == b.ID }) {
+		if e.SubType == "message_changed" && e.Message != nil && e.PreviousMessage != nil && messageText(e.Message) == messageText(e.PreviousMessage) && slices.EqualFunc(e.Message.Files, e.PreviousMessage.Files, func(a, b sdk.File) bool { return a.ID == b.ID }) {
 			return event, false
 		}
 		if thread == m.Timestamp {
@@ -64,7 +64,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			}
 		}
 		mentionsMe = a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">")
-		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: m.Text, MentionsMe: mentionsMe, ReceivedAt: time.Now()}
+		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: messageText(m), MentionsMe: mentionsMe, ReceivedAt: time.Now()}
 		if kind == domain.InboundEventMessage {
 			event.SourceKey = a.name + ":m:" + channel + ":" + m.Timestamp
 		}
@@ -139,6 +139,22 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		}
 	}
 	return event, true
+}
+
+func messageText(m *sdk.Msg) string {
+	parts := []string{m.Text}
+	for _, attachment := range m.Attachments {
+		// People can only attach forwarded messages, so their other attachments are unfurls.
+		if (m.BotID == "" && !attachment.IsShare) || (m.BotID != "" && attachment.OriginalURL != "") {
+			continue
+		}
+		parts = append(parts, attachment.Title, attachment.Text)
+		if attachment.Title == "" && attachment.Text == "" {
+			parts = append(parts, attachment.Fallback)
+		}
+	}
+	parts = slices.DeleteFunc(parts, func(part string) bool { return part == "" })
+	return strings.Join(parts, "\n")
 }
 
 func (a *adapter) isSelf(user, bot string) bool {
