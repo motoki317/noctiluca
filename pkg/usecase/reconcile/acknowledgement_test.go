@@ -115,6 +115,7 @@ func TestUnstartedInputsRedeliverInOrder(t *testing.T) {
 func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 	for _, lane := range []string{"conv", "task"} {
 		t.Run(lane, func(t *testing.T) {
+			logs := captureLogs(t)
 			synctest.Test(t, func(t *testing.T) {
 				notes := make(chan string, 2)
 				f := newDeliveryRig(t, Config{RetryDelay: 100 * time.Millisecond, MaxAttempts: 3,
@@ -169,6 +170,7 @@ func TestRefusedInputRetriesWithBackoff(t *testing.T) {
 				require.Equal(t, 1, notices)
 				require.Empty(t, notes)
 			})
+			require.NotContains(t, logs.String(), "Turn finished")
 		})
 	}
 }

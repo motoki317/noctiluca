@@ -1,8 +1,11 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -100,6 +103,89 @@ func take[T any](t *testing.T, ch <-chan T) T {
 		var zero T
 		return zero
 	}
+}
+
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &logs
+}
+
+func TestModelLifecycleLogs(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		failure    string
+		adapterErr string
+		reason     string
+	}{
+		{name: "failed turn and shutdown", failure: "model unavailable", adapterErr: "background turn failed", reason: "shutdown"},
+		{name: "adapter error and process exit", adapterErr: "process exited unexpectedly", reason: "model process exited"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeliveryRig(t, Config{NotifyOwner: func(context.Context, string) error { return nil }})
+				require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: domain.MainSessionKey, ResumeToken: "saved-token"}))
+				stop := f.start(t)
+				id := f.enqueue(t, "room", "private-input-text")
+				s := take(t, f.model.opened)
+				take(t, s.inputs)
+				f.status(t, id, "done")
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
+				if tt.failure != "" {
+					s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New(tt.failure)}
+				}
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+				f.turn(t, false)
+				synctest.Wait()
+				require.Empty(t, f.runner.live[domain.MainSessionKey].lastError)
+				finish := map[string]any{"level": "INFO", "msg": "Turn finished", "session": "main"}
+				exit := map[string]any{"level": "INFO", "msg": "Model process exited", "session": "main", "reason": tt.reason}
+				if tt.failure != "" {
+					finish["error"] = tt.failure
+				}
+				if tt.reason == "model process exited" {
+					exit["error"] = tt.adapterErr
+				}
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New(tt.adapterErr)}
+				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+				synctest.Wait()
+				if tt.reason == "model process exited" {
+					close(s.events)
+					synctest.Wait()
+				}
+				stop()
+
+				var records []map[string]any
+				for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+					var record map[string]any
+					require.NoError(t, json.Unmarshal(line, &record))
+					delete(record, "time")
+					records = append(records, record)
+				}
+				require.Equal(t, []map[string]any{
+					{"level": "INFO", "msg": "Model process started", "session": "main"},
+					{"level": "INFO", "msg": "Turn started", "session": "main", "item": float64(id)},
+					finish, exit,
+				}, records)
+			})
+		})
+	}
+}
+
+func TestNoticeHasNoModelLifecycleLogs(t *testing.T) {
+	logs := captureLogs(t)
+	f := newDeliveryRig(t, Config{NotifyOwner: func(context.Context, string) error { return nil }})
+	id, err := f.inbox.Enqueue(t.Context(), domain.NewOwnerNotice("notice", "private-notice-text"))
+	require.NoError(t, err)
+	stop := f.start(t)
+	f.status(t, id, "done")
+	stop()
+	require.Empty(t, f.model.opened)
+	require.Empty(t, logs.String())
 }
 
 func TestTurnHasNoDeadlineAndCrashContinuesOnce(t *testing.T) {
