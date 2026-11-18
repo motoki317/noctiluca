@@ -83,9 +83,11 @@ func TestSecretReferencesDoNotExposeValues(t *testing.T) {
 			require.Equal(t, tc.want, value)
 		}
 	}
-	_, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    slack: {bot_token: secret-value}\n"))
-	require.Error(t, err)
-	require.NotContains(t, err.Error(), "secret-value")
+	for _, token := range []string{"secret-value", "{secret-value}", "{env:secret-value}"} {
+		_, err := loadConfig(writeConfig(t, "messaging:\n  - name: slack\n    type: slack\n    slack: {bot_token: "+token+"}\n"))
+		require.ErrorContains(t, err, "invalid config", token)
+		require.NotContains(t, err.Error(), "secret-value", token)
+	}
 }
 
 func TestRunValidationBeforeResources(t *testing.T) {
@@ -125,13 +127,13 @@ func TestExampleConfig(t *testing.T) {
 func TestRemovedTimeoutConfig(t *testing.T) {
 	_, err := loadConfig(writeConfig(t, slackEntry))
 	require.NoError(t, err)
-	for _, fields := range []string{
-		"tasks: {timeout: 30m}\n",
-		"model: {turn_timeout: 2h}\n",
-		"model: {idle_timeout: 1h}\n",
+	for fields, want := range map[string]string{
+		"tasks: {timeout: 30m}\n":     "'' has invalid keys: tasks",
+		"model: {turn_timeout: 2h}\n": "'model' has invalid keys: turn_timeout",
+		"model: {idle_timeout: 1h}\n": "'model' has invalid keys: idle_timeout",
 	} {
 		_, err = loadConfig(writeConfig(t, slackEntry+fields))
-		require.ErrorContains(t, err, "invalid config")
+		require.ErrorContains(t, err, want)
 	}
 }
 

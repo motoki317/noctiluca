@@ -35,6 +35,7 @@ func TestRunConfig(t *testing.T) {
 		{name: "scalar YAML", file: "config.yaml", contents: "secret-value", wantErr: "invalid config"},
 		{name: "unknown field", file: "config.yaml", contents: "token: secret-value\n", wantErr: "invalid config"},
 		{name: "invalid field type", file: "config.yaml", contents: "log:\n  level: [secret-value]\n", wantErr: "invalid config"},
+		{name: "invalid field value", file: "config.yaml", contents: "heartbeat:\n  enabled: secret-value\n", wantErr: "invalid config"},
 		{name: "invalid level", file: "config.yaml", contents: "log:\n  level: secret-value\n", wantErr: "invalid log.level"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

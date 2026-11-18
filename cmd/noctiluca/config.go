@@ -27,6 +27,8 @@ import (
 type secretRef struct {
 	Env  string `mapstructure:"env"`
 	File string `mapstructure:"file"`
+	// Unknown keeps other keys out of decoder errors: a token pasted over `env: NAME` becomes a key.
+	Unknown map[string]any `mapstructure:",remain"`
 }
 
 func (s secretRef) read(required bool) (string, error) {
@@ -230,8 +232,9 @@ func loadConfig(path string) (Config, error) {
 		}
 	}
 	var config Config
+	// Decoder errors name fields and unknown keys but omit values, except that an invalid duration's error keeps the value up to its last space. Durations hold no secrets.
 	if err := v.UnmarshalExact(&config); err != nil {
-		return Config{}, errors.New("invalid config: check field names and value types")
+		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
 	validateTrust := func(fields map[string]any, location string) error {
 		if trust, present := fields["trust"]; present && trust == nil {
@@ -278,6 +281,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	for i := range config.Messaging {
 		for _, ref := range config.Messaging[i].tokenRefs() {
+			if len(ref.Unknown) != 0 {
+				return Config{}, fmt.Errorf("invalid config: messaging entry %d: write each token as {env: NAME} or {file: path}", i+1)
+			}
 			ref.File = absolute(ref.File)
 		}
 	}
