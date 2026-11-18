@@ -16,7 +16,11 @@ func TestReadableInput(t *testing.T) {
 	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room", MessageRef: "entry:channel:message", Sender: domain.Sender{ID: "owner"}, Text: "add 了解 at the end", ReceivedAt: at}
 	item := domain.InboxItem{Lane: "conv", Payload: domain.InboxPayload{Event: &event}}
 	info := domain.SourceInfo{Location: "entry: native IDs", Conversation: "#general", Sender: "Alex", ThreadAt: at.Add(-time.Minute), ThreadText: "What did\nyou run?"}
-	require.Equal(t, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nentry: native IDs\n\nadd 了解 at the end", formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text)
+	noHistoryText := formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text
+	require.Equal(t, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nentry: native IDs\n\nadd 了解 at the end", noHistoryText)
+	input := formatInput(item, domain.InputContext{Running: true}, info, "owner", zone, "")
+	require.Equal(t, noHistoryText, input.Text)
+	require.True(t, input.SentDuringTurn)
 	for _, tt := range []struct {
 		name    string
 		history domain.InputContext
@@ -24,13 +28,13 @@ func TestReadableInput(t *testing.T) {
 	}{
 		{"deleted root", domain.InputContext{Root: &domain.InboundEvent{Deleted: true}}, "(root deleted)"},
 		{"before reply", domain.InputContext{Running: true, LastReply: at.Add(time.Second)}, "Sent at 16:29:01 JST, before your reply at 16:29:02 JST in this thread."},
-		{"queued", domain.InputContext{Running: true}, "Sent while your previous turn was running."},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			input := formatInput(item, tt.history, info, "owner", zone, "").Text
-			require.Contains(t, input, tt.want)
+			input := formatInput(item, tt.history, info, "owner", zone, "")
+			require.Contains(t, input.Text, tt.want)
+			require.False(t, input.SentDuringTurn)
 			if tt.history.Root == nil {
-				require.Contains(t, input, `"What did you run?"`)
+				require.Contains(t, input.Text, `"What did you run?"`)
 			}
 		})
 	}
@@ -127,7 +131,7 @@ func TestPrepareMessagingEventWithBackgroundPrefix(t *testing.T) {
 	require.Contains(t, input.Text, "hello")
 	require.Contains(t, input.Text, "watch user")
 	require.Equal(t, domain.MainSessionKey, key)
-	require.Contains(t, input.Text, "\nSent while your previous turn was running.\n")
+	require.True(t, input.SentDuringTurn)
 	require.NotContains(t, input.Text, "answer only")
 }
 

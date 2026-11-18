@@ -749,7 +749,7 @@ func TestSessionResumeAndConfig(t *testing.T) {
 	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
 	}
 	require.Equal(t, "test-session", s.ResumeToken())
-	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second", Attachments: []domain.Attachment{{Ref: "file-ref", Name: "photo"}}}))
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "second", Attachments: []domain.Attachment{{Ref: "file-ref", Name: "photo"}}, SentDuringTurn: true}))
 	for nextEvent(t, s).Kind != domain.ModelEventTurnFinished {
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "input-2.json"))
@@ -760,7 +760,8 @@ func TestSessionResumeAndConfig(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(data, &input))
 	require.Equal(t, "test-session", input.SessionID)
-	require.Contains(t, input.Message.Content, "file-ref")
+	require.Equal(t, "second\n\nAttachment references (use the messaging tools to download):\n"+
+		`[{"Ref":"file-ref","Name":"photo","MIMEType":""}]`, input.Message.Content)
 	require.NoError(t, s.Close())
 	require.NoError(t, s.Close())
 	require.Error(t, s.Send(t.Context(), domain.UserInput{Text: "closed"}))

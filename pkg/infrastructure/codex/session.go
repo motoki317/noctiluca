@@ -389,6 +389,9 @@ func (s *session) write(ctx context.Context, value any) error {
 
 func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 	text := input.Text
+	if input.SentDuringTurn {
+		text = "This message was sent while your previous turn was running.\n\n" + text
+	}
 	if len(input.Attachments) != 0 {
 		refs, err := json.Marshal(input.Attachments)
 		if err != nil {
