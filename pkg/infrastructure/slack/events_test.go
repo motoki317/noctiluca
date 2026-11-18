@@ -17,15 +17,20 @@ import (
 
 func TestInboundNotifications(t *testing.T) {
 	for _, tc := range []struct {
-		name, event, replies  string
-		accepted              bool
-		replyCalls, userCalls int
+		name, event, replies, text string
+		accepted, mentionsMe       bool
+		replyCalls, userCalls      int
 	}{
 		{name: "DM thread", event: `{"type":"message","channel":"DTEST","user":"UMEMBER","ts":"2","thread_ts":"1"}`, accepted: true},
-		{name: "DM edit", event: `{"type":"message","subtype":"message_changed","channel":"DTEST","message":{"user":"UMEMBER","ts":"125.000001","text":"edited"}}`, accepted: true},
+		{name: "DM edit", event: `{"type":"message","subtype":"message_changed","channel":"DTEST","message":{"user":"UMEMBER","ts":"125.000001","text":"edited"}}`, accepted: true, text: "edited"},
+		{name: "text and attachments", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Summary","attachments":[{"title":"Alert","from_url":"https://example.test/forwarded","is_share":true,"fallback":"Ignored title summary"}]}`, accepted: true, text: "Summary\nAlert"},
+		{name: "bot attachments", event: `{"type":"message","subtype":"bot_message","channel":"CTEST","bot_id":"BOTHER","ts":"2","text":"Summary","attachments":[{},{"title":"Alert","fallback":"Ignored title summary"},{"text":"Service unavailable","fallback":"Ignored text summary"},{"fallback":"Details"},{"original_url":"https://example.test","title":"Preview"},{}]}`, accepted: true, text: "Summary\nAlert\nService unavailable\nDetails"},
+		{name: "attachment mention", event: `{"type":"message","subtype":"bot_message","channel":"CTEST","bot_id":"BOTHER","ts":"2","attachments":[{"text":"hi <@USELF>"}]}`, accepted: true, text: "hi <@USELF>"},
+		{name: "bot attachment edit", event: `{"type":"message","subtype":"message_changed","channel":"CTEST","message":{"bot_id":"BOTHER","ts":"2","attachments":[{"title":"[RESOLVED]","text":"Service recovered","fallback":"Ignored summary"}]},"previous_message":{"bot_id":"BOTHER","ts":"2","attachments":[{"title":"[FIRING]","text":"Service unavailable"}]}}`, accepted: true, text: "[RESOLVED]\nService recovered"},
+		{name: "unfurl attachment", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"link","attachments":[{"title":"Preview","text":"Page content","fallback":"Page summary"}]}`, accepted: true, text: "link"},
 		{name: "DM reaction on another user", event: `{"type":"reaction_added","channel":"DTEST","user":"UMEMBER","item_user":"UOTHER","item":{"type":"message","channel":"DTEST","ts":"2"}}`, accepted: true, userCalls: 1},
 		{name: "root with thread timestamp", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"1","thread_ts":"1"}`, accepted: true},
-		{name: "mentioned thread", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>","files":[{"id":"FTEST","name":"a.png","mimetype":"image/png"}]}`, accepted: true},
+		{name: "mentioned thread", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>","files":[{"id":"FTEST","name":"a.png","mimetype":"image/png"}]}`, accepted: true, text: "hi <@USELF>", mentionsMe: true},
 		{name: "deleted mention", event: `{"type":"message","subtype":"message_deleted","channel":"CTEST","previous_message":{"user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>"}}`, accepted: true},
 		{name: "unjoined thread", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","thread_ts":"1"}`, replies: `{"ok":true,"messages":[{"user":"UOTHER","ts":"1"}]}`, replyCalls: 1},
 		{name: "unjoined edit", event: `{"type":"message","subtype":"message_changed","channel":"CTEST","message":{"user":"UMEMBER","ts":"2","thread_ts":"1","text":"edited"}}`, replies: `{"ok":true,"messages":[]}`, replyCalls: 1},
@@ -61,21 +66,19 @@ func TestInboundNotifications(t *testing.T) {
 			require.Equal(t, tc.accepted, accepted)
 			require.Equal(t, tc.replyCalls, replyCalls)
 			require.Equal(t, tc.userCalls, userCalls)
+			if accepted && event.Kind != domain.InboundEventReaction {
+				require.Equal(t, tc.text, event.Text)
+				require.Equal(t, tc.mentionsMe, event.MentionsMe)
+			}
 			if tc.name == "mentioned thread" {
-				require.True(t, event.MentionsMe)
 				require.Equal(t, []domain.Attachment{{Ref: "FTEST", Name: "a.png", MIMEType: "image/png"}}, event.Attachments)
 			}
 			if tc.name == "DM edit" {
 				require.Equal(t, domain.InboundEventMessageEdited, event.Kind)
 				require.Equal(t, Conversation("slack", "DTEST", ""), event.Conversation)
-				require.Equal(t, "edited", event.Text)
 			}
 			if tc.name == "reaction on agent" {
 				require.Equal(t, domain.SenderHuman, event.Sender.Kind)
-			}
-			if event.Deleted {
-				require.Empty(t, event.Text)
-				require.False(t, event.MentionsMe)
 			}
 		})
 	}
