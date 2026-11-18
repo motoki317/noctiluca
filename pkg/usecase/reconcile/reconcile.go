@@ -13,7 +13,10 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
-const operationTimeout = 30 * time.Minute
+const (
+	operationTimeout   = 30 * time.Minute
+	modelProcessExited = "model process exited"
+)
 
 type Config struct {
 	Workdir          string
@@ -55,6 +58,7 @@ type process struct {
 	closeAtIdle bool
 	closing     bool
 	reason      string
+	lastError   string
 }
 
 type result struct {
@@ -354,7 +358,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			}
 		case event, ok := <-events:
 			if !ok {
-				emit(result{err: errors.New("model process exited")})
+				emit(result{err: errors.New(modelProcessExited)})
 				return
 			}
 			emit(result{event: &event})
@@ -387,7 +391,14 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	if out.exited {
 		reason := p.reason
 		if reason == "" {
-			reason = "model process exited"
+			reason = modelProcessExited
+		}
+		if p.model != nil {
+			attrs := []any{"session", p.key, "reason", reason}
+			if reason == modelProcessExited && p.lastError != "" {
+				attrs = append(attrs, "error", p.lastError)
+			}
+			slog.InfoContext(ctx, "Model process exited", attrs...)
 		}
 		if err := r.sessions.Interrupt(ctx, p.key, reason); err != nil {
 			return err
@@ -400,6 +411,7 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	}
 	if out.model != nil {
 		p.model = out.model
+		slog.InfoContext(ctx, "Model process started", "session", p.key)
 		return r.save(ctx, p)
 	}
 	if out.delivered {
@@ -471,7 +483,6 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	}
 	switch event.Kind {
 	case domain.ModelEventTurnStarted:
-		p.turnStarted = true
 		if p.turn == nil {
 			p.turn = &domain.SessionTurn{}
 			for id := range p.unstarted {
@@ -480,16 +491,31 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 				}
 			}
 		}
+		if !p.turnStarted {
+			attrs := []any{"session", p.key}
+			if p.turn.InputID != 0 {
+				attrs = append(attrs, "item", p.turn.InputID)
+			}
+			slog.InfoContext(ctx, "Turn started", attrs...)
+			p.turnStarted = true
+		}
 	case domain.ModelEventError:
+		p.lastError = event.Err.Error()
 		if p.turn != nil {
-			p.turn.Failure = event.Err.Error()
+			p.turn.Failure = p.lastError
 		}
 	case domain.ModelEventTurnFinished:
-		p.turnStarted = false
+		attrs := []any{"session", p.key}
 		if p.turn != nil && p.turn.Failure != "" {
+			attrs = append(attrs, "error", p.turn.Failure)
 			if _, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice("turn-failure:"+uuid.NewString(), fmt.Sprintf("Turn in %s failed: %s", p.key, p.turn.Failure))); err != nil {
 				return err
 			}
+		}
+		if p.turnStarted {
+			slog.InfoContext(ctx, "Turn finished", attrs...)
+			p.turnStarted = false
+			p.lastError = ""
 		}
 		p.turn = nil
 		if err := r.save(ctx, p); err != nil {
