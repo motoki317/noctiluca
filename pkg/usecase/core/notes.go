@@ -13,6 +13,8 @@ func (c *core) toolNotes(ctx context.Context) string {
 		"Post content from one conversation in another only when that audience is allowed to see it. Content from an owner DM or a private channel stays there.\n" +
 		"Messages delivered during a tool call join the turn once the call returns. Answer each in its own conversation. Stay silent for chatter between other people.\n" +
 		"One turn runs at a time, so a long step delays every conversation. Run a command that may take over a minute, such as a build or a test suite, with a background tool or watch. Show that you started, as the messaging notes say, then end the turn. Do not wait or poll.\n\n" +
+		"Long context lowers the quality of your work without your noticing. When an input includes a Context line, call the compact tool at your next break: nothing you started in this context is half-done, and every reply it owes is posted. " +
+		"Background tasks and subagents may keep running. Compaction runs after the turn ends. Do not rest for this.\n\n" +
 		"Delegation:\n" +
 		"- Decide at the start of a task where it runs, and keep its dependent steps in one context: here or in one subagent.\n" +
 		"- Stay local for what you already hold, for a lookup whose target you know (a few tool calls with small outputs), and for text you must reason over yourself.\n" +

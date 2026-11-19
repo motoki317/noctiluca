@@ -42,6 +42,8 @@ type sessionFake struct {
 	manualAck bool
 	idle      bool
 	busy      atomic.Bool
+	tokens    atomic.Int64
+	compacts  atomic.Int32
 	send      func(context.Context, domain.UserInput) error
 	config    domain.ModelSessionConfig
 	closeWait <-chan struct{}
@@ -73,6 +75,8 @@ func (s *sessionFake) Send(ctx context.Context, in domain.UserInput) (err error)
 }
 func (s *sessionFake) Events() <-chan domain.ModelEvent { return s.events }
 func (s *sessionFake) ResumeToken() string              { return "resume-token" }
+func (s *sessionFake) ContextTokens() int               { return int(s.tokens.Load()) }
+func (s *sessionFake) Compact()                         { s.compacts.Add(1) }
 func (s *sessionFake) Idle() bool                       { return s.idle && !s.busy.Load() }
 func (s *sessionFake) Close() error {
 	s.once.Do(func() {
@@ -379,6 +383,84 @@ func TestMainExitRedeliversOldKeyInput(t *testing.T) {
 	require.NoError(t, f.db.QueryRow("SELECT session_key, attempts FROM inbox WHERE id=?", id).Scan(&key, &attempts))
 	require.Equal(t, "legacy-room", key)
 	require.Zero(t, attempts)
+}
+
+func TestMainContextNudge(t *testing.T) {
+	f := newDeliveryRig(t, Config{})
+	f.start(t)
+	id := f.enqueue(t, "room", "unmeasured")
+	s := take(t, f.model.opened)
+	require.Equal(t, "unmeasured", take(t, s.inputs).Text)
+	f.status(t, id, "done")
+
+	for _, tc := range []struct {
+		tokens int64
+		text   string
+		want   string
+	}{
+		{199999, "below", "below"},
+		{200000, "threshold", "Context: 200k tokens, over 200k. Call compact at your next break.\n\nthreshold"},
+		{201999, "above", "Context: 201k tokens, over 200k. Call compact at your next break.\n\nabove"},
+		{100000, "compacted", "compacted"},
+	} {
+		s.tokens.Store(tc.tokens)
+		id := f.enqueue(t, "room", tc.text)
+		require.Equal(t, tc.want, take(t, s.inputs).Text)
+		f.status(t, id, "done")
+	}
+
+	s.tokens.Store(200000)
+	ctx := t.Context()
+	item := TaskItem("repeat", "task on retry", "")
+	item.Status = "dispatched"
+	id, err := f.inbox.Enqueue(ctx, item)
+	require.NoError(t, err)
+	dead, err := f.inbox.Finish(ctx, id, "test failure", 3, time.Now())
+	require.NoError(t, err)
+	require.False(t, dead)
+	f.runner.Notify()
+	require.Equal(t, "Context: 200k tokens, over 200k. Call compact at your next break.\n\n"+
+		"An earlier attempt at this input failed: test failure. Check what it already did before you repeat a step.\n\n"+
+		"task on retry", take(t, s.inputs).Text)
+	f.status(t, id, "done")
+}
+
+func TestCompactRequestsLiveSession(t *testing.T) {
+	f := newDeliveryRig(t, Config{})
+	f.start(t)
+	id := f.enqueue(t, "room", "work")
+	s := take(t, f.model.opened)
+	take(t, s.inputs)
+	f.status(t, id, "done")
+	tool := f.runner.Tools()[3]
+	require.Equal(t, "compact", tool.Name)
+	require.Equal(t, "Compact the main session's context after this turn ends. The session continues from a summary, and background tasks keep running. Call it at a break when an input includes a Context line.", tool.Description)
+	require.JSONEq(t, `{"type":"object","properties":{},"additionalProperties":false}`, string(tool.InputSchema))
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
+	out, err := tool.Handler(ctx, json.RawMessage(`{}`))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"status":"compacting after this turn"}`, string(out))
+	require.EqualValues(t, 1, s.compacts.Load())
+	require.Equal(t, "resume-token", f.turn(t, true).ResumeToken)
+
+	_, err = f.runner.rest(ctx, nil)
+	require.NoError(t, err)
+	_, err = tool.Handler(ctx, nil)
+	require.ErrorContains(t, err, "closing when idle")
+	require.EqualValues(t, 1, s.compacts.Load())
+}
+
+func TestCompactRequiresAnActiveSession(t *testing.T) {
+	r := New(Config{}, nil, nil, nil, nil, nil, nil)
+	tool := r.Tools()[3]
+	_, err := tool.Handler(t.Context(), nil)
+	require.ErrorContains(t, err, "session context")
+	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
+	_, err = tool.Handler(ctx, nil)
+	require.ErrorIs(t, err, errInactiveSession)
+	r.live[domain.MainSessionKey] = &process{key: domain.MainSessionKey, closing: true}
+	_, err = tool.Handler(ctx, nil)
+	require.ErrorIs(t, err, errInactiveSession)
 }
 
 func TestNoticeRoutingMatchesRecovery(t *testing.T) {

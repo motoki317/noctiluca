@@ -86,6 +86,33 @@ func TestRestClosesAtIdleAndStartsFresh(t *testing.T) {
 	})
 }
 
+func TestRestAfterCompactClosesWhenCompactionEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newDeliveryRig(t, Config{})
+		f.model.idle = true
+		f.start(t)
+		id := f.enqueue(t, "room", "work")
+		s := take(t, f.model.opened)
+		take(t, s.inputs)
+		f.status(t, id, "done")
+		ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
+		_, err := f.runner.compact(ctx, nil)
+		require.NoError(t, err)
+		_, err = f.runner.rest(ctx, nil)
+		require.NoError(t, err)
+
+		s.busy.Store(true)
+		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
+		require.Empty(t, f.turn(t, false).ResumeToken)
+		synctest.Wait()
+		require.Empty(t, s.closed)
+		s.busy.Store(false)
+		require.NotNil(t, s.config.OnCompactionDone)
+		s.config.OnCompactionDone()
+		take(t, s.closed)
+	})
+}
+
 func TestRestStaysFreshAcrossRestartBeforeIdle(t *testing.T) {
 	f := newDeliveryRig(t, Config{})
 	stop := f.start(t)

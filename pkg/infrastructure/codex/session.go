@@ -50,6 +50,7 @@ type session struct {
 
 	contextTokens    int
 	compactRequested bool
+	onCompactionDone func()
 }
 
 type runningTurn struct {
@@ -80,7 +81,7 @@ func startSession(ctx context.Context, executable string, config domain.ModelSes
 	s := &session{ctx: sessionCtx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64),
 		done: make(chan struct{}), readerDone: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}),
 		inputDone: make(chan struct{}), inputReady: make(chan struct{}, 1),
-		calls: make(map[string]chan rpcFrame), commands: make(map[string]*runningCommand)}
+		calls: make(map[string]chan rpcFrame), commands: make(map[string]*runningCommand), onCompactionDone: config.OnCompactionDone}
 	if config.ToolHub.BearerToken != "" {
 		encoded, _ := json.Marshal(config.ToolHub.BearerToken)
 		s.secret = encoded[1 : len(encoded)-1]
@@ -236,7 +237,7 @@ func (s *session) read(stdout io.ReadCloser) {
 			break
 		}
 		var started *runningTurn
-		var wake bool
+		var wake, compactionFinished bool
 		s.mu.Lock()
 		compacting := s.current != nil && s.current.compaction != nil
 		switch f.Method {
@@ -257,6 +258,7 @@ func (s *session) read(stdout io.ReadCloser) {
 				started = s.current
 				s.current = nil
 				if compacting {
+					compactionFinished = true
 					if n.Turn.Status == "completed" && n.Turn.Error == nil {
 						slog.InfoContext(s.ctx, "Codex compaction completed", "thread", s.threadID,
 							"pre_tokens", started.compaction.preTokens, "post_tokens", s.contextTokens)
@@ -300,6 +302,9 @@ func (s *session) read(stdout io.ReadCloser) {
 		}
 		wake = wake || (s.compactRequested && s.idle())
 		s.mu.Unlock()
+		if compactionFinished && s.onCompactionDone != nil {
+			s.onCompactionDone()
+		}
 		for _, event := range events {
 			s.emit(event)
 		}

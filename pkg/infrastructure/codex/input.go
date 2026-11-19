@@ -117,10 +117,14 @@ func (s *session) startCompaction(t *runningTurn, threadID string) {
 	if err := s.call(context.WithoutCancel(s.ctx), "thread/compact/start", map[string]string{"threadId": threadID}, nil); err != nil {
 		s.mu.Lock()
 		t.markReady()
-		if s.current == t {
+		released := s.current == t
+		if released {
 			s.current = nil
 			slog.WarnContext(s.ctx, "Codex compaction failed to start", "thread", threadID)
 		}
 		s.mu.Unlock()
+		if released && s.onCompactionDone != nil {
+			s.onCompactionDone()
+		}
 	}
 }

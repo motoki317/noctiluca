@@ -33,6 +33,9 @@ func TestMainSessionNotes(t *testing.T) {
 	for _, rule := range []string{
 		"Only this session receives inputs and posts.",
 		"Post content from one conversation in another only when that audience is allowed to see it.",
+		"Long context lowers the quality of your work without your noticing. When an input includes a Context line, call the compact tool at your next break: " +
+			"nothing you started in this context is half-done, and every reply it owes is posted. Background tasks and subagents may keep running. " +
+			"Compaction runs after the turn ends. Do not rest for this.\n\nDelegation:",
 		"- Never wait on a subagent.",
 	} {
 		require.Contains(t, notes, rule)

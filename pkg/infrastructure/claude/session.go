@@ -60,6 +60,7 @@ type session struct {
 
 	compactWake          chan struct{}
 	compactDone          chan struct{}
+	onCompactionDone     func()
 	compactRequested     bool
 	compactByRequest     bool
 	compactFailureLogged bool
@@ -78,6 +79,7 @@ func startSession(ctx context.Context, executable string, args []string, config 
 	sessionCtx, cancel := context.WithCancel(ctx)
 	s := &session{ctx: sessionCtx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64), done: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}), ready: make(chan error, 1), token: config.ResumeToken}
 	s.compactWake, s.compactDone = make(chan struct{}, 1), make(chan struct{})
+	s.onCompactionDone = config.OnCompactionDone
 	s.compactDelay, s.now = idleCompactDelay, time.Now
 	cmd := exec.Command(executable, args...)
 	cmd.Dir, cmd.Env = config.Workdir, childEnv()
@@ -228,16 +230,20 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		hadCompaction := s.parser.compactUUID != ""
 		events := s.parser.events(f, s.pending)
 		compactionFinished := hadCompaction && s.parser.compactUUID == ""
+		requestedCompactionFinished := compactionFinished && s.compactByRequest
 		if compactionFinished && f.failedResult() {
 			s.warnCompactionFailure()
 		}
-		if compactionFinished && s.compactByRequest {
+		if requestedCompactionFinished {
 			s.compactByRequest = false
 		} else if !wasIdle && s.idle() && len(events) == 0 {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone})
 		}
 		s.wakeRequestedCompaction()
 		s.mu.Unlock()
+		if requestedCompactionFinished && s.onCompactionDone != nil {
+			s.onCompactionDone()
+		}
 		for _, event := range events {
 			s.emit(event)
 		}

@@ -85,6 +85,8 @@ func (s *fakeSession) Send(ctx context.Context, in domain.UserInput) error {
 }
 func (s *fakeSession) Events() <-chan domain.ModelEvent { return s.events }
 func (s *fakeSession) ResumeToken() string              { return "resume-" + string(s.config.Key) }
+func (*fakeSession) ContextTokens() int                 { return 0 }
+func (*fakeSession) Compact()                           {}
 func (s *fakeSession) Idle() bool                       { return s.idle.Load() }
 func (s *fakeSession) Close() error {
 	s.mu.Lock()
@@ -214,6 +216,7 @@ func TestConversationFlow(t *testing.T) {
 	s := take(t, f.model.opened)
 	require.NotContains(t, take(t, s.inputs).Text, "fresh context")
 	require.Contains(t, s.config.SystemPrompt, "fresh context")
+	require.Contains(t, s.config.SystemPrompt, "When an input includes a Context line, call the compact tool at your next break:")
 	require.True(t, f.hub.active(domain.MainSessionKey))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}

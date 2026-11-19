@@ -246,7 +246,14 @@ func requireCompactionBlocked(t *testing.T, s *session) {
 }
 
 func TestSessionRequestedCompaction(t *testing.T) {
-	s, dir := openInputSession(t, "input-normal")
+	path, dir := fakeServer(t, "input-normal")
+	finished := make(chan struct{})
+	model, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{
+		Workdir: dir, OnCompactionDone: func() { close(finished) },
+	})
+	require.NoError(t, err)
+	s := model.(*session)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -261,6 +268,11 @@ func TestSessionRequestedCompaction(t *testing.T) {
 	waitForCompactionTurn(t, s)
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "after compaction"}))
 	control(t, s, "compact-complete", nil)
+	select {
+	case <-finished:
+	default:
+		t.Fatal("compaction completion did not wake the caller")
+	}
 	requireEvents(t, s, domain.ModelEvent{Kind: domain.ModelEventTurnStarted},
 		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 2},
 		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/start:after compaction"})

@@ -534,7 +534,14 @@ func TestSessionIdleCompactionSkipped(t *testing.T) {
 }
 
 func TestSessionRequestedCompaction(t *testing.T) {
-	s, dir := compactSession(t, "compact")
+	path, dir := fakeCLI(t, "compact")
+	finished := make(chan struct{})
+	model, err := New(path, "haiku").Open(t.Context(), domain.ModelSessionConfig{
+		Workdir: dir, OnCompactionDone: func() { close(finished) },
+	})
+	require.NoError(t, err)
+	s := model.(*session)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	require.Zero(t, s.ContextTokens())
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "active"}))
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
@@ -550,7 +557,13 @@ func TestSessionRequestedCompaction(t *testing.T) {
 	}, 50*time.Millisecond, time.Millisecond, "compaction must wait for the active turn")
 	require.NoError(t, s.write(t.Context(), map[string]string{"type": "test_finish_turn"}))
 	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "reply"}, nextEvent(t, s))
-	require.Eventually(t, func() bool { return s.Idle() && s.ContextTokens() == 12345 }, 5*time.Second, time.Millisecond)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("compaction completion did not wake the caller")
+	}
+	require.True(t, s.Idle())
+	require.Equal(t, 12345, s.ContextTokens())
 	require.NoError(t, s.Close())
 	require.Empty(t, s.events)
 	inputs := capturedInputs(t, dir)

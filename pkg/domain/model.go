@@ -21,6 +21,9 @@ type ModelSessionConfig struct {
 	ToolHub          MCPEndpoint
 	Workdir          string
 	ChatWritingTools []string
+	// OnCompactionDone runs when a requested compaction ends, whether it succeeded or failed.
+	// It is optional and must return immediately.
+	OnCompactionDone func()
 }
 
 type UserInput struct {
@@ -73,6 +76,10 @@ type ModelSession interface {
 	Send(ctx context.Context, input UserInput) error
 	Events() <-chan ModelEvent
 	ResumeToken() string
+	// ContextTokens reports the last measured size of the main context, or zero if unknown.
+	ContextTokens() int
+	// Compact requests compaction between turns and returns immediately.
+	Compact()
 	// Idle excludes queued inputs, running turns, and pending background tasks.
 	Idle() bool
 	Close() error

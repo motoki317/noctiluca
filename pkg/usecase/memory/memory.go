@@ -29,7 +29,8 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 				"- Commit each change with a message that says why.\n"+
 				"- Commit only paths you changed, because subagents and background commands also commit here.\n"+
 				"- Retry if git reports a lock.\n"+
-				"- Follow procedures/rest.md when the nightly schedule sends it, or when you judge that your context needs a fresh start. Call the rest tool only as its last step.\n", memory.Dir())
+				"- Before you call compact, make sure short-term.md lists all open work.\n"+
+				"- Follow procedures/rest.md only when the nightly schedule sends it. Call the rest tool only as its last step.\n", memory.Dir())
 			if hasRemote {
 				context.WriteString("- The memory repository pushes to a remote backup that nothing else writes. Push after each commit. When a push is rejected, run `git push --force-with-lease`; never pull. Tell the owner when a push fails for another reason.\n")
 			}
