@@ -37,7 +37,10 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			}
 		}
 		if m == nil {
-			m = &sdk.Msg{User: e.User, BotID: e.BotID, Text: e.Text, ThreadTimestamp: e.ThreadTimeStamp, Timestamp: e.TimeStamp, Username: e.Username}
+			m = &sdk.Msg{
+				SubType: e.SubType, User: e.User, BotID: e.BotID, Username: e.Username,
+				Text: e.Text, ThreadTimestamp: e.ThreadTimeStamp, Timestamp: e.TimeStamp,
+			}
 		}
 		channel, thread = e.Channel, m.ThreadTimestamp
 		if a.isSelf(m.User, m.BotID) {
@@ -64,7 +67,11 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			}
 		}
 		mentionsMe = a.selfUser != "" && strings.Contains(m.Text, "<@"+a.selfUser+">")
-		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, m.Timestamp), Kind: kind, Deleted: deleted, Sender: sender, Text: messageText(m), MentionsMe: mentionsMe, ReceivedAt: time.Now()}
+		event = domain.InboundEvent{
+			MessageRef: Conversation(a.name, channel, m.Timestamp), Kind: kind, Deleted: deleted,
+			AlsoInChannel: m.SubType == "thread_broadcast", Sender: sender, Text: messageText(m),
+			MentionsMe: mentionsMe, ReceivedAt: time.Now(),
+		}
 		if kind == domain.InboundEventMessage {
 			event.SourceKey = a.name + ":m:" + channel + ":" + m.Timestamp
 		}

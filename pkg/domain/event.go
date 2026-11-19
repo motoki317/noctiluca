@@ -47,17 +47,18 @@ type Attachment struct {
 }
 
 type InboundEvent struct {
-	SourceKey    string
-	Accepted     *bool
-	Deleted      bool
-	Kind         InboundEventKind
-	Conversation ConversationRef
-	Parent       ConversationRef
-	MessageRef   ConversationRef
-	Direct       bool
-	Sender       Sender
-	Text         string
-	Attachments  []Attachment
-	MentionsMe   bool
-	ReceivedAt   time.Time
+	SourceKey     string
+	Accepted      *bool
+	Deleted       bool
+	Kind          InboundEventKind
+	Conversation  ConversationRef
+	Parent        ConversationRef
+	MessageRef    ConversationRef
+	Direct        bool
+	AlsoInChannel bool
+	Sender        Sender
+	Text          string
+	Attachments   []Attachment
+	MentionsMe    bool
+	ReceivedAt    time.Time
 }

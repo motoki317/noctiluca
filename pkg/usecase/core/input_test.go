@@ -38,8 +38,10 @@ func TestReadableInput(t *testing.T) {
 			}
 		})
 	}
+	event.AlsoInChannel = true
+	require.Contains(t, formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text, `"What did you run?" (also sent to channel) | `)
 	event.Parent, event.Conversation, event.Direct = "", "room", true
-	require.Contains(t, formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, "owner", zone, "").Text, "DM with Alex · top level")
+	require.Contains(t, formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, "owner", zone, "").Text, "DM with Alex · top level | ")
 	item.Payload.Event = nil
 	item.Lane, item.Payload.Context.TaskName, item.ReadyAt = "task", "heartbeat", at
 	require.Equal(t, "Task heartbeat | system | 16:29:01 JST\n\n", formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text)
