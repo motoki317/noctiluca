@@ -52,13 +52,18 @@ type turn struct {
 }
 
 type notification struct {
-	WillRetry bool            `json:"willRetry"`
-	ThreadID  string          `json:"threadId"`
-	TurnID    string          `json:"turnId"`
-	Turn      turn            `json:"turn"`
-	Delta     string          `json:"delta"`
-	Item      json.RawMessage `json:"item"`
-	Error     struct {
+	WillRetry  bool            `json:"willRetry"`
+	ThreadID   string          `json:"threadId"`
+	TurnID     string          `json:"turnId"`
+	Turn       turn            `json:"turn"`
+	Delta      string          `json:"delta"`
+	Item       json.RawMessage `json:"item"`
+	TokenUsage struct {
+		Last struct {
+			TotalTokens *int `json:"totalTokens"`
+		} `json:"last"`
+	} `json:"tokenUsage"`
+	Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
