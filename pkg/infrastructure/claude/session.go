@@ -23,12 +23,7 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
-const (
-	maxFrameSize           = 16 << 20
-	idleCompactDelay       = 54 * time.Minute
-	idleCompactMinTokens   = 200000
-	idleCompactMaxLateness = time.Minute
-)
+const maxFrameSize = 16 << 20
 
 var errWriteInput = errors.New("write claude input failed")
 
@@ -62,14 +57,8 @@ type session struct {
 	compactDone          chan struct{}
 	onCompactionDone     func()
 	compactRequested     bool
-	compactByRequest     bool
 	compactFailureLogged bool
-	compactAt            time.Time
-	compactDelay         time.Duration
-	now                  func() time.Time
-	lastMessageID        string
 	contextTokens        int
-	oneHourCache         bool
 
 	closeErr error
 	initErr  *initializationExit
@@ -80,7 +69,6 @@ func startSession(ctx context.Context, executable string, args []string, config 
 	s := &session{ctx: sessionCtx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64), done: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}), ready: make(chan error, 1), token: config.ResumeToken}
 	s.compactWake, s.compactDone = make(chan struct{}, 1), make(chan struct{})
 	s.onCompactionDone = config.OnCompactionDone
-	s.compactDelay, s.now = idleCompactDelay, time.Now
 	cmd := exec.Command(executable, args...)
 	cmd.Dir, cmd.Env = config.Workdir, childEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -230,18 +218,15 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		hadCompaction := s.parser.compactUUID != ""
 		events := s.parser.events(f, s.pending)
 		compactionFinished := hadCompaction && s.parser.compactUUID == ""
-		requestedCompactionFinished := compactionFinished && s.compactByRequest
 		if compactionFinished && f.failedResult() {
 			s.warnCompactionFailure()
 		}
-		if requestedCompactionFinished {
-			s.compactByRequest = false
-		} else if !wasIdle && s.idle() && len(events) == 0 {
+		if !compactionFinished && !wasIdle && s.idle() && len(events) == 0 {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone})
 		}
 		s.wakeRequestedCompaction()
 		s.mu.Unlock()
-		if requestedCompactionFinished && s.onCompactionDone != nil {
+		if compactionFinished && s.onCompactionDone != nil {
 			s.onCompactionDone()
 		}
 		for _, event := range events {
@@ -278,27 +263,15 @@ func (s *session) observeRequest(f frame) {
 	if f.ParentToolUseID != "" || s.parser.compacting {
 		return
 	}
-	msg := f.Message
-	var request bool
+	var u *usage
 	switch {
 	case f.Type == "stream_event" && f.Event.Type == "message_start":
-		msg, request = f.Event.Message, true
+		u = f.Event.Message.Usage
 	case f.Type == "assistant":
-		request = msg.ID == "" || msg.ID != s.lastMessageID
-	default:
-		return
+		u = f.Message.Usage
 	}
-	if u := msg.Usage; u != nil {
+	if u != nil {
 		s.contextTokens = u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
-		if u.CacheCreationInputTokens > 0 || u.CacheCreation.Ephemeral1HInputTokens > 0 || u.CacheCreation.Ephemeral5MInputTokens > 0 {
-			s.oneHourCache = u.CacheCreation.Ephemeral1HInputTokens > 0
-		}
-	}
-	if request {
-		s.lastMessageID = msg.ID
-		// Host sleep must count against the cache lifetime, so discard the monotonic clock.
-		s.compactAt = s.now().Round(0).Add(s.compactDelay)
-		s.wakeCompaction()
 	}
 }
 
@@ -317,53 +290,30 @@ func (s *session) wakeCompaction() {
 
 func (s *session) runCompaction() {
 	defer close(s.compactDone)
-	timer := time.NewTimer(idleCompactDelay)
-	timer.Stop()
-	defer timer.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-s.compactWake:
-		case <-timer.C:
-		}
-		if remaining := s.compactIfReady(); remaining > 0 {
-			timer.Reset(remaining)
-		} else {
-			timer.Stop()
+			s.compactIfReady()
 		}
 	}
 }
 
-func (s *session) compactIfReady() time.Duration {
+func (s *session) compactIfReady() {
 	// Reserve stdin before checking the gate so a concurrent Send cannot overtake /compact.
 	select {
 	case s.writeLock <- struct{}{}:
 	case <-s.ctx.Done():
-		return 0
+		return
 	}
 	defer func() { <-s.writeLock }()
 	s.mu.Lock()
-	if s.ctx.Err() != nil {
+	if s.ctx.Err() != nil || !s.compactRequested || !s.canCompact() {
 		s.mu.Unlock()
-		return 0
-	}
-	requested := s.compactRequested && s.canCompact()
-	var remaining time.Duration
-	var idleDue bool
-	if !s.compactAt.IsZero() {
-		remaining = s.compactAt.Sub(s.now().Round(0))
-		if remaining <= 0 {
-			s.compactAt = time.Time{}
-			idleDue = remaining >= -idleCompactMaxLateness && s.idle() && s.contextTokens >= idleCompactMinTokens && s.oneHourCache
-		}
-	}
-	if !requested && !idleDue {
-		s.mu.Unlock()
-		return remaining
+		return
 	}
 	s.compactRequested = false
-	s.compactByRequest = requested
 	s.compactFailureLogged = false
 	id := uuid.NewString()
 	s.parser.compactUUID = id
@@ -372,7 +322,6 @@ func (s *session) compactIfReady() time.Duration {
 	if err := s.writeLocked(s.ctx, value); errors.Is(err, errWriteInput) {
 		slog.WarnContext(s.ctx, "Write Claude compaction failed", "error", err)
 	}
-	return remaining
 }
 
 func (s *session) emit(event domain.ModelEvent) {

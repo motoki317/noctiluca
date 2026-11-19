@@ -66,7 +66,6 @@ type frame struct {
 }
 
 type message struct {
-	ID      string          `json:"id"`
 	Content json.RawMessage `json:"content"`
 	Usage   *usage          `json:"usage"`
 }
@@ -75,10 +74,6 @@ type usage struct {
 	InputTokens              int `json:"input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	CacheCreation            struct {
-		Ephemeral1HInputTokens int `json:"ephemeral_1h_input_tokens"`
-		Ephemeral5MInputTokens int `json:"ephemeral_5m_input_tokens"`
-	} `json:"cache_creation"`
 }
 
 type contentBlock struct {
