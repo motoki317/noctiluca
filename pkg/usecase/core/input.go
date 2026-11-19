@@ -88,6 +88,9 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 		} else if info.ThreadText != "" {
 			thread += fmt.Sprintf(" %q", excerpt(info.ThreadText))
 		}
+		if event.AlsoInChannel {
+			thread += " (also sent to channel)"
+		}
 	}
 	where += " · " + thread
 	if mentioned {

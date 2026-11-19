@@ -17,9 +17,9 @@ import (
 
 func TestInboundNotifications(t *testing.T) {
 	for _, tc := range []struct {
-		name, event, replies, text string
-		accepted, mentionsMe       bool
-		replyCalls, userCalls      int
+		name, event, replies, text          string
+		accepted, mentionsMe, alsoInChannel bool
+		replyCalls, userCalls               int
 	}{
 		{name: "DM thread", event: `{"type":"message","channel":"DTEST","user":"UMEMBER","ts":"2","thread_ts":"1"}`, accepted: true},
 		{name: "DM edit", event: `{"type":"message","subtype":"message_changed","channel":"DTEST","message":{"user":"UMEMBER","ts":"125.000001","text":"edited"}}`, accepted: true, text: "edited"},
@@ -31,6 +31,9 @@ func TestInboundNotifications(t *testing.T) {
 		{name: "DM reaction on another user", event: `{"type":"reaction_added","channel":"DTEST","user":"UMEMBER","item_user":"UOTHER","item":{"type":"message","channel":"DTEST","ts":"2"}}`, accepted: true, userCalls: 1},
 		{name: "root with thread timestamp", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"1","thread_ts":"1"}`, accepted: true},
 		{name: "mentioned thread", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>","files":[{"id":"FTEST","name":"a.png","mimetype":"image/png"}]}`, accepted: true, text: "hi <@USELF>", mentionsMe: true},
+		{name: "broadcast reply", event: `{"type":"message","subtype":"thread_broadcast","channel":"CTEST","user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>"}`, accepted: true, text: "hi <@USELF>", mentionsMe: true, alsoInChannel: true},
+		{name: "broadcast edit", event: `{"type":"message","subtype":"message_changed","channel":"CTEST","message":{"subtype":"thread_broadcast","user":"UMEMBER","ts":"2","thread_ts":"1","text":"edited <@USELF>"}}`, accepted: true, text: "edited <@USELF>", mentionsMe: true, alsoInChannel: true},
+		{name: "broadcast deletion", event: `{"type":"message","subtype":"message_deleted","channel":"CTEST","previous_message":{"subtype":"thread_broadcast","user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>"}}`, accepted: true, alsoInChannel: true},
 		{name: "deleted mention", event: `{"type":"message","subtype":"message_deleted","channel":"CTEST","previous_message":{"user":"UMEMBER","ts":"2","thread_ts":"1","text":"hi <@USELF>"}}`, accepted: true},
 		{name: "unjoined thread", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","thread_ts":"1"}`, replies: `{"ok":true,"messages":[{"user":"UOTHER","ts":"1"}]}`, replyCalls: 1},
 		{name: "unjoined edit", event: `{"type":"message","subtype":"message_changed","channel":"CTEST","message":{"user":"UMEMBER","ts":"2","thread_ts":"1","text":"edited"}}`, replies: `{"ok":true,"messages":[]}`, replyCalls: 1},
@@ -69,6 +72,7 @@ func TestInboundNotifications(t *testing.T) {
 			if accepted && event.Kind != domain.InboundEventReaction {
 				require.Equal(t, tc.text, event.Text)
 				require.Equal(t, tc.mentionsMe, event.MentionsMe)
+				require.Equal(t, tc.alsoInChannel, event.AlsoInChannel)
 			}
 			if tc.name == "mentioned thread" {
 				require.Equal(t, []domain.Attachment{{Ref: "FTEST", Name: "a.png", MIMEType: "image/png"}}, event.Attachments)
