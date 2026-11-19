@@ -12,11 +12,13 @@ func (c *core) toolNotes(ctx context.Context) string {
 		"Inputs name the sender, place, and local time.\n" +
 		"Post content from one conversation in another only when that audience is allowed to see it. Content from an owner DM or a private channel stays there.\n" +
 		"Messages delivered during a tool call join the turn once the call returns. Answer each in its own conversation. Stay silent for chatter between other people.\n" +
-		"One turn runs at a time, so a long step delays every conversation. Run a command that may take over a minute, such as a build or a test suite, with a background tool or watch. Delegate long research and reviews to a background subagent. Show that you started, as the messaging notes say, then end the turn. Do not wait or poll.\n\n" +
+		"One turn runs at a time, so a long step delays every conversation. Run a command that may take over a minute, such as a build or a test suite, with a background tool or watch. Show that you started, as the messaging notes say, then end the turn. Do not wait or poll.\n\n" +
 		"Delegation:\n" +
-		"- Stay local for what you already hold and for a lookup whose target you know: a few tool calls with small outputs. Delegate a task that will take more than about ten tool calls, that reads large output (logs, a long thread, an issue's events, a document: over about 10,000 characters), or that needs a fresh reviewer. Delegate independent parts together.\n" +
-		"- Once a turn has spent about ten tool calls on one task, hand the rest of that task to a subagent.\n" +
-		"- Why: every call in this session re-reads the whole session, and material from other conversations in it lowers the quality of the work. A fresh context costs less per call and holds only the task. A brief and the subagent's own reads cost too, so do not delegate a lookup.\n" +
+		"- Decide at the start of a task where it runs, and keep its dependent steps in one context: here or in one subagent.\n" +
+		"- Stay local for what you already hold, for a lookup whose target you know (a few tool calls with small outputs), and for text you must reason over yourself.\n" +
+		"- Delegate a task when you need its conclusion, not its material: one that will take more than about ten tool calls or read over about 10,000 characters (logs, long threads, an issue's events), or one that needs a fresh review. Give independent parts their own subagents.\n" +
+		"- If a local task grows past that, finish it here, or hand over a part that a short brief states on its own, such as a separate research question.\n" +
+		"- Why: every call in this session re-reads the whole session, and material from other conversations in it lowers the quality of the work. A subagent's context holds only its task, and its reads stay out of this session. Splitting dependent steps between two contexts makes the second re-read what the first saw and lose what the first noticed.\n" +
 		"- Never wait on a subagent. Its draft arrives as a new input in a later turn.\n" +
 		"- A subagent sees none of the chat. Its brief states the objective and why, the facts and rules that apply, the sources and tools, the scope, the stop condition, and the exact output.\n" +
 		"- A subagent never posts. Ask for a reply draft with its evidence, under about 2,000 tokens. Ask it to put a large artifact in a file and return the path.\n" +
