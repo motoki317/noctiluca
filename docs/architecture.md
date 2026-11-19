@@ -79,6 +79,14 @@ When a Codex subagent finishes while `main` has no turn, the adapter starts a pa
 A subagent that finishes during a running turn needs no extra turn.
 The `wake_at` tool sends a note to `main` at a given time.
 
+A long context lowers the quality of the model's work, and the model cannot see its own context size.
+While the last measured context of `main` is 200k tokens or more, the reconciler adds the line `Context: <N>k tokens, over 200k. Call compact at your next break.` to each input.
+The core `compact` tool asks the adapter to compact `main` after the current turn ends.
+The Claude adapter sends `/compact` when no turn runs and no input waits. It does not wait for background tasks or subagents.
+The Codex adapter calls `thread/compact/start` when the session is idle, so it also waits for running commands to finish.
+Inputs that arrive during a compaction wait and run after it.
+The model CLI also compacts by itself when the context reaches the size set in the CLI.
+
 A model process closes in these cases:
 
 - `rest` requests a close and the process reaches idle.
@@ -88,7 +96,6 @@ A model process closes in these cases:
 - The model CLI exits or is killed.
 
 The nightly `rest` schedule sends `procedures/rest.md` to `main` as a task input.
-The model can also follow it during the day when it judges that its context needs a fresh start.
 The core `rest` tool immediately clears the saved resume token and marks `main` to close at idle.
 The process closes once no turn, waiting input, or native background work of the model CLI remains.
 Inputs that arrive before that idle point still run in the old process.
@@ -138,6 +145,8 @@ type ModelSession interface {
 	Send(ctx context.Context, in UserInput) error // also during a turn: the adapter adds it to the running turn or queues it
 	Events() <-chan ModelEvent                    // input_started, input_refused, turn_started, text, tool_call, tool_result, background_done, turn_finished, error
 	ResumeToken() string
+	ContextTokens() int                           // the parent thread's context after its last model request, 0 if unknown
+	Compact()                                     // compacts between turns and returns at once
 	Idle() bool
 	Close() error
 }
