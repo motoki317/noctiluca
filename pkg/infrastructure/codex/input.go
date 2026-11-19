@@ -6,6 +6,7 @@ package codex
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
@@ -27,9 +28,18 @@ func (s *session) sendInputs() {
 		}
 		for s.ctx.Err() == nil {
 			s.mu.Lock()
+			if s.compactRequested && s.idle() {
+				t := &runningTurn{ready: make(chan struct{}), started: make(chan struct{}), compaction: &compaction{preTokens: s.contextTokens}}
+				threadID := s.threadID
+				s.current = t
+				s.compactRequested = false
+				s.mu.Unlock()
+				s.startCompaction(t, threadID)
+				continue
+			}
 			// A refused steer stays queued until turn/completed clears the current
 			// turn and wakes this loop to send the input on the next turn.
-			if len(s.inputs) == 0 || (s.current != nil && s.current.refused) {
+			if len(s.inputs) == 0 || (s.current != nil && (s.current.refused || s.current.compaction != nil)) {
 				s.mu.Unlock()
 				break
 			}
@@ -99,6 +109,22 @@ func (s *session) sendInputs() {
 					s.emit(domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: input.id})
 				}
 			}
+		}
+	}
+}
+
+func (s *session) startCompaction(t *runningTurn, threadID string) {
+	if err := s.call(context.WithoutCancel(s.ctx), "thread/compact/start", map[string]string{"threadId": threadID}, nil); err != nil {
+		s.mu.Lock()
+		t.markReady()
+		released := s.current == t
+		if released {
+			s.current = nil
+			slog.WarnContext(s.ctx, "Codex compaction failed to start", "thread", threadID)
+		}
+		s.mu.Unlock()
+		if released && s.onCompactionDone != nil {
+			s.onCompactionDone()
 		}
 	}
 }

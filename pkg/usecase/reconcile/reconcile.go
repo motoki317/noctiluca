@@ -16,6 +16,7 @@ import (
 const (
 	operationTimeout   = 30 * time.Minute
 	modelProcessExited = "model process exited"
+	compactNudgeTokens = 200000
 )
 
 type Config struct {
@@ -62,14 +63,15 @@ type process struct {
 }
 
 type result struct {
-	rest      chan error
-	skipped   bool
-	delivered bool
-	exited    bool
-	process   *process
-	model     domain.ModelSession
-	event     *domain.ModelEvent
-	err       error
+	action     sessionAction
+	actionDone chan error
+	skipped    bool
+	delivered  bool
+	exited     bool
+	process    *process
+	model      domain.ModelSession
+	event      *domain.ModelEvent
+	err        error
 }
 
 func New(config Config, inbox domain.InboxRepository, schedules domain.ScheduleRepository, sessions domain.SessionRepository, events domain.EventRepository, model domain.ModelAdapter, hub domain.ToolHub) *Reconciler {
@@ -335,7 +337,10 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 					prompt += "\n\n" + extra
 				}
 				if err == nil {
-					model, err = r.model.Open(ctx, domain.ModelSessionConfig{Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: r.config.Workdir, SystemPrompt: prompt, ChatWritingTools: r.config.ChatWritingTools})
+					model, err = r.model.Open(ctx, domain.ModelSessionConfig{
+						Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: r.config.Workdir, SystemPrompt: prompt,
+						ChatWritingTools: r.config.ChatWritingTools, OnCompactionDone: r.Notify,
+					})
 				}
 				if err == nil {
 					events = model.Events()
@@ -346,6 +351,9 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				input.ID = item.ID
 				if item.LastError != "" {
 					input.Text = fmt.Sprintf("An earlier attempt at this input failed: %s. Check what it already did before you repeat a step.\n\n%s", strings.Join(strings.Fields(item.LastError), " "), input.Text)
+				}
+				if tokens := model.ContextTokens(); p.key == domain.MainSessionKey && tokens >= compactNudgeTokens {
+					input.Text = fmt.Sprintf("Context: %dk tokens, over %dk. Call compact at your next break.\n\n%s", tokens/1000, compactNudgeTokens/1000, input.Text)
 				}
 				err = model.Send(ctx, input)
 			}
@@ -375,14 +383,26 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handleWriteTimeout)
 	defer cancel()
 	p := out.process
-	if out.rest != nil {
+	if out.actionDone != nil {
 		if r.live[p.key] != p || p.closing {
-			out.rest <- errors.New("session is no longer active")
+			out.actionDone <- errInactiveSession
+			return nil
+		}
+		if out.action == compactSession {
+			switch {
+			case p.model == nil:
+				out.actionDone <- errInactiveSession
+			case p.closeAtIdle:
+				out.actionDone <- errors.New("session is closing when idle")
+			default:
+				p.model.Compact()
+				out.actionDone <- nil
+			}
 			return nil
 		}
 		p.closeAtIdle = true
 		err := r.save(ctx, p)
-		out.rest <- err
+		out.actionDone <- err
 		return err
 	}
 	if r.live[p.key] != p {

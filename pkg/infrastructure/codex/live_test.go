@@ -3,11 +3,13 @@
 package codex
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -86,6 +88,114 @@ func TestLiveHubTurn(t *testing.T) {
 			t.Fatal(ctx.Err())
 		}
 	}
+}
+
+func TestLiveCompaction(t *testing.T) {
+	workdir := liveWorkdir(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	codex, err := exec.LookPath("codex")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "stdout.jsonl")
+	t.Setenv("NOCTILUCA_TEST_CODEX", codex)
+	t.Setenv("NOCTILUCA_TEST_TRACE", trace)
+	wrapper := filepath.Join(dir, "codex")
+	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\numask 077\n\"$NOCTILUCA_TEST_CODEX\" \"$@\" | tee \"$NOCTILUCA_TEST_TRACE\"\n"), 0700))
+	model, err := New(wrapper, "gpt-6-luna", "low").Open(ctx, domain.ModelSessionConfig{Workdir: workdir,
+		SystemPrompt: "This is a compaction smoke test. Reply directly. Do not use tools."})
+	require.NoError(t, err)
+	s := model.(*session)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.NoError(t, s.Send(ctx, domain.UserInput{ID: 1, Text: "Reply PONG without using tools, then finish."}))
+	var finished, acknowledged bool
+	for !finished || !acknowledged {
+		select {
+		case event, ok := <-s.Events():
+			require.True(t, ok)
+			require.NoError(t, event.Err)
+			switch event.Kind {
+			case domain.ModelEventTurnFinished:
+				finished = true
+			case domain.ModelEventInputStarted:
+				acknowledged = true
+			}
+		case <-ctx.Done():
+			t.Fatal("initial turn did not finish: ", ctx.Err())
+		}
+	}
+	before := s.ContextTokens()
+	require.Positive(t, before)
+	liveCompact(t, s)
+	after := s.ContextTokens()
+	require.Positive(t, after)
+	// A later response gives tee time to copy the preceding frames to the trace before shutdown.
+	require.NoError(t, s.call(ctx, "thread/read", map[string]string{"threadId": s.threadID}, nil))
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events, "compaction has no core events")
+
+	file, err := os.Open(trace)
+	require.NoError(t, err)
+	defer file.Close()
+	scan := bufio.NewScanner(file)
+	scan.Buffer(make([]byte, 64<<10), maxFrameSize)
+	var turnIDs, steps []string
+	var updatedTokens int
+	for scan.Scan() {
+		var f rpcFrame
+		require.NoError(t, json.Unmarshal(scan.Bytes(), &f))
+		if f.Method == "" || len(f.Params) == 0 {
+			continue
+		}
+		var n notification
+		require.NoError(t, json.Unmarshal(f.Params, &n))
+		if n.ThreadID != s.threadID {
+			continue
+		}
+		switch f.Method {
+		case "turn/started":
+			turnIDs = append(turnIDs, n.Turn.ID)
+		case "turn/completed":
+			require.NotEmpty(t, turnIDs)
+			require.Equal(t, turnIDs[len(turnIDs)-1], n.Turn.ID)
+			require.Equal(t, "completed", n.Turn.Status)
+		case "item/started", "item/completed":
+			var item struct{ Type string }
+			require.NoError(t, json.Unmarshal(n.Item, &item))
+			if item.Type != "contextCompaction" {
+				continue
+			}
+			require.Len(t, turnIDs, 2)
+			require.Equal(t, turnIDs[1], n.TurnID)
+		case "thread/tokenUsage/updated":
+			if len(turnIDs) < 2 {
+				continue
+			}
+			require.Equal(t, turnIDs[1], n.TurnID)
+			require.NotNil(t, n.TokenUsage.Last.TotalTokens)
+			updatedTokens = *n.TokenUsage.Last.TotalTokens
+		default:
+			continue
+		}
+		steps = append(steps, f.Method)
+	}
+	require.NoError(t, scan.Err())
+	require.Equal(t, []string{"turn/started", "turn/completed", "turn/started", "item/started",
+		"thread/tokenUsage/updated", "item/completed", "turn/completed"}, steps)
+	require.NotEqual(t, turnIDs[0], turnIDs[1])
+	require.Equal(t, updatedTokens, after)
+	t.Logf("notifications: %s", strings.Join(steps, " -> "))
+	t.Logf("context tokens before and after compaction: %d -> %d", before, after)
+}
+
+func liveCompact(t *testing.T, s *session) {
+	t.Helper()
+	s.Compact()
+	require.Eventually(t, func() bool {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return !s.compactRequested && s.idle()
+	}, 60*time.Second, 10*time.Millisecond, "the requested compaction must finish")
 }
 
 func TestLiveSubagentHubAndWakeup(t *testing.T) {
@@ -188,7 +298,18 @@ func TestLiveSubagentHubAndWakeup(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, childID, "parent history did not record a subagent")
-	// The child cannot finish its read until the parent turn is over.
+	before := s.ContextTokens()
+	liveCompact(t, s)
+	parent = readThread(ctx, s.threadID)
+	var compacted bool
+	for _, turn := range parent.Turns {
+		for _, item := range turn.Items {
+			compacted = compacted || (turn.Status == "completed" && item.Type == "contextCompaction")
+		}
+	}
+	require.True(t, compacted, "compaction must finish while the child's read is held")
+	require.EqualValues(t, 1, starts.Load(), "compaction must not appear as a parent turn")
+	t.Logf("parent compacted while the child was blocked in read_probe: %d -> %d tokens", before, s.ContextTokens())
 	close(release)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -224,7 +345,7 @@ func TestLiveSubagentHubAndWakeup(t *testing.T) {
 	}
 	require.True(t, read, "child history must contain its own successful hub read")
 	require.True(t, answer, "child must return the value that only the hub supplied")
-	t.Logf("subagent %s read noctiluca.read_probe and finished after the parent turn", childID)
+	t.Log("subagent read noctiluca.read_probe and returned the probe value after compaction")
 	const observationWindow = 15 * time.Second
 	observation, cancelObservation := context.WithTimeout(ctx, observationWindow)
 	defer cancelObservation()
@@ -240,6 +361,23 @@ func TestLiveSubagentHubAndWakeup(t *testing.T) {
 	require.NoError(t, observation.Err(), "parent turn must start within the observation window")
 	require.Greater(t, starts.Load(), int32(1), "subagent completion must start a parent turn")
 	t.Logf("parent turn started within %s after child completion", observationWindow)
+	select {
+	case <-finished:
+	case err := <-eventErrors:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal("parent did not finish its wake turn: ", ctx.Err())
+	}
+	woken := readThread(ctx, s.threadID)
+	require.Greater(t, len(woken.Turns), len(parent.Turns))
+	var parentAnswer bool
+	for _, turn := range woken.Turns[len(parent.Turns):] {
+		for _, item := range turn.Items {
+			parentAnswer = parentAnswer || (item.Type == "agentMessage" && strings.Contains(item.Text, value))
+		}
+	}
+	require.True(t, parentAnswer, "the woken parent must receive the subagent's probe value")
+	t.Log("the woken parent reported the child's probe value")
 	require.False(t, parentRead.Load(), "the parent must not substitute its own read for the child's")
 }
 

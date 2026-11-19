@@ -11,8 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -45,13 +47,22 @@ type session struct {
 	current      *runningTurn
 	inputs       []sessionInput
 	commands     map[string]*runningCommand
+
+	contextTokens    int
+	compactRequested bool
+	onCompactionDone func()
 }
 
 type runningTurn struct {
-	id      string
-	ready   chan struct{}
-	started chan struct{}
-	refused bool
+	id         string
+	ready      chan struct{}
+	started    chan struct{}
+	refused    bool
+	compaction *compaction
+}
+
+type compaction struct {
+	preTokens int
 }
 
 type sessionInput struct {
@@ -70,7 +81,7 @@ func startSession(ctx context.Context, executable string, config domain.ModelSes
 	s := &session{ctx: sessionCtx, cancel: cancel, writeLock: make(chan struct{}, 1), events: make(chan domain.ModelEvent, 64),
 		done: make(chan struct{}), readerDone: make(chan struct{}), processDone: make(chan struct{}), shutdownDone: make(chan struct{}),
 		inputDone: make(chan struct{}), inputReady: make(chan struct{}, 1),
-		calls: make(map[string]chan rpcFrame), commands: make(map[string]*runningCommand)}
+		calls: make(map[string]chan rpcFrame), commands: make(map[string]*runningCommand), onCompactionDone: config.OnCompactionDone}
 	if config.ToolHub.BearerToken != "" {
 		encoded, _ := json.Marshal(config.ToolHub.BearerToken)
 		s.secret = encoded[1 : len(encoded)-1]
@@ -205,7 +216,7 @@ func (s *session) read(stdout io.ReadCloser) {
 			continue
 		}
 		switch f.Method {
-		case "turn/started", "turn/completed", "item/agentMessage/delta", "item/started", "item/completed", "error":
+		case "turn/started", "turn/completed", "item/agentMessage/delta", "item/started", "item/completed", "error", "thread/tokenUsage/updated":
 		default:
 			continue
 		}
@@ -226,9 +237,14 @@ func (s *session) read(stdout io.ReadCloser) {
 			break
 		}
 		var started *runningTurn
-		var wake bool
+		var wake, compactionFinished bool
 		s.mu.Lock()
+		compacting := s.current != nil && s.current.compaction != nil
 		switch f.Method {
+		case "thread/tokenUsage/updated":
+			if tokens := n.TokenUsage.Last.TotalTokens; tokens != nil && s.threadID != "" && n.ThreadID == s.threadID {
+				s.contextTokens = *tokens
+			}
 		case "turn/started":
 			if s.current == nil {
 				s.current = &runningTurn{id: n.Turn.ID, started: make(chan struct{})}
@@ -241,6 +257,15 @@ func (s *session) read(stdout io.ReadCloser) {
 			if s.current != nil && s.current.id == n.Turn.ID {
 				started = s.current
 				s.current = nil
+				if compacting {
+					compactionFinished = true
+					if n.Turn.Status == "completed" && n.Turn.Error == nil {
+						slog.InfoContext(s.ctx, "Codex compaction completed", "thread", s.threadID,
+							"pre_tokens", started.compaction.preTokens, "post_tokens", s.contextTokens)
+					} else {
+						slog.WarnContext(s.ctx, "Codex compaction failed", "thread", s.threadID)
+					}
+				}
 			} else {
 				events = nil
 			}
@@ -250,9 +275,14 @@ func (s *session) read(stdout io.ReadCloser) {
 				}
 			}
 		}
+		if compacting {
+			events = slices.DeleteFunc(events, func(event domain.ModelEvent) bool {
+				return event.Kind != domain.ModelEventBackgroundDone
+			})
+		}
 		for i := range events {
 			event := &events[i]
-			if event.Kind == domain.ModelEventBackgroundDone && n.ThreadID == s.threadID && s.current == nil {
+			if event.Kind == domain.ModelEventBackgroundDone && n.ThreadID == s.threadID && (s.current == nil || compacting) {
 				// The CLI queues a subagent's result without starting an idle parent.
 				s.inputs = append(s.inputs, sessionInput{text: "A subagent finished. Its result is available."})
 				wake = true
@@ -270,7 +300,11 @@ func (s *session) read(stdout io.ReadCloser) {
 				}
 			}
 		}
+		wake = wake || (s.compactRequested && s.idle())
 		s.mu.Unlock()
+		if compactionFinished && s.onCompactionDone != nil {
+			s.onCompactionDone()
+		}
 		for _, event := range events {
 			s.emit(event)
 		}
@@ -286,6 +320,13 @@ func (s *session) read(stdout io.ReadCloser) {
 		}
 	}
 	if s.ctx.Err() == nil {
+		s.mu.Lock()
+		if t := s.current; t != nil && t.compaction != nil {
+			t.markReady()
+			s.current = nil
+			slog.WarnContext(s.ctx, "Codex compaction failed when the stream closed", "thread", s.threadID)
+		}
+		s.mu.Unlock()
 		if readErr == nil && scan.Err() != nil {
 			readErr = errors.New("read codex stream failed")
 		}
@@ -418,9 +459,23 @@ func (s *session) ResumeToken() string {
 	defer s.mu.RUnlock()
 	return formatResumeToken(s.threadID, s.promptHash)
 }
+func (s *session) ContextTokens() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.contextTokens
+}
+func (s *session) Compact() {
+	s.mu.Lock()
+	s.compactRequested = true
+	s.mu.Unlock()
+	s.wakeInputs()
+}
 func (s *session) Idle() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.idle()
+}
+func (s *session) idle() bool {
 	return len(s.inputs) == 0 && s.current == nil && len(s.commands) == 0
 }
 func (s *session) Close() error { s.cancel(); <-s.done; return nil }
