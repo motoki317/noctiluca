@@ -43,30 +43,35 @@ func (e *initializationExit) Error() string {
 }
 
 type session struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	cmd           *exec.Cmd
-	stdin         *os.File
-	writeLock     chan struct{}
-	events        chan domain.ModelEvent
-	done          chan struct{}
-	processDone   chan struct{}
-	shutdownDone  chan struct{}
-	ready         chan error
-	mu            sync.RWMutex
-	token         string
-	pending       map[string]int64
-	parser        parser
-	compactWake   chan struct{}
-	compactDone   chan struct{}
-	compactAt     time.Time
-	compactDelay  time.Duration
-	now           func() time.Time
-	lastMessageID string
-	contextTokens int
-	oneHourCache  bool
-	closeErr      error
-	initErr       *initializationExit
+	ctx          context.Context
+	cancel       context.CancelFunc
+	cmd          *exec.Cmd
+	stdin        *os.File
+	writeLock    chan struct{}
+	events       chan domain.ModelEvent
+	done         chan struct{}
+	processDone  chan struct{}
+	shutdownDone chan struct{}
+	ready        chan error
+	mu           sync.RWMutex
+	token        string
+	pending      map[string]int64
+	parser       parser
+
+	compactWake          chan struct{}
+	compactDone          chan struct{}
+	compactRequested     bool
+	compactByRequest     bool
+	compactFailureLogged bool
+	compactAt            time.Time
+	compactDelay         time.Duration
+	now                  func() time.Time
+	lastMessageID        string
+	contextTokens        int
+	oneHourCache         bool
+
+	closeErr error
+	initErr  *initializationExit
 }
 
 func startSession(ctx context.Context, executable string, args []string, config domain.ModelSessionConfig, dir string) (*session, error) {
@@ -111,7 +116,7 @@ func startSession(ctx context.Context, executable string, args []string, config 
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		close(s.processDone)
 	}()
-	go s.compactIdle()
+	go s.runCompaction()
 	go s.shutdown()
 	go s.read(stdout, dir)
 	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
@@ -212,18 +217,26 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		if s.parser.compacting && f.Type == "system" {
 			if f.Subtype == "compact_boundary" {
 				s.contextTokens = f.CompactMetadata.PostTokens
-				slog.InfoContext(s.ctx, "Claude idle compaction completed", "session", s.token,
+				slog.InfoContext(s.ctx, "Claude compaction completed", "session", s.token,
 					"pre_tokens", f.CompactMetadata.PreTokens, "post_tokens", f.CompactMetadata.PostTokens)
 			}
 			if f.Subtype == "status" && f.CompactResult == "failed" {
-				slog.WarnContext(s.ctx, "Claude idle compaction failed", "session", s.token)
+				s.warnCompactionFailure()
 			}
 		}
 		wasIdle := s.idle()
+		hadCompaction := s.parser.compactUUID != ""
 		events := s.parser.events(f, s.pending)
-		if !wasIdle && s.idle() && len(events) == 0 {
+		compactionFinished := hadCompaction && s.parser.compactUUID == ""
+		if compactionFinished && f.failedResult() {
+			s.warnCompactionFailure()
+		}
+		if compactionFinished && s.compactByRequest {
+			s.compactByRequest = false
+		} else if !wasIdle && s.idle() && len(events) == 0 {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone})
 		}
+		s.wakeRequestedCompaction()
 		s.mu.Unlock()
 		for _, event := range events {
 			s.emit(event)
@@ -246,6 +259,13 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 	<-s.processDone
 	<-s.shutdownDone
 	s.closeErr = os.RemoveAll(dir)
+}
+
+func (s *session) warnCompactionFailure() {
+	if !s.compactFailureLogged {
+		slog.WarnContext(s.ctx, "Claude compaction failed", "session", s.token)
+		s.compactFailureLogged = true
+	}
 }
 
 func (s *session) observeRequest(f frame) {
@@ -272,14 +292,24 @@ func (s *session) observeRequest(f frame) {
 		s.lastMessageID = msg.ID
 		// Host sleep must count against the cache lifetime, so discard the monotonic clock.
 		s.compactAt = s.now().Round(0).Add(s.compactDelay)
-		select {
-		case s.compactWake <- struct{}{}:
-		default:
-		}
+		s.wakeCompaction()
 	}
 }
 
-func (s *session) compactIdle() {
+func (s *session) wakeRequestedCompaction() {
+	if s.compactRequested && s.canCompact() {
+		s.wakeCompaction()
+	}
+}
+
+func (s *session) wakeCompaction() {
+	select {
+	case s.compactWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *session) runCompaction() {
 	defer close(s.compactDone)
 	timer := time.NewTimer(idleCompactDelay)
 	timer.Stop()
@@ -289,21 +319,18 @@ func (s *session) compactIdle() {
 		case <-s.ctx.Done():
 			return
 		case <-s.compactWake:
-			s.mu.Lock()
-			if !s.compactAt.IsZero() {
-				timer.Reset(s.compactAt.Sub(s.now().Round(0)))
-			}
-			s.mu.Unlock()
 		case <-timer.C:
-			if remaining := s.compactIfIdle(); remaining > 0 {
-				timer.Reset(remaining)
-			}
+		}
+		if remaining := s.compactIfReady(); remaining > 0 {
+			timer.Reset(remaining)
+		} else {
+			timer.Stop()
 		}
 	}
 }
 
-func (s *session) compactIfIdle() time.Duration {
-	// Reserve stdin before the idle check so a concurrent Send cannot overtake /compact.
+func (s *session) compactIfReady() time.Duration {
+	// Reserve stdin before checking the gate so a concurrent Send cannot overtake /compact.
 	select {
 	case s.writeLock <- struct{}{}:
 	case <-s.ctx.Done():
@@ -311,29 +338,35 @@ func (s *session) compactIfIdle() time.Duration {
 	}
 	defer func() { <-s.writeLock }()
 	s.mu.Lock()
-	deadline := s.compactAt
-	now := s.now().Round(0)
-	if deadline.IsZero() {
+	if s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return 0
 	}
-	if now.Before(deadline) {
-		s.mu.Unlock()
-		return deadline.Sub(now)
+	requested := s.compactRequested && s.canCompact()
+	var remaining time.Duration
+	var idleDue bool
+	if !s.compactAt.IsZero() {
+		remaining = s.compactAt.Sub(s.now().Round(0))
+		if remaining <= 0 {
+			s.compactAt = time.Time{}
+			idleDue = remaining >= -idleCompactMaxLateness && s.idle() && s.contextTokens >= idleCompactMinTokens && s.oneHourCache
+		}
 	}
-	s.compactAt = time.Time{}
-	if s.ctx.Err() != nil || now.Sub(deadline) > idleCompactMaxLateness || !s.idle() || s.contextTokens < idleCompactMinTokens || !s.oneHourCache {
+	if !requested && !idleDue {
 		s.mu.Unlock()
-		return 0
+		return remaining
 	}
+	s.compactRequested = false
+	s.compactByRequest = requested
+	s.compactFailureLogged = false
 	id := uuid.NewString()
 	s.parser.compactUUID = id
 	value := map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": "/compact"}, "parent_tool_use_id": nil, "uuid": id, "session_id": s.token}
 	s.mu.Unlock()
 	if err := s.writeLocked(s.ctx, value); errors.Is(err, errWriteInput) {
-		slog.WarnContext(s.ctx, "Write Claude idle compaction failed", "error", err)
+		slog.WarnContext(s.ctx, "Write Claude compaction failed", "error", err)
 	}
-	return 0
+	return remaining
 }
 
 func (s *session) emit(event domain.ModelEvent) {
@@ -408,6 +441,7 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 	if err := s.write(ctx, value); err != nil {
 		s.mu.Lock()
 		delete(s.pending, id)
+		s.wakeRequestedCompaction()
 		s.mu.Unlock()
 		return err
 	}
@@ -416,12 +450,29 @@ func (s *session) Send(ctx context.Context, input domain.UserInput) error {
 
 func (s *session) Events() <-chan domain.ModelEvent { return s.events }
 func (s *session) ResumeToken() string              { s.mu.RLock(); defer s.mu.RUnlock(); return s.token }
+func (s *session) ContextTokens() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.contextTokens
+}
+
+func (s *session) Compact() {
+	s.mu.Lock()
+	s.compactRequested = true
+	s.mu.Unlock()
+	s.wakeCompaction()
+}
+
 func (s *session) Idle() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.idle()
 }
 func (s *session) idle() bool {
-	return len(s.pending) == 0 && !s.parser.active && len(s.parser.tasks) == 0 && s.parser.compactUUID == ""
+	return s.canCompact() && len(s.parser.tasks) == 0
+}
+
+func (s *session) canCompact() bool {
+	return len(s.pending) == 0 && !s.parser.active && s.parser.compactUUID == ""
 }
 func (s *session) Close() error { s.cancel(); <-s.done; return s.closeErr }

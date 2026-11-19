@@ -149,15 +149,36 @@ func TestCLIHelper(t *testing.T) {
 	count := 0
 	var held, queued string
 	finishCompact := func(id string) {
-		if mode == "compact-failed" {
+		switch mode {
+		case "compact-failed", "compact-failed-status-and-result":
 			emit(`{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"private diagnostic"}`)
-		} else {
+		case "compact-failed-result":
+		default:
 			emit(`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":200000,"post_tokens":12345}}`)
 			emit(`{"type":"user","uuid":"summary","isCompactSummary":true,"message":{"content":"summary"}}`)
 			emit(fmt.Sprintf(`{"type":"user","uuid":%q,"isReplay":true,"message":{"content":"/compact"}}`, id))
 			emit(`{"type":"user","uuid":"history","isReplay":true,"message":{"content":[{"type":"tool_result","is_error":true,"content":"old tool error"}]}}`)
 		}
-		emit(`{"type":"result","subtype":"success","result":"","num_turns":0,"local_command":"compact"}`)
+		switch mode {
+		case "compact-failed-result", "compact-failed-status-and-result":
+			emit(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["private diagnostic"],"local_command":"compact"}`)
+		default:
+			emit(`{"type":"result","subtype":"success","result":"","num_turns":0,"local_command":"compact"}`)
+		}
+		emit(fmt.Sprintf(`{"type":"command_lifecycle","command_uuid":%q,"state":"completed"}`, id))
+	}
+	notifyBackground := func() {
+		emit(`{"type":"system","subtype":"task_notification","task_id":"background","status":"completed","summary":"done"}`)
+	}
+	backgroundTurn := func() {
+		emit(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"task-turn","usage":{"input_tokens":42}}}}`)
+		emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"background text"}}}`)
+		emit(`{"type":"assistant","message":{"id":"task-turn","content":[{"type":"tool_use","id":"background-tool","name":"reply","input":{}}]}}`)
+		emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"background-tool","is_error":true,"content":"background tool failed"}]}}`)
+		emit(`{"type":"result","subtype":"success","result":"background result"}`)
+	}
+	finishTurn := func(id string) {
+		emit(`{"type":"result","subtype":"success","result":"reply","usage":{"input_tokens":999999,"cache_creation_input_tokens":999999}}`)
 		emit(fmt.Sprintf(`{"type":"command_lifecycle","command_uuid":%q,"state":"completed"}`, id))
 	}
 	var compactID string
@@ -169,6 +190,9 @@ func TestCLIHelper(t *testing.T) {
 		var typ string
 		_ = json.Unmarshal(f["type"], &typ)
 		switch typ {
+		case "test_finish_turn":
+			finishTurn(held)
+			held = ""
 		case "control_request":
 			if mode == "init-error" {
 				emit(`{"type":"control_response","response":{"request_id":"initialize","subtype":"error"}}`)
@@ -223,22 +247,26 @@ func TestCLIHelper(t *testing.T) {
 				var msg struct{ Content string }
 				_ = json.Unmarshal(f["message"], &msg)
 				if msg.Content == "/compact" {
+					if held != "" {
+						os.Exit(13)
+					}
 					if mode == "compact-task-turn" {
 						lifecycle(id, "queued")
-						emit(`{"type":"system","subtype":"task_notification","task_id":"background","status":"completed","summary":"done"}`)
-						emit(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"task-turn","usage":{"input_tokens":42}}}}`)
-						emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"background text"}}}`)
-						emit(`{"type":"assistant","message":{"id":"task-turn","content":[{"type":"tool_use","id":"background-tool","name":"reply","input":{}}]}}`)
-						emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"background-tool","is_error":true,"content":"background tool failed"}]}}`)
-						emit(`{"type":"result","subtype":"success","result":"background result"}`)
+						notifyBackground()
+						backgroundTurn()
 						compactID = id
 						continue
 					}
 					lifecycle(id, "started")
 					emit(`{"type":"system","subtype":"status","status":"compacting"}`)
-					if mode == "compact-held" {
+					switch mode {
+					case "compact-held":
 						compactID = id
-					} else {
+					case "compact-background":
+						notifyBackground()
+						finishCompact(id)
+						backgroundTurn()
+					default:
 						finishCompact(id)
 					}
 					continue
@@ -275,14 +303,14 @@ func TestCLIHelper(t *testing.T) {
 					emit(fmt.Sprintf(`{"type":"assistant","parent_tool_use_id":"child","message":{"id":"child","content":[],"usage":%s}}`, childUsage))
 				}
 				if msg.Content == "active" {
+					held = id
 					emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"active"}}}`)
 					continue
 				}
 				if msg.Content == "background" {
 					emit(`{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"background"}]}`)
 				}
-				emit(`{"type":"result","subtype":"success","result":"reply","usage":{"input_tokens":999999,"cache_creation_input_tokens":999999}}`)
-				lifecycle(id, "completed")
+				finishTurn(id)
 				continue
 			}
 			switch mode {
@@ -368,6 +396,12 @@ func compactSession(t *testing.T, mode string) (*session, string) {
 	require.NoError(t, err)
 	s := opened.(*session)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	return s, dir
+}
+
+func idleCompactSession(t *testing.T, mode string) (*session, string) {
+	t.Helper()
+	s, dir := compactSession(t, mode)
 	s.mu.Lock()
 	s.compactDelay = 100 * time.Millisecond
 	s.mu.Unlock()
@@ -417,7 +451,7 @@ func TestSessionIdleCompaction(t *testing.T) {
 		{"exactly-sixty-seconds-late", []string{"large"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, dir := compactSession(t, "compact")
+			s, dir := idleCompactSession(t, "compact")
 			var logs bytes.Buffer
 			previous := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -446,11 +480,13 @@ func TestSessionIdleCompaction(t *testing.T) {
 			require.Equal(t, "test-session", last.SessionID)
 			var record struct {
 				Level      string `json:"level"`
+				Msg        string `json:"msg"`
 				PreTokens  int    `json:"pre_tokens"`
 				PostTokens int    `json:"post_tokens"`
 			}
 			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one log per attempt")
 			require.Equal(t, "INFO", record.Level)
+			require.Equal(t, "Claude compaction completed", record.Msg)
 			require.Equal(t, 200000, record.PreTokens)
 			require.Equal(t, 12345, record.PostTokens)
 		})
@@ -460,7 +496,7 @@ func TestSessionIdleCompaction(t *testing.T) {
 func TestSessionIdleCompactionSkipped(t *testing.T) {
 	for _, name := range []string{"small", "five-minute", "active", "background", "pending", "late", "read-only", "subagent", "aggregate", "last-write-five-minute"} {
 		t.Run(name, func(t *testing.T) {
-			s, dir := compactSession(t, "compact")
+			s, dir := idleCompactSession(t, "compact")
 			text := name
 			if name == "pending" || name == "late" || name == "last-write-five-minute" {
 				text = "large"
@@ -497,9 +533,52 @@ func TestSessionIdleCompactionSkipped(t *testing.T) {
 	}
 }
 
+func TestSessionRequestedCompaction(t *testing.T) {
+	s, dir := compactSession(t, "compact")
+	require.Zero(t, s.ContextTokens())
+	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "active"}))
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 1}, nextEvent(t, s))
+	require.Equal(t, "active", nextEvent(t, s).Text)
+	require.Equal(t, 200000, s.ContextTokens())
+	s.Compact()
+	s.Compact()
+	require.Never(t, func() bool {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.parser.compactUUID != ""
+	}, 50*time.Millisecond, time.Millisecond, "compaction must wait for the active turn")
+	require.NoError(t, s.write(t.Context(), map[string]string{"type": "test_finish_turn"}))
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "reply"}, nextEvent(t, s))
+	require.Eventually(t, func() bool { return s.Idle() && s.ContextTokens() == 12345 }, 5*time.Second, time.Millisecond)
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events)
+	inputs := capturedInputs(t, dir)
+	require.Len(t, inputs, 2)
+	require.JSONEq(t, `"/compact"`, string(inputs[1].Message.Content))
+}
+
+func TestSessionRequestedCompactionWithBackgroundTask(t *testing.T) {
+	s, dir := compactSession(t, "compact-background")
+	compactTurn(t, s, 1, "background")
+	require.False(t, s.Idle(), "the background task is still registered")
+	s.Compact()
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: "background (completed): done"}, nextEvent(t, s))
+	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
+	requireBackgroundTurn(t, s)
+	require.True(t, s.Idle())
+	require.Equal(t, 42, s.ContextTokens())
+	require.NoError(t, s.Close())
+	require.Empty(t, s.events)
+	inputs := capturedInputs(t, dir)
+	require.Len(t, inputs, 2)
+	require.JSONEq(t, `"/compact"`, string(inputs[1].Message.Content))
+}
+
 func TestSessionInputDuringCompaction(t *testing.T) {
 	s, dir := compactSession(t, "compact-held")
-	compactTurn(t, s, 1, "large")
+	compactTurn(t, s, 1, "five-minute")
+	s.Compact()
 	require.Eventually(t, func() bool {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
@@ -520,18 +599,11 @@ func TestSessionInputDuringCompaction(t *testing.T) {
 }
 
 func TestSessionAutonomousTurnBeforeCompaction(t *testing.T) {
-	s, dir := compactSession(t, "compact-task-turn")
+	s, dir := idleCompactSession(t, "compact-task-turn")
 	compactTurn(t, s, 1, "large")
 	require.Equal(t, domain.ModelEventBackgroundDone, nextEvent(t, s).Kind)
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
-	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "background text"}, nextEvent(t, s))
-	tool := nextEvent(t, s)
-	require.Equal(t, domain.ModelEventToolCall, tool.Kind)
-	require.Equal(t, "background-tool", tool.ToolCall.ID)
-	result := nextEvent(t, s)
-	require.Equal(t, domain.ModelEventToolResult, result.Kind)
-	require.EqualError(t, result.Err, "background tool failed")
-	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "background result"}, nextEvent(t, s))
+	requireBackgroundTurn(t, s)
 	require.False(t, s.Idle(), "queued compaction must keep the session busy")
 	s.mu.RLock()
 	compacting, compactUUID, contextTokens := s.parser.compacting, s.parser.compactUUID, s.contextTokens
@@ -548,8 +620,20 @@ func TestSessionAutonomousTurnBeforeCompaction(t *testing.T) {
 	require.JSONEq(t, `"/compact"`, string(inputs[1].Message.Content))
 }
 
+func requireBackgroundTurn(t *testing.T, s *session) {
+	t.Helper()
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventText, Text: "background text"}, nextEvent(t, s))
+	tool := nextEvent(t, s)
+	require.Equal(t, domain.ModelEventToolCall, tool.Kind)
+	require.Equal(t, "background-tool", tool.ToolCall.ID)
+	result := nextEvent(t, s)
+	require.Equal(t, domain.ModelEventToolResult, result.Kind)
+	require.EqualError(t, result.Err, "background tool failed")
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventTurnFinished, Text: "background result"}, nextEvent(t, s))
+}
+
 func TestSessionIdleCompactionFailure(t *testing.T) {
-	s, dir := compactSession(t, "compact-failed")
+	s, dir := idleCompactSession(t, "compact-failed")
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -562,14 +646,67 @@ func TestSessionIdleCompactionFailure(t *testing.T) {
 	require.NoError(t, s.Close())
 	require.Empty(t, s.events)
 	require.Len(t, capturedInputs(t, dir), 3)
-	var record struct{ Level string }
+	var record struct{ Level, Msg string }
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record))
 	require.Equal(t, "WARN", record.Level)
+	require.Equal(t, "Claude compaction failed", record.Msg)
 	require.NotContains(t, logs.String(), "private diagnostic")
 }
 
+func TestSessionIdleCompactionAfterRequestedFailure(t *testing.T) {
+	s, dir := compactSession(t, "compact-failed")
+	compactTurn(t, s, 1, "large")
+	s.Compact()
+	require.Eventually(t, func() bool {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return !s.compactRequested && s.idle()
+	}, 5*time.Second, time.Millisecond)
+	require.Empty(t, s.events)
+	s.mu.Lock()
+	deadline := s.compactAt
+	s.now = func() time.Time { return deadline }
+	s.wakeCompaction()
+	s.mu.Unlock()
+	require.False(t, deadline.IsZero(), "a failed request must preserve the idle deadline")
+	require.Equal(t, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone}, nextEvent(t, s))
+	require.True(t, s.Idle())
+	require.NoError(t, s.Close())
+	inputs := capturedInputs(t, dir)
+	require.Len(t, inputs, 3)
+	require.JSONEq(t, `"/compact"`, string(inputs[1].Message.Content))
+	require.JSONEq(t, `"/compact"`, string(inputs[2].Message.Content))
+}
+
+func TestSessionRequestedCompactionFailure(t *testing.T) {
+	for _, mode := range []string{"compact-failed-result", "compact-failed-status-and-result"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := compactSession(t, mode)
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			compactTurn(t, s, 1, "small")
+			s.Compact()
+			require.Eventually(t, func() bool {
+				s.mu.RLock()
+				defer s.mu.RUnlock()
+				return !s.compactRequested && s.idle()
+			}, 5*time.Second, time.Millisecond)
+			require.NoError(t, s.Close())
+			require.Empty(t, s.events)
+			require.Equal(t, 199999, s.ContextTokens())
+			var record struct{ Level, Msg string }
+			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one warning per failure")
+			require.Equal(t, "WARN", record.Level)
+			require.Equal(t, "Claude compaction failed", record.Msg)
+			require.NotContains(t, logs.String(), "private diagnostic")
+		})
+	}
+}
+
 func TestSessionIdleCompactionRearms(t *testing.T) {
-	s, dir := compactSession(t, "compact")
+	s, dir := idleCompactSession(t, "compact")
 	s.mu.Lock()
 	s.compactDelay = 400 * time.Millisecond
 	s.mu.Unlock()
@@ -595,7 +732,7 @@ func TestSessionIdleCompactionRearms(t *testing.T) {
 func TestSessionCloseStopsCompaction(t *testing.T) {
 	for _, mode := range []string{"compact", "compact-held"} {
 		t.Run(mode, func(t *testing.T) {
-			s, _ := compactSession(t, mode)
+			s, _ := idleCompactSession(t, mode)
 			compactTurn(t, s, 1, "large")
 			if mode == "compact-held" {
 				require.Eventually(t, func() bool { return !s.Idle() }, 5*time.Second, time.Millisecond)
@@ -611,6 +748,12 @@ func TestSessionCloseStopsCompaction(t *testing.T) {
 }
 
 func TestCompactionWaitsForInputWriter(t *testing.T) {
+	t.Run("idle-timer", func(t *testing.T) { testCompactionWaitsForInputWriter(t, false) })
+	t.Run("requested", func(t *testing.T) { testCompactionWaitsForInputWriter(t, true) })
+}
+
+func testCompactionWaitsForInputWriter(t *testing.T, requested bool) {
+	t.Helper()
 	synctest.Test(t, func(t *testing.T) {
 		input, output, err := os.Pipe()
 		require.NoError(t, err)
@@ -618,13 +761,17 @@ func TestCompactionWaitsForInputWriter(t *testing.T) {
 		defer output.Close()
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		s := &session{
-			ctx: ctx, cancel: cancel, stdin: output, writeLock: make(chan struct{}, 1),
-			compactAt: time.Now(), now: time.Now, contextTokens: idleCompactMinTokens, oneHourCache: true,
+		s := &session{ctx: ctx, cancel: cancel, stdin: output, writeLock: make(chan struct{}, 1), now: time.Now}
+		if requested {
+			s.Compact()
+		} else {
+			s.compactAt = time.Now()
+			s.contextTokens = idleCompactMinTokens
+			s.oneHourCache = true
 		}
 		s.writeLock <- struct{}{}
 		compacted := make(chan struct{})
-		go func() { s.compactIfIdle(); close(compacted) }()
+		go func() { s.compactIfReady(); close(compacted) }()
 		synctest.Wait()
 		require.True(t, s.Idle(), "compaction must reserve stdin before it marks the session busy")
 		sent := make(chan error, 1)
@@ -962,7 +1109,7 @@ func TestCompactionWriteFailure(t *testing.T) {
 			if closing {
 				cancel()
 			}
-			s.compactIfIdle()
+			s.compactIfReady()
 			require.ErrorIs(t, ctx.Err(), context.Canceled)
 			if closing {
 				require.Empty(t, logs.String())
@@ -976,7 +1123,7 @@ func TestCompactionWriteFailure(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one warning per failed write")
 			require.Equal(t, "WARN", record.Level)
-			require.Equal(t, "Write Claude idle compaction failed", record.Msg)
+			require.Equal(t, "Write Claude compaction failed", record.Msg)
 			require.Equal(t, "write claude input failed", record.Error)
 		})
 	}
