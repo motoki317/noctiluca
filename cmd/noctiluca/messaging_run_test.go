@@ -126,7 +126,7 @@ heartbeat: {enabled: false}
 		}
 	}
 	post := takePost()
-	require.Equal(t, "ordered notice", post.Get("text"))
+	require.Equal(t, "ordered notice", post.Get("markdown_text"))
 	require.Equal(t, "D_OWNER", post.Get("channel"))
 	require.Equal(t, "xoxb-support", post.Get("token"))
 	for _, name := range []string{"support", "slack"} {

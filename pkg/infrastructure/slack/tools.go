@@ -41,6 +41,7 @@ func (a *adapter) ToolNotes(ctx context.Context) string {
 For a top-level input, omit thread_ts for chat and quick answers. For work, set thread_ts to timestamp to start a thread.
 For an existing thread, copy thread_ts. In a DM, reply in the conversation where the input arrived.
 Use %[1]s_send to post text. Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context.
+Write %[1]s_send text and %[1]s_upload_file captions in Markdown, not in the Slack mrkdwn that inputs and read tools show. Bold takes two asterisks, because one makes italics. Start each list item with "- " or "1. ", because "•" stays plain text. Write each URL as <url>, <url|label>, or [label](url), because a bare URL that touches other text links wrongly or not at all. Mentions such as <@U…> and <#C…> work as in mrkdwn.
 To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true.
 If an answer needs any tool besides %[1]s_send, first show that you started where you will answer.
 For a thread, call %[1]s_set_status, including when work continues after a post. At top level, call %[1]s_react with channel and timestamp.`, a.name)
@@ -104,7 +105,7 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", reactionProperties, reactionRequired, a.react),
 		tool("unreact", "Remove your own emoji reaction using a bare channel ID and message timestamp.", reactionProperties, reactionRequired, a.unreact),
 		tool("set_status", "Show status text as given with a loading animation in a thread, without adding the app name. For example: \"Looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": status}, []string{"channel", "thread_ts", "status"}, a.setStatus),
-		tool("send", domain.PostingGuidance+" Post Markdown text. Copy channel and thread_ts from the input header. Omit thread_ts for a top-level post. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
+		tool("send", domain.PostingGuidance+" Copy channel and thread_ts from the input header. Omit thread_ts for a top-level post. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
 
@@ -241,6 +242,9 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 	if in.Broadcast && in.Thread == "" {
 		return nil, errors.New("broadcast requires thread_ts")
 	}
+	if utf8.RuneCountInString(in.Text) > 12000 {
+		return nil, errors.New("upload caption must be at most 12000 characters")
+	}
 	file, err := os.Open(in.Path)
 	if err != nil {
 		return nil, err
@@ -254,11 +258,8 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 		return nil, errors.New("upload requires a nonempty regular file")
 	}
 	filename := filepath.Base(in.Path)
-	params := sdk.UploadFileParameters{Reader: file, FileSize: int(stat.Size()), Filename: filename, Title: in.Title, Channel: in.Channel, ThreadTimestamp: in.Thread, InitialComment: mrkdwn(in.Text)}
+	params := sdk.UploadFileParameters{Reader: file, FileSize: int(stat.Size()), Filename: filename, Title: in.Title, Channel: in.Channel, ThreadTimestamp: in.Thread}
 	if in.Broadcast {
-		if utf8.RuneCountInString(params.InitialComment) > 3000 {
-			return nil, errors.New("broadcast caption must be at most 3000 characters")
-		}
 		var header [512]byte
 		n, err := file.ReadAt(header[:], 0)
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -269,7 +270,9 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 		default:
 			return nil, errors.New("broadcast requires a PNG, JPEG, or GIF image")
 		}
-		params.Channel, params.ThreadTimestamp, params.InitialComment = "", "", ""
+		params.Channel, params.ThreadTimestamp = "", ""
+	} else if in.Text != "" {
+		params.Blocks.BlockSet = []sdk.Block{sdk.NewMarkdownBlock("", in.Text)}
 	}
 	result, err := a.bot.UploadFileContext(ctx, params)
 	if err != nil {
@@ -298,16 +301,13 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 }
 
 func (a *adapter) broadcastImage(ctx context.Context, in toolInput, fileID, filename string) (string, error) {
-	text := mrkdwn(in.Text)
 	var blocks []sdk.Block
-	if text != "" {
-		blocks = append(blocks, sdk.NewSectionBlock(sdk.NewTextBlockObject("mrkdwn", text, false, false), nil, nil))
-	} else {
-		text = escape(filename)
+	if in.Text != "" {
+		blocks = append(blocks, sdk.NewMarkdownBlock("", in.Text))
 	}
 	blocks = append(blocks, sdk.NewImageBlockSlackFile(&sdk.SlackFileObject{ID: fileID}, filename, "", nil))
 	for attempt := 0; ; attempt++ {
-		_, timestamp, err := a.bot.PostMessageContext(ctx, in.Channel, sdk.MsgOptionTS(in.Thread), sdk.MsgOptionBroadcast(), sdk.MsgOptionText(text, false), sdk.MsgOptionBlocks(blocks...))
+		_, timestamp, err := a.bot.PostMessageContext(ctx, in.Channel, sdk.MsgOptionTS(in.Thread), sdk.MsgOptionBroadcast(), sdk.MsgOptionBlocks(blocks...))
 		if err == nil {
 			return timestamp, nil
 		}

@@ -182,7 +182,7 @@ cron:
 	select {
 	case posted := <-api.posts:
 		require.Equal(t, "D_DIRECT", posted.Get("channel"))
-		require.Equal(t, "*Hello* from the hub", posted.Get("text"))
+		require.Equal(t, "**Hello** from the hub", posted.Get("markdown_text"))
 	case err := <-done:
 		t.Fatalf("run stopped: %v", err)
 	case <-time.After(5 * time.Second):

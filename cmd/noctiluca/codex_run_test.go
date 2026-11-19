@@ -125,7 +125,7 @@ heartbeat: {enabled: false}
 	select {
 	case post := <-api.posts:
 		require.Equal(t, "D_OWNER", post.Get("channel"))
-		require.Equal(t, "PONG", post.Get("text"))
+		require.Equal(t, "PONG", post.Get("markdown_text"))
 	case <-time.After(5 * time.Second):
 		t.Fatal("Codex reply timed out")
 	}

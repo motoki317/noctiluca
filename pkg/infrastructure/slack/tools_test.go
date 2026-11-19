@@ -213,7 +213,12 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 		case "/files.completeUploadExternal":
 			require.Equal(t, "CTEST", r.Form.Get("channel_id"))
 			require.Equal(t, "123.000001", r.Form.Get("thread_ts"))
-			require.Equal(t, "*photo*", r.Form.Get("initial_comment"))
+			if missingInfo {
+				require.NotContains(t, r.Form, "blocks")
+			} else {
+				require.JSONEq(t, `[{"type":"markdown","text":"**photo**"}]`, r.Form.Get("blocks"))
+			}
+			require.NotContains(t, r.Form, "initial_comment")
 			require.Empty(t, r.Form.Get("reply_broadcast"))
 			_, _ = w.Write([]byte(`{"ok":true,"files":[{"id":"FTEST","title":"Photo"}]}`))
 		case "/files.info":
@@ -229,7 +234,8 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 		case "/chat.postMessage":
 			require.Equal(t, "true", r.Form.Get("reply_broadcast"))
 			require.Equal(t, "123.000001", r.Form.Get("thread_ts"))
-			require.Equal(t, "<https://example.test/file|Photo>", r.Form.Get("text"))
+			require.Equal(t, "[Photo](https://example.test/file)", r.Form.Get("markdown_text"))
+			require.NotContains(t, r.Form, "text")
 			_, _ = w.Write([]byte(`{"ok":true,"ts":"124.000001"}`))
 		case "/reactions.add":
 			require.Equal(t, "CTEST", r.Form.Get("channel"))
@@ -252,6 +258,7 @@ func TestUploadBroadcastReactionAndHistory(t *testing.T) {
 	result = invoke(t, a, name+"_upload_file", args)
 	require.Contains(t, string(result), `"permalink":"https://example.test/file"`)
 	missingInfo = true
+	delete(args, "text")
 	result = invoke(t, a, name+"_upload_file", args)
 	require.Contains(t, string(result), `"warning"`)
 	sends, err = a.history.ListOutbound(t.Context(), Conversation(name, "CTEST", "123.000001"), 10)

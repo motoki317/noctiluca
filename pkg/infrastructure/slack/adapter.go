@@ -181,8 +181,7 @@ func (a *adapter) post(ctx context.Context, ref domain.ConversationRef, message 
 	if broadcast && thread == "" {
 		return "", errors.New("broadcast requires a thread")
 	}
-	text := mrkdwn(message.Text)
-	options := []sdk.MsgOption{sdk.MsgOptionText(text, false)}
+	options := []sdk.MsgOption{sdk.MsgOptionMarkdownText(message.Text)}
 	if thread != "" {
 		options = append(options, sdk.MsgOptionTS(thread))
 	}

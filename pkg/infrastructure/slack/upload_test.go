@@ -42,7 +42,6 @@ func TestBroadcastUpload(t *testing.T) {
 		name        string
 		extension   string
 		text        string
-		wantText    string
 		filename    string
 		failures    []string
 		cancelAfter time.Duration
@@ -50,12 +49,12 @@ func TestBroadcastUpload(t *testing.T) {
 		wantPosts   int
 		wantWait    time.Duration
 	}{
-		{name: "png", extension: "png", text: "**photo**", wantText: "*photo*", wantPosts: 1},
-		{name: "jpg", extension: "jpg", text: "**photo**", wantText: "*photo*", wantPosts: 1},
+		{name: "png", extension: "png", text: "「**photo**」\n- A & B", wantPosts: 1},
+		{name: "jpg", extension: "jpg", text: "**photo**", wantPosts: 1},
 		{name: "gif without caption", extension: "gif", wantPosts: 1},
-		{name: "literal filename", extension: "png", filename: "<!channel>&.png", wantText: "&lt;!channel&gt;&amp;.png", wantPosts: 1},
-		{name: "caption at limit", extension: "png", text: strings.Repeat("界", 3000), wantText: strings.Repeat("界", 3000), wantPosts: 1},
-		{name: "processing", extension: "png", text: "**photo**", wantText: "*photo*", failures: []string{"invalid_blocks"}, wantPosts: 2, wantWait: 2 * time.Second},
+		{name: "literal filename", extension: "png", filename: "<!channel>&.png", wantPosts: 1},
+		{name: "caption at limit", extension: "png", text: strings.Repeat("界&", 6000), wantPosts: 1},
+		{name: "processing", extension: "png", text: "**photo**", failures: []string{"invalid_blocks"}, wantPosts: 2, wantWait: 2 * time.Second},
 		{name: "processing exhausted", extension: "png", failures: []string{"invalid_blocks", "invalid_blocks", "invalid_blocks", "invalid_blocks", "invalid_blocks", "invalid_blocks"}, wantError: "invalid_blocks", wantPosts: 6, wantWait: 10 * time.Second},
 		{name: "permission denied", extension: "png", failures: []string{"not_in_channel"}, wantError: "not_in_channel", wantPosts: 1},
 		{name: "ambiguous server failure", extension: "png", failures: []string{"http_error"}, wantError: "broadcast Slack image failed", wantPosts: 1},
@@ -112,14 +111,11 @@ func TestBroadcastUpload(t *testing.T) {
 						require.Equal(t, "CTEST", r.Form.Get("channel"))
 						require.Equal(t, "123.000001", r.Form.Get("thread_ts"))
 						require.Equal(t, "true", r.Form.Get("reply_broadcast"))
+						require.NotContains(t, r.Form, "text")
+						require.NotContains(t, r.Form, "markdown_text")
 						var blocks []map[string]any
 						if tc.text != "" {
-							blocks = append(blocks, map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": tc.wantText}})
-						}
-						if tc.wantText == "" {
-							require.Equal(t, filename, r.Form.Get("text"))
-						} else {
-							require.Equal(t, tc.wantText, r.Form.Get("text"))
+							blocks = append(blocks, map[string]any{"type": "markdown", "text": tc.text})
 						}
 						blocks = append(blocks, map[string]any{"type": "image", "slack_file": map[string]string{"id": "FTEST"}, "alt_text": filename})
 						want, err := json.Marshal(blocks)
@@ -189,19 +185,20 @@ func TestBroadcastUpload(t *testing.T) {
 	}
 }
 
-func TestBroadcastUploadRejectsInvalidInput(t *testing.T) {
+func TestUploadRejectsInvalidInput(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		thread string
-		body   []byte
-		text   string
-		want   string
+		name      string
+		thread    string
+		body      []byte
+		text      string
+		broadcast bool
+		want      string
 	}{
-		{name: "missing thread", body: []byte("\x89PNG\r\n\x1a\n"), want: "broadcast requires thread_ts"},
-		{name: "text named png", thread: "123.000001", body: []byte("not an image"), want: "PNG, JPEG, or GIF"},
-		{name: "empty file", thread: "123.000001", want: "nonempty regular file"},
-		{name: "caption over limit", thread: "123.000001", body: []byte("\x89PNG\r\n\x1a\n"), text: strings.Repeat("界", 3001), want: "caption must be at most 3000 characters"},
-		{name: "caption expands over limit", thread: "123.000001", body: []byte("\x89PNG\r\n\x1a\n"), text: strings.Repeat("&", 601), want: "caption must be at most 3000 characters"},
+		{name: "missing thread", broadcast: true, body: []byte("\x89PNG\r\n\x1a\n"), want: "broadcast requires thread_ts"},
+		{name: "text named png", broadcast: true, thread: "123.000001", body: []byte("not an image"), want: "PNG, JPEG, or GIF"},
+		{name: "empty file", broadcast: true, thread: "123.000001", want: "nonempty regular file"},
+		{name: "broadcast caption over limit", broadcast: true, thread: "123.000001", body: []byte("\x89PNG\r\n\x1a\n"), text: strings.Repeat("界", 12001), want: "caption must be at most 12000 characters"},
+		{name: "caption over limit", body: []byte("file"), text: strings.Repeat("界", 12001), want: "caption must be at most 12000 characters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "image.png")
@@ -210,7 +207,7 @@ func TestBroadcastUploadRejectsInvalidInput(t *testing.T) {
 				t.Errorf("invalid input called Slack API %s", r.URL.Path)
 				w.WriteHeader(http.StatusBadRequest)
 			}, true)
-			_, err := a.upload(t.Context(), toolInput{Channel: "CTEST", Thread: tc.thread, Path: path, Text: tc.text, Broadcast: true})
+			_, err := a.upload(t.Context(), toolInput{Channel: "CTEST", Thread: tc.thread, Path: path, Text: tc.text, Broadcast: tc.broadcast})
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
