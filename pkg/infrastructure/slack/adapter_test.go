@@ -37,6 +37,7 @@ func apiInstance(t *testing.T, name string, handler http.HandlerFunc, user bool)
 }
 
 func TestSendAndGroups(t *testing.T) {
+	const markdown = "「**bold**」と`code`\n- [link](https://example.test) & <plain>"
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
 		switch r.URL.Path {
@@ -44,7 +45,9 @@ func TestSendAndGroups(t *testing.T) {
 			require.Equal(t, "xoxb-test", r.Form.Get("token"))
 			require.Equal(t, "CTEST", r.Form.Get("channel"))
 			require.Equal(t, "123.000001", r.Form.Get("thread_ts"))
-			require.Contains(t, r.Form.Get("text"), "*bold* <https://example.test|link>")
+			require.Equal(t, markdown, r.Form.Get("markdown_text"))
+			require.NotContains(t, r.Form, "text")
+			require.NotContains(t, r.Form, "blocks")
 			_, _ = w.Write([]byte(`{"ok":true,"channel":"CTEST","ts":"124.000001"}`))
 		case "/usergroups.users.list":
 			require.Equal(t, "xoxb-test", r.Form.Get("token"))
@@ -55,22 +58,12 @@ func TestSendAndGroups(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	}, true)
-	id, err := a.Send(t.Context(), Conversation("slack", "CTEST", "123.000001"), domain.OutboundMessage{Text: "**bold** [link](https://example.test)"})
+	id, err := a.Send(t.Context(), Conversation("slack", "CTEST", "123.000001"), domain.OutboundMessage{Text: markdown})
 	require.NoError(t, err)
 	require.Equal(t, "124.000001", id)
 	groups, err := a.UserGroups(t.Context(), []string{"GTEST"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"UMEMBER"}, groups["GTEST"])
-}
-
-func TestMarkdown(t *testing.T) {
-	require.Equal(t, "*Title*\n• *bold* <https://example.test|site>\n1. item\n`**literal**`\n```\n# raw\n```\n<@USER> &amp; &lt;plain&gt;", mrkdwn("# Title\n- **bold** [site](https://example.test)\n1. item\n`**literal**`\n```\n# raw\n```\n<@USER> & <plain>"))
-}
-
-func TestMarkdownAroundLiterals(t *testing.T) {
-	require.Equal(t, "*bold*", mrkdwn("__bold__"))
-	require.Equal(t, "*run `code` now*\n*Use `tool`*", mrkdwn("**run `code` now**\n# Use `tool`"))
-	require.Equal(t, "*Hi <@USER>*", mrkdwn("# Hi <@USER>"))
 }
 
 func TestBotReactionClassification(t *testing.T) {

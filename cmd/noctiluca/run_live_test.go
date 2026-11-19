@@ -60,14 +60,14 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	releaseFollow := func() { followReleaseOnce.Do(func() { close(followRelease) }) }
 	defer releaseFollow()
 	slack := newRunSlack(t, func(ctx context.Context, post url.Values) {
-		if post.Get("thread_ts") == "500.000001" && strings.Contains(post.Get("text"), "CEDAR_47") {
+		if post.Get("thread_ts") == "500.000001" && strings.Contains(post.Get("markdown_text"), "CEDAR_47") {
 			followEnteredOnce.Do(func() { close(followEntered) })
 			select {
 			case <-followRelease:
 			case <-ctx.Done():
 			}
 		}
-		if strings.TrimSpace(post.Get("text")) == "QUEUE_FIRST" {
+		if strings.TrimSpace(post.Get("markdown_text")) == "QUEUE_FIRST" {
 			enteredOnce.Do(func() { close(entered) })
 			select {
 			case <-release:
@@ -116,9 +116,9 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 	reply := func(t *testing.T, channel, thread, word string) {
 		t.Helper()
 		post := liveTake(t, slack.posts)
-		require.Equal(t, channel, post.Get("channel"), "post text: %s", post.Get("text"))
+		require.Equal(t, channel, post.Get("channel"), "post text: %s", post.Get("markdown_text"))
 		require.Equal(t, thread, post.Get("thread_ts"))
-		require.Contains(t, post.Get("text"), word)
+		require.Contains(t, post.Get("markdown_text"), word)
 	}
 	idle := func(t *testing.T) domain.Session {
 		t.Helper()
@@ -194,9 +194,9 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 			seen[thread] = true
 			switch thread {
 			case "200.000001":
-				require.Contains(t, post.Get("text"), "5")
+				require.Contains(t, post.Get("markdown_text"), "5")
 			case "201.000001":
-				require.Contains(t, post.Get("text"), "Paris")
+				require.Contains(t, post.Get("markdown_text"), "Paris")
 			default:
 				t.Fatalf("wrong reply thread: %+v", post)
 			}
@@ -221,17 +221,17 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		}, 10*time.Second, 10*time.Millisecond)
 		first := liveTake(t, slack.posts)
 		require.Equal(t, "500.000001", first.Get("thread_ts"))
-		require.Contains(t, first.Get("text"), "CEDAR_47")
-		texts := []string{first.Get("text")}
-		if !strings.Contains(first.Get("text"), "了解") {
+		require.Contains(t, first.Get("markdown_text"), "CEDAR_47")
+		texts := []string{first.Get("markdown_text")}
+		if !strings.Contains(first.Get("markdown_text"), "了解") {
 			post := liveTake(t, slack.posts)
 			require.Equal(t, "C_ROOM", post.Get("channel"))
 			require.Equal(t, "500.000001", post.Get("thread_ts"))
-			texts = append(texts, post.Get("text"))
+			texts = append(texts, post.Get("markdown_text"))
 		}
 		idle(t)
 		for len(slack.posts) > 0 {
-			texts = append(texts, liveTake(t, slack.posts).Get("text"))
+			texts = append(texts, liveTake(t, slack.posts).Get("markdown_text"))
 		}
 		require.Equal(t, 1, strings.Count(strings.Join(texts, "\n"), "CEDAR_47"), "repeated the first answer: %v", texts)
 		require.Contains(t, strings.Join(texts, "\n"), "了解")
@@ -349,8 +349,8 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		require.NoError(t, os.WriteFile(path, []byte("NATIVE_READ_OK"), 0600))
 		send(t, "D_NATIVE", "400.000001", fmt.Sprintf("Read %q using the native Read tool. Run pwd using the native Bash tool from directory %q. Reply here with the file contents and the directory output. These are explicitly authorized smoke-test operations outside the workdir.", path, dir))
 		post := liveTake(t, slack.posts)
-		require.Contains(t, post.Get("text"), "NATIVE_READ_OK")
-		require.Contains(t, post.Get("text"), dir)
+		require.Contains(t, post.Get("markdown_text"), "NATIVE_READ_OK")
+		require.Contains(t, post.Get("markdown_text"), dir)
 		idle(t)
 		events, err := repository.NewEventRepository(app.db).ListModel(t.Context(), domain.MainSessionKey, 100)
 		require.NoError(t, err)
