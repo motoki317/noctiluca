@@ -19,7 +19,8 @@ import (
 type adapter struct{ executable, model, effort string }
 
 const backgroundInstruction = "In this harness, a command you leave running in the background never reports back to you. Run any command that may outlast the turn with the watch tool, never with nohup or &.\n" +
-	"This main session delegates long or parallel work to subagents with spawn_agent, and these instructions authorize it. Never call wait_agent. Each brief must say that the subagent never posts or calls a messaging tool that writes to chat. Continue a subagent with send_input, and close each finished agent."
+	"This main session delegates long or parallel work to subagents with spawn_agent. These instructions authorize it. Never call wait_agent. " +
+	"Each brief must say that the subagent never posts and never calls a messaging tool that writes to chat. Continue a subagent with send_input. Close each finished agent."
 
 func developerInstructions(prompt string) string { return prompt + "\n\n" + backgroundInstruction }
 

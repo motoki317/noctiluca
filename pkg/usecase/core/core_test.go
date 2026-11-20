@@ -216,7 +216,7 @@ func TestConversationFlow(t *testing.T) {
 	s := take(t, f.model.opened)
 	require.NotContains(t, take(t, s.inputs).Text, "fresh context")
 	require.Contains(t, s.config.SystemPrompt, "fresh context")
-	require.Contains(t, s.config.SystemPrompt, "When an input includes a Context line, call the compact tool at your next break:")
+	require.Contains(t, s.config.SystemPrompt, "For compact, a break is a point where nothing you started in this context is half-done")
 	require.True(t, f.hub.active(domain.MainSessionKey))
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnStarted}
 	s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}

@@ -28,7 +28,7 @@ const MinimumVersion = "2.1.316"
 // AlwaysOfferedToolMeta keeps built-in tool schemas available after CLI compaction.
 var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
 
-const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the chat-writing tools. Continue a subagent with SendMessage.`
+const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the chat-writing tools.`
 
 func systemPrompt(prompt string) string {
 	if prompt == "" {
