@@ -33,9 +33,10 @@ type toolInput struct {
 
 func (a *adapter) ToolNotes(ctx context.Context) string {
 	notes := fmt.Sprintf(`Channel, thread, and message arguments are bare numeric IDs. The input's channel and thread locate the conversation.
-Use %[1]s_send to post text. Omit thread for top-level chat, including quick investigations and their results.
-To start a thread, set thread to the input's message ID. Start a thread only for a project that spans days or when asked.
-For an existing thread, copy thread. In a DM, omit thread. Use %[1]s_read_history and %[1]s_read_thread for context. Only user mentions notify.
+Omit thread for top-level chat, including quick investigations and their results.
+Start a thread only for a project that spans days, or when asked. To start one, set thread to the input's message ID.
+For an existing thread, copy thread. In a DM, omit thread.
+Only user mentions notify.
 If an answer needs any tool besides %[1]s_send, first show that you started: call %[1]s_react with message_channel as channel and message as message.`, a.name)
 	if a.config.Owner == "" {
 		return notes

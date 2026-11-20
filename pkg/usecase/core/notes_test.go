@@ -73,7 +73,7 @@ func TestOwnerDMFailureDoesNotBlockPrompt(t *testing.T) {
 		m.in <- message(domain.ConversationRef("chat:"+text), "owner", text)
 		model := take(t, f.model.opened)
 		require.Contains(t, take(t, model.inputs).Text, text)
-		require.Contains(t, model.config.SystemPrompt, "Use chat_send to post text.")
+		require.Contains(t, model.config.SystemPrompt, "Write chat_send text and chat_upload_file captions in Markdown")
 		if i == 0 {
 			require.NotContains(t, model.config.SystemPrompt, "Owner DM:")
 		} else {

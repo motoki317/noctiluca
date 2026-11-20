@@ -51,6 +51,6 @@ type ConversationFilter interface {
 	SetConversationFilter(func(ConversationRef) bool)
 }
 
-const PostingGuidance = "Post only when addressed (a mention, a request to you, or a DM) or reporting requested work. " +
+const PostingGuidance = "Post only when someone addresses you (a mention, a request to you, or a DM), or to report requested work. " +
 	"If the message arrived before your last reply, answer only what it adds. Do not repeat your previous reply. " +
 	"If a follow-up asks to append a phrase, send only that phrase once the answer is posted."
