@@ -1,8 +1,9 @@
-<!-- Original text: MIT (LICENSE). Research ideas: ACE, Reflexion, Letta, and Mem0. Sources retain their own licenses. See THIRD_PARTY_NOTICES.md. -->
 # Save and restructure memory
 
 The `main` session holds the context of every conversation, scheduled task, and background result.
 After `rest`, a fresh `main` process knows only its system prompt and what it reads from memory.
+
+If procedures/rest.md exists in memory, read it first. It adds this instance's own steps, and each step says where it fits.
 
 ## Save what the next process needs
 
@@ -43,6 +44,7 @@ Add the item, update the entry that covers it, delete entries it makes obsolete,
 - Give a theme with several pages a hub page that links them. Merge duplicates.
 - Merge another person's page with yours only when they obviously duplicate each other. Propose other changes to their pages.
 - Merge rules that say the same thing. Move a rule that only one procedure needs into that procedure. Delete obsolete rules.
+- Keep in procedures/rest.md only the steps that this procedure lacks. Delete any step there that repeats one here.
 - Measure files with `wc -c`. Split a long-term or external file over 8 KB by theme.
 - Shorten `core.md` or `short-term.md` over 8 KB by moving detail to where it belongs.
 - Commit each change separately. Keep edits small because whole-document rewrites lose detail.

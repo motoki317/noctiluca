@@ -25,12 +25,12 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 				"- Everything outside owner/ is your own memory, in three tiers. Keep each file under 8 KB.\n"+
 				"  - Short-term, short-term.md: the exact state of open work, such as requests and promised follow-ups. Delete an entry when its work ends.\n"+
 				"  - Long-term, core.md and long-term/: rules generalized from repeated experience, with few specific facts. core.md holds what every turn needs, an index of long-term/, and pointers to at most ten theme hubs: pages that link the pages of one external theme.\n"+
-				"  - External: specific facts and procedures, organized by theme. Put what may be shared in the knowledge system the owner connected, if any, and private ones under external/. procedures/ holds procedures. The heartbeat and rest schedules send procedures/heartbeat.md and procedures/rest.md.\n"+
+				"  - External: specific facts and procedures, organized by theme. Put what may be shared in the knowledge system the owner connected, if any, and private ones under external/. procedures/ holds procedures. The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure, and procedures/rest.md adds this instance's own rest steps.\n"+
 				"- Commit each change with a message that says why.\n"+
 				"- Commit only paths you changed, because subagents and background commands also commit here.\n"+
 				"- Retry if git reports a lock.\n"+
 				"- Before you call compact, make sure short-term.md lists all open work.\n"+
-				"- Follow procedures/rest.md only when the nightly schedule sends it. Call the rest tool only as its last step.\n", memory.Dir())
+				"- Follow the rest procedure only when the nightly schedule sends it. Call the rest tool only as its last step.\n", memory.Dir())
 			if hasRemote {
 				context.WriteString("- The memory repository pushes to a remote backup that nothing else writes. Push after each commit. When a push is rejected, run `git push --force-with-lease`; never pull. Tell the owner when a push fails for another reason.\n")
 			}

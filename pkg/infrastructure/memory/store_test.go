@@ -74,28 +74,27 @@ func TestHasRemoteWithoutURL(t *testing.T) {
 }
 
 func TestSeedDefaultProcedures(t *testing.T) {
+	const name = "procedures/hillclimb.md"
 	dir := t.TempDir()
 	_, err := memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
 	require.NoDirExists(t, filepath.Join(dir, "topics"))
-	for _, name := range []string{"procedures/hillclimb.md", "procedures/rest.md"} {
-		want, err := memoryusecase.Procedures.ReadFile(name)
-		require.NoError(t, err)
-		got, err := os.ReadFile(filepath.Join(dir, name))
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-		require.Equal(t, string(want), git(t, dir, "show", "HEAD:"+name))
-		info, err := os.Stat(filepath.Join(dir, name))
-		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0600), info.Mode().Perm())
-	}
+	want, err := memoryusecase.Procedures.ReadFile(name)
+	require.NoError(t, err)
+	got, err := os.ReadFile(filepath.Join(dir, name))
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, string(want), git(t, dir, "show", "HEAD:"+name))
+	info, err := os.Stat(filepath.Join(dir, name))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 	require.Empty(t, git(t, dir, "status", "--porcelain"))
 	head := git(t, dir, "rev-parse", "HEAD")
 	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
 	require.Equal(t, head, git(t, dir, "rev-parse", "HEAD"))
 
-	require.NoError(t, os.Remove(filepath.Join(dir, "procedures/hillclimb.md")))
+	require.NoError(t, os.Remove(filepath.Join(dir, name)))
 	_, err = memory.New(t.Context(), memory.Config{Path: dir, Defaults: memoryusecase.Procedures})
 	require.NoError(t, err)
 	require.Empty(t, git(t, dir, "status", "--porcelain"))
@@ -132,7 +131,7 @@ func TestSeedingCanRestartAfterGitFailure(t *testing.T) {
 		for _, indexed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/indexed=%t", lock, indexed), func(t *testing.T) {
 				_, dir := setup(t)
-				name := "procedures/rest.md"
+				name := "procedures/hillclimb.md"
 				if indexed {
 					require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("staged"), 0600))
 					git(t, dir, "add", "--", name)
