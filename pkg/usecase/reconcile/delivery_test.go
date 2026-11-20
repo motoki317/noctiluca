@@ -137,36 +137,28 @@ func TestConversationFollowupRequiresAcceptRuleBeforeOpen(t *testing.T) {
 	require.Zero(t, attempts)
 	require.Equal(t, "session no longer has an accept rule", reason)
 }
-func TestTaskProcedureReplacesInputOrSkips(t *testing.T) {
-	for _, text := range []string{"", "procedure instructions"} {
-		t.Run(text, func(t *testing.T) {
-			f := newDeliveryRig(t, Config{
-				Procedure: func(_ context.Context, name string) (string, error) {
-					require.Equal(t, "heartbeat", name)
-					return text, nil
-				},
-			})
-			require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: domain.MainSessionKey, ResumeToken: "saved"}))
-			f.start(t)
-			item := TaskItem("heartbeat", "run", "")
-			item.Payload.Procedure = "heartbeat"
-			id, err := f.inbox.Enqueue(t.Context(), item)
-			require.NoError(t, err)
-			f.runner.Notify()
-			if text != "" {
-				s := take(t, f.model.opened)
-				require.Equal(t, text, take(t, s.inputs).Text)
-			}
-			f.status(t, id, "done")
-			if text == "" {
-				require.Equal(t, "saved", f.turn(t, false).ResumeToken)
-				require.Empty(t, f.model.opened)
-			}
-			var attempts int
-			require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
-			require.Zero(t, attempts)
-		})
-	}
+
+func TestTaskProcedureReplacesInput(t *testing.T) {
+	const text = "procedure instructions"
+	f := newDeliveryRig(t, Config{
+		Procedure: func(_ context.Context, name string) (string, error) {
+			require.Equal(t, "heartbeat", name)
+			return text, nil
+		},
+	})
+	require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: domain.MainSessionKey, ResumeToken: "saved"}))
+	f.start(t)
+	item := TaskItem("heartbeat", "run", "")
+	item.Payload.Procedure = "heartbeat"
+	id, err := f.inbox.Enqueue(t.Context(), item)
+	require.NoError(t, err)
+	f.runner.Notify()
+	s := take(t, f.model.opened)
+	require.Equal(t, text, take(t, s.inputs).Text)
+	f.status(t, id, "done")
+	var attempts int
+	require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", id).Scan(&attempts))
+	require.Zero(t, attempts)
 }
 
 func TestScheduleToolRequiresFiveFields(t *testing.T) {

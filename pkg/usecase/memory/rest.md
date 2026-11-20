@@ -3,7 +3,7 @@
 The `main` session holds the context of every conversation, scheduled task, and background result.
 After `rest`, a fresh `main` process knows only its system prompt and what it reads from memory.
 
-If procedures/rest.md exists in memory, read it first. It adds this instance's own steps. Each step says where it fits in this procedure.
+If procedures/rest.md exists in memory, read it first. Each of its steps says where it fits in this procedure, or quotes the sentence here that it replaces. Write a step that replaces a sentence here only when the owner asks for it.
 
 ## Save what the next process needs
 
@@ -44,7 +44,7 @@ Then add the item, update the entry that covers it, delete entries that it makes
 - Give a theme with several pages a hub page that links them. Merge duplicate pages.
 - Merge another person's page with yours only when the two obviously duplicate each other. Propose other changes to their pages.
 - Merge rules that say the same thing. Move a rule that only one procedure needs into that procedure. Delete obsolete rules.
-- Keep in procedures/rest.md only the steps that this procedure lacks. Delete any step there that repeats one here.
+- Delete any step in procedures/rest.md that only repeats a step here.
 - Measure files with `wc -c`. Split a long-term or external file over 8 KB by theme.
 - Shorten `core.md` or `short-term.md` over 8 KB by moving detail to where it belongs.
 - Commit each change separately. Keep edits small, because whole-document rewrites lose detail.

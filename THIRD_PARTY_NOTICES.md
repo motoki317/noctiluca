@@ -92,7 +92,7 @@ No upstream implementation code was copied.
 ## Research and design
 
 These credits acknowledge ideas, not copied research code or paper text. They do not apply noctiluca's MIT License to the referenced works.
-The rest procedure text in `pkg/usecase/memory/rest.md` is original and MIT-licensed.
+The heartbeat and rest procedure texts in `pkg/usecase/memory/` are original and MIT-licensed.
 
 | Source | Influence on noctiluca |
 |---|---|

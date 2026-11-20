@@ -134,7 +134,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	}
 	agent, err := core.New(core.Config{
 		Workdir: config.Model.Workdir,
-		Jobs:    jobs, Procedure: memoryusecase.Procedure(store),
+		Jobs:    jobs, Procedure: memoryusecase.Procedure,
 	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {
