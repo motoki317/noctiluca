@@ -32,9 +32,11 @@ func TestMainSessionNotes(t *testing.T) {
 	notes := (&core{messaging: router}).toolNotes(t.Context())
 	for _, rule := range []string{
 		"Only this session receives inputs.",
-		"Post content from one conversation in another only when that audience is allowed to see it.",
+		"Post what you read in a conversation or with a tool only to people who are allowed to see it.",
 		"Write each post for a reader who reads it in about ten seconds. Put the result or the ask first. Keep one or two points. " +
 			"Leave the rest to a follow-up or a link. Use the reader's words.",
+		"You own what you start. Carry it to its end. Then remove what you made only to do it",
+		"Only then is the task over.",
 		"Long context lowers the quality of your work without your noticing. For compact, a break is a point where nothing you started in this context is half-done and every reply it owes is posted. " +
 			"Running background tasks and subagents do not prevent a break. Do not rest because of long context.\n\nDelegation:",
 		"- Keep open-ended work here, because this session must know the whole state to answer every message. Split it into closed tasks: each a question to answer or a change to make, with a defined result. " +

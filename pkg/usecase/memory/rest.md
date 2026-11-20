@@ -9,7 +9,7 @@ If procedures/rest.md exists in memory, read it first. Each of its steps says wh
 
 Read `short-term.md` in full. Add what it lacks:
 
-- Open work and promised follow-ups: each request, with its messaging entry and native destination IDs, its done condition, and its latest status.
+- Open work, each in an entry as the memory notes describe.
 - Pending `watch` commands and `wake_at` notes, and what each is for.
 
 Save the facts learned across conversations, tasks, and background results under their theme in external memory.
@@ -60,7 +60,6 @@ Do not change `owner/`, tools, or the harness yourself. Propose such changes to 
 
 If you merged other people's pages or have new proposals, send the owner a brief report.
 Send it with the tool and channel that an "Owner DM" line in the messaging notes names.
-Record each sent proposal in short-term memory until the owner decides or it no longer applies.
 With nothing new, post nothing.
 
 ## Rest

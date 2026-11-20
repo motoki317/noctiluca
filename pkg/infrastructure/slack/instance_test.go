@@ -68,6 +68,7 @@ func TestInstanceReferencesAndTools(t *testing.T) {
 	require.Contains(t, notes, "Owner DM: use support_2_send with channel=D1 and no thread_ts.")
 	require.Contains(t, notes, "For work, set thread_ts to timestamp")
 	require.Contains(t, notes, "where the input arrived.\nWrite support_2_send text and support_2_upload_file captions in Markdown")
+	require.Contains(t, notes, "For a thread, including one that you start, call support_2_set_status.")
 	require.Contains(t, tools[len(tools)-1].Description, domain.PostingGuidance)
 
 }
