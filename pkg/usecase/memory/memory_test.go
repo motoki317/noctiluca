@@ -31,7 +31,7 @@ func TestPromptMemoryNotes(t *testing.T) {
 	require.Contains(t, prompt, "Hook instructions")
 	require.Contains(t, prompt, "Subagents and background commands also commit here. Commit only the paths you changed. Retry if git reports a lock.")
 	require.Contains(t, prompt, "Before you call compact, make sure short-term.md lists all open work.")
-	require.Contains(t, prompt, "The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure. procedures/rest.md adds this instance's own rest steps.")
+	require.Contains(t, prompt, "The heartbeat and rest schedules send procedures built into noctiluca. procedures/heartbeat.md and procedures/rest.md hold this instance's own steps for them.")
 	require.Contains(t, prompt, "Follow the rest procedure only when the nightly schedule sends it. Call the rest tool only as its last step.")
 	require.NotContains(t, prompt, "when you judge that your context needs a fresh start")
 	prompt, err = memoryusecase.Prompt(nil, "", nil)(t.Context(), domain.ToolSession{})

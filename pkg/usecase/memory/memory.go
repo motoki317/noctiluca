@@ -27,7 +27,7 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 				"  - Long-term, core.md and long-term/: rules generalized from repeated experience, with few specific facts. core.md holds what every turn needs and an index of long-term/. "+
 				"It also points to at most ten theme hubs. A theme hub is a page that links the pages of one external theme.\n"+
 				"  - External: specific facts and procedures, organized by theme. If the owner connected a knowledge system, put the shareable ones there. Put all others under external/. "+
-				"procedures/ holds procedures. The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure. procedures/rest.md adds this instance's own rest steps.\n"+
+				"procedures/ holds procedures. The heartbeat and rest schedules send procedures built into noctiluca. procedures/heartbeat.md and procedures/rest.md hold this instance's own steps for them.\n"+
 				"- Commit each change with a message that says why.\n"+
 				"- Subagents and background commands also commit here. Commit only the paths you changed. Retry if git reports a lock.\n"+
 				"- Before you call compact, make sure short-term.md lists all open work.\n"+

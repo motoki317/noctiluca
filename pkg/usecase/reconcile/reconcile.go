@@ -156,7 +156,6 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		var item *domain.InboxItem
 		prompt := schedule.Prompt
 		if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "rest") {
-			// File reads run with the item, never in the reconciliation loop.
 			prompt = "Run the " + schedule.Name + " procedure."
 		}
 		if prompt != "" {
@@ -312,11 +311,6 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			prepareCtx, cancel := context.WithTimeout(ctx, operationTimeout)
 			if r.config.Procedure != nil && item.Payload.Procedure != "" {
 				input.Text, err = r.config.Procedure(prepareCtx, item.Payload.Procedure)
-				if err == nil && input.Text == "" {
-					cancel()
-					emit(result{delivered: true, skipped: true})
-					continue
-				}
 			}
 			if err == nil && r.config.Prepare != nil {
 				item.Payload.Input = input
