@@ -33,6 +33,8 @@ func TestMainSessionNotes(t *testing.T) {
 	for _, rule := range []string{
 		"Only this session receives inputs and posts.",
 		"Post content from one conversation in another only when that audience is allowed to see it.",
+		"Write each post for a reader who reads it in about ten seconds. Put the result or the ask first. Keep one or two points. " +
+			"Leave the rest to a follow-up or a link. Use the reader's words.",
 		"Long context lowers the quality of your work without your noticing. When an input includes a Context line, call the compact tool at your next break: " +
 			"nothing you started in this context is half-done, and every reply it owes is posted. Background tasks and subagents may keep running. " +
 			"Compaction runs after the turn ends. Do not rest for this.\n\nDelegation:",
