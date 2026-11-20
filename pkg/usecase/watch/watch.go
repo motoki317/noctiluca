@@ -49,7 +49,7 @@ func (w *watcher) Start(ctx context.Context) error {
 		return err
 	}
 	for _, pending := range unfinished {
-		if err := w.repo.Complete(ctx, pending.ID, fmt.Sprintf("watch %q interrupted by restart; exit unknown", pending.Command), time.Now()); err != nil {
+		if err := w.repo.Complete(ctx, pending.ID, fmt.Sprintf("watch %q was interrupted by a restart, so its exit code is unknown", pending.Command), time.Now()); err != nil {
 			return err
 		}
 	}
