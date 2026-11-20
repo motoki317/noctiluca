@@ -10,8 +10,8 @@ import (
 func TestProcedureRest(t *testing.T) {
 	frame, err := memoryusecase.Procedure(t.Context(), "rest")
 	require.NoError(t, err)
-	require.Contains(t, frame, "If procedures/rest.md exists in memory, read it first. It adds this instance's own steps. Each step says where it fits in this procedure.")
-	require.Contains(t, frame, "- Keep in procedures/rest.md only the steps that this procedure lacks. Delete any step there that repeats one here.")
+	require.Contains(t, frame, "If procedures/rest.md exists in memory, read it first. Each of its steps says where it fits in this procedure, or quotes the sentence here that it replaces. Write a step that replaces a sentence here only when the owner asks for it.")
+	require.Contains(t, frame, "- Delete any step in procedures/rest.md that only repeats a step here.")
 	require.NotContains(t, frame, "<!--")
 }
 
