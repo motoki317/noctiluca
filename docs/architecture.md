@@ -95,7 +95,8 @@ A model process closes in these cases:
 - noctiluca stops or restarts.
 - The model CLI exits or is killed.
 
-The nightly `rest` schedule sends `procedures/rest.md` to `main` as a task input.
+The nightly `rest` schedule sends noctiluca's rest procedure to `main` as a task input.
+The procedure tells the model to read memory's `procedures/rest.md` first, if it exists, for this instance's own steps.
 The core `rest` tool immediately clears the saved resume token and marks `main` to close at idle.
 The process closes once no turn, waiting input, or native background work of the model CLI remains.
 Inputs that arrive before that idle point still run in the old process.
