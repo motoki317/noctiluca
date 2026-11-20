@@ -46,7 +46,11 @@ Everything else belongs to the agent, which reads and edits memory with its nati
 
 To back up memory, give the memory repository a Git remote: a private repository that the Unix user running noctiluca can push to without a prompt. Memory holds what the agent learns about your work. In the memory directory, run `git remote add origin <url>` and `git push -u origin HEAD`. The agent's pushes run in noctiluca's environment, not your shell, so an SSH key with a passphrase works only if the service can reach an ssh-agent that holds it. When a model process opens, noctiluca checks for a remote URL; with one, the prompt tells the agent to push after each commit, to answer a rejected push with `git push --force-with-lease`, and to tell you about any other push failure. The remote mirrors the local history rather than keeping every version, so nothing else may push to it: edit and commit `owner/` in the memory directory, not in another clone or a web editor. Commit your `owner/` edits yourself; the agent's next push carries them.
 
-At startup, noctiluca writes and commits missing defaults for `procedures/hillclimb.md` and `procedures/rest.md`. To use newer shipped text, delete the corresponding procedure before restarting. You can also write `procedures/heartbeat.md` for the heartbeat to follow. It is outside `owner/`, so the agent can edit it later. Without that file, the heartbeat does nothing.
+The nightly rest sends noctiluca's rest procedure, [`pkg/usecase/memory/rest.md`](../pkg/usecase/memory/rest.md), which is built into the binary. To add steps for your instance, write them in memory's `procedures/rest.md`, and name in each step the section of noctiluca's procedure where it fits. noctiluca's procedure tells the agent to read memory's `procedures/rest.md` first, and to keep in it only the steps that noctiluca's procedure lacks.
+
+Versions up to v0.15.2 copied the rest procedure into memory's `procedures/rest.md`. When you upgrade, reduce that copy to your own steps, or delete it. Otherwise the agent reads the old copy as extra steps, and deletes from it only the steps that it finds repeated. An empty `procedures/rest.md` no longer turns rest off. To turn it off, set `rest.enabled: false`. Those versions also added `procedures/hillclimb.md`, which no schedule sends. An existing copy stays in memory with the agent's other files.
+
+You can also write `procedures/heartbeat.md` for the heartbeat to follow. It is outside `owner/`, so the agent can edit it later. Without that file, the heartbeat does nothing.
 
 ## Conversation events
 

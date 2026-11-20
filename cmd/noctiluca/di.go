@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -73,7 +72,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 			result = errors.Join(result, hub.Shutdown(stopCtx))
 		}
 	}()
-	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir, Defaults: memoryusecase.Procedures})
+	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir})
 	if err != nil {
 		return nil, err
 	}
@@ -128,13 +127,6 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 			}
 		}
 	}
-	procedure := func(ctx context.Context, name string) (string, error) {
-		text, err := store.Read(ctx, "procedures/"+name+".md")
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return strings.TrimSpace(text), err
-	}
 	for i := range jobs {
 		if jobs[i].Workdir == "" {
 			jobs[i].Workdir = config.Model.Workdir
@@ -142,7 +134,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	}
 	agent, err := core.New(core.Config{
 		Workdir: config.Model.Workdir,
-		Jobs:    jobs, Procedure: procedure,
+		Jobs:    jobs, Procedure: memoryusecase.Procedure(store),
 	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {

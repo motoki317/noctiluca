@@ -2,13 +2,11 @@ package memory
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -17,8 +15,7 @@ import (
 )
 
 type Config struct {
-	Path     string `mapstructure:"path"`
-	Defaults fs.FS  `mapstructure:"-"`
+	Path string `mapstructure:"path"`
 }
 type store struct {
 	dir string
@@ -45,13 +42,11 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 		return nil, err
 	}
 	defer r.Close()
-	for _, name := range []string{"owner", "procedures"} {
-		if err := safePath(r, name); err != nil {
-			return nil, err
-		}
-		if err := r.MkdirAll(name, 0700); err != nil {
-			return nil, err
-		}
+	if err := safePath(r, "owner"); err != nil {
+		return nil, err
+	}
+	if err := r.MkdirAll("owner", 0700); err != nil {
+		return nil, err
 	}
 	if _, err := s.Read(ctx, "core.md"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
@@ -97,11 +92,6 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 			return nil, err
 		}
 	}
-	if config.Defaults != nil {
-		if err := s.seed(ctx, r, config.Defaults); err != nil {
-			return nil, err
-		}
-	}
 	return s, nil
 }
 
@@ -117,62 +107,6 @@ func (s *store) HasRemote(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-func (s *store) seed(ctx context.Context, root *os.Root, defaults fs.FS) error {
-	return fs.WalkDir(defaults, ".", func(name string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if !validPath(name) || ownerPath(name) {
-			return errors.New("invalid default memory path")
-		}
-		if _, err := root.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		if err := safePath(root, name); err != nil {
-			return err
-		}
-		if err := root.MkdirAll(path.Dir(name), 0700); err != nil {
-			return err
-		}
-		data, err := fs.ReadFile(defaults, name)
-		if err != nil {
-			return err
-		}
-		indexed, err := s.git(ctx, "ls-files", "--", name)
-		if err != nil {
-			return err
-		}
-		if err := replace(root, name, data); err != nil {
-			return err
-		}
-		rollback := func(cause error) error {
-			removeErr := root.Remove(name)
-			var indexErr error
-			if len(indexed) == 0 {
-				_, indexErr = s.git(context.WithoutCancel(ctx), "update-index", "--force-remove", "--", name)
-			}
-			return errors.Join(cause, removeErr, indexErr)
-		}
-		if _, err := s.git(ctx, "add", "--intent-to-add", "--", name); err != nil {
-			return rollback(err)
-		}
-		if _, err := s.git(ctx, "commit", "--quiet", "--only", "--allow-empty", "--message", "Add default "+name, "--", name); err != nil {
-			return rollback(err)
-		}
-		return nil
-	})
-}
-
-func ownerPath(name string) bool {
-	return name == "owner" || strings.HasPrefix(name, "owner/")
 }
 
 func validPath(name string) bool {
@@ -265,21 +199,6 @@ func (s *store) List(ctx context.Context, prefix string) ([]string, error) {
 		return nil
 	})
 	return names, err
-}
-
-func replace(root *os.Root, name string, data []byte) error {
-	tmp := path.Join(path.Dir(name), ".memory-"+rand.Text())
-	file, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	defer root.Remove(tmp)
-	_, err = file.Write(data)
-	err = errors.Join(err, file.Close())
-	if err != nil {
-		return err
-	}
-	return root.Rename(tmp, name)
 }
 
 func (s *store) git(ctx context.Context, args ...string) ([]byte, error) {
