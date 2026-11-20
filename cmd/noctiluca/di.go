@@ -72,7 +72,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 			result = errors.Join(result, hub.Shutdown(stopCtx))
 		}
 	}()
-	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir, Defaults: memoryusecase.Procedures})
+	store, err := memory.New(ctx, memory.Config{Path: config.Memory.Dir})
 	if err != nil {
 		return nil, err
 	}

@@ -22,6 +22,7 @@ func TestProcedureRest(t *testing.T) {
 	require.NotContains(t, frame, "<!--")
 
 	const instanceStep = "Add the line REST_MARKER to short-term.md."
+	require.NoError(t, os.Mkdir(filepath.Join(store.Dir(), "procedures"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "procedures/rest.md"), []byte(instanceStep), 0600))
 	text, err := procedure(t.Context(), "rest")
 	require.NoError(t, err)
@@ -38,6 +39,7 @@ func TestProcedureHeartbeat(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, text)
 
+	require.NoError(t, os.Mkdir(filepath.Join(store.Dir(), "procedures"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "procedures/heartbeat.md"), []byte(" \nCheck the task list.\n\t"), 0600))
 	text, err = procedure(t.Context(), "heartbeat")
 	require.NoError(t, err)
