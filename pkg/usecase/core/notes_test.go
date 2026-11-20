@@ -31,13 +31,14 @@ func TestMainSessionNotes(t *testing.T) {
 	require.NoError(t, err)
 	notes := (&core{messaging: router}).toolNotes(t.Context())
 	for _, rule := range []string{
-		"Only this session receives inputs and posts.",
+		"Only this session receives inputs.",
 		"Post content from one conversation in another only when that audience is allowed to see it.",
 		"Write each post for a reader who reads it in about ten seconds. Put the result or the ask first. Keep one or two points. " +
 			"Leave the rest to a follow-up or a link. Use the reader's words.",
-		"Long context lowers the quality of your work without your noticing. When an input includes a Context line, call the compact tool at your next break: " +
-			"nothing you started in this context is half-done, and every reply it owes is posted. Background tasks and subagents may keep running. " +
-			"Compaction runs after the turn ends. Do not rest for this.\n\nDelegation:",
+		"Long context lowers the quality of your work without your noticing. For compact, a break is a point where nothing you started in this context is half-done and every reply it owes is posted. " +
+			"Running background tasks and subagents do not prevent a break. Do not rest because of long context.\n\nDelegation:",
+		"- Keep open-ended work here, because this session must know the whole state to answer every message. Split it into closed tasks: each a question to answer or a change to make, with a defined result. " +
+			"Give a subagent only a closed task.",
 		"- Never wait on a subagent.",
 	} {
 		require.Contains(t, notes, rule)
@@ -72,7 +73,7 @@ func TestOwnerDMFailureDoesNotBlockPrompt(t *testing.T) {
 		m.in <- message(domain.ConversationRef("chat:"+text), "owner", text)
 		model := take(t, f.model.opened)
 		require.Contains(t, take(t, model.inputs).Text, text)
-		require.Contains(t, model.config.SystemPrompt, "Use chat_send to post text.")
+		require.Contains(t, model.config.SystemPrompt, "Write chat_send text and chat_upload_file captions in Markdown")
 		if i == 0 {
 			require.NotContains(t, model.config.SystemPrompt, "Owner DM:")
 		} else {

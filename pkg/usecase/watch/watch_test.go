@@ -117,7 +117,7 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	require.Contains(t, pending[0].Command, "sleep 30")
 	next := factory()
 	cancel, done = start(t, next)
-	require.Contains(t, nextNote(t, inbox, 2), "interrupted by restart; exit unknown")
+	require.Contains(t, nextNote(t, inbox, 2), "was interrupted by a restart, so its exit code is unknown")
 	items, err := inbox.Active(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, domain.MainSessionKey, items[1].SessionKey)
@@ -128,7 +128,7 @@ func TestWatchTailAndShutdownGroup(t *testing.T) {
 	require.NoError(t, take(t, done))
 	// A second restart must neither repeat the command nor enqueue another outcome.
 	cancel, done = start(t, factory())
-	require.Contains(t, nextNote(t, inbox, 2), "interrupted by restart; exit unknown")
+	require.Contains(t, nextNote(t, inbox, 2), "was interrupted by a restart, so its exit code is unknown")
 	cancel()
 	require.NoError(t, take(t, done))
 }

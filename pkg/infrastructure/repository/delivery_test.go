@@ -42,7 +42,7 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	require.Equal(t, "conv", continued.Lane)
 	require.Equal(t, 1, continued.Payload.Continuations)
 	require.Nil(t, continued.Payload.Event)
-	require.Contains(t, continued.Payload.Input.Text, "finish each unfinished part")
+	require.Contains(t, continued.Payload.Input.Text, "Finish each unfinished part")
 	_, err = inbox.Claim(t.Context(), continued.ID)
 	require.NoError(t, err)
 	require.NoError(t, inbox.Delivered(t.Context(), continued.ID, domain.Session{Key: domain.MainSessionKey, ResumeToken: "resume", Turn: &domain.SessionTurn{InputID: continued.ID, Continuations: 1}}))
@@ -71,7 +71,7 @@ func TestInterruptContinuesRegardlessOfTaskOrReason(t *testing.T) {
 				require.Equal(t, "conv", active[0].Lane)
 				require.Equal(t, 1, active[0].Payload.Continuations)
 				require.Contains(t, active[0].Payload.Input.Text, "previous turn was interrupted: "+reason)
-				require.Contains(t, active[0].Payload.Input.Text, "finish each unfinished part")
+				require.Contains(t, active[0].Payload.Input.Text, "Finish each unfinished part")
 				require.Empty(t, active[0].Payload.Notice)
 			})
 		}

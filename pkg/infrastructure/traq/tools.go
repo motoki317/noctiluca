@@ -33,8 +33,7 @@ type toolInput struct {
 
 func (a *adapter) ToolNotes(ctx context.Context) string {
 	notes := fmt.Sprintf(`traQ has no threads. Tool arguments are bare IDs. The input's channel and message_id identify the channel and message.
-Use %[1]s_send to post text. Post chat and quick answers to channel. For a report on requested work, set quote_message_id to message_id.
-In a DM, omit quote_message_id. Use %[1]s_read_message, %[1]s_read_history, and %[1]s_search for context.
+Post chat and quick answers to channel. For a report on requested work, set quote_message_id to message_id. In a DM, omit quote_message_id.
 Text uses Markdown and @username mentions. The 10000-character limit includes file and quote URLs.
 A file ID is the UUID in a /files/<id> URL in message text.
 If an answer needs any tool besides %[1]s_send, first show that you started: add a stamp to the input message_id with %[1]s_react.`, a.name)

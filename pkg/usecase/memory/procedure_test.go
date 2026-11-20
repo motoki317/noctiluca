@@ -17,7 +17,7 @@ func TestProcedureRest(t *testing.T) {
 
 	frame, err := procedure(t.Context(), "rest")
 	require.NoError(t, err)
-	require.Contains(t, frame, "If procedures/rest.md exists in memory, read it first. It adds this instance's own steps, and each step says where it fits.")
+	require.Contains(t, frame, "If procedures/rest.md exists in memory, read it first. It adds this instance's own steps. Each step says where it fits in this procedure.")
 	require.Contains(t, frame, "- Keep in procedures/rest.md only the steps that this procedure lacks. Delete any step there that repeats one here.")
 	require.NotContains(t, frame, "<!--")
 

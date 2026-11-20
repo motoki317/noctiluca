@@ -40,10 +40,12 @@ func (a *adapter) ToolNotes(ctx context.Context) string {
 	notes := fmt.Sprintf(`Use bare Slack channel IDs. The input's channel, thread_ts, and timestamp identify the channel, thread, and message.
 For a top-level input, omit thread_ts for chat and quick answers. For work, set thread_ts to timestamp to start a thread.
 For an existing thread, copy thread_ts. In a DM, reply in the conversation where the input arrived.
-Use %[1]s_send to post text. Use %[1]s_read_thread, %[1]s_read_history, and %[1]s_search for context.
-Write %[1]s_send text and %[1]s_upload_file captions in Markdown, not in the Slack mrkdwn that inputs and read tools show. Bold takes two asterisks, because one makes italics. Start each list item with "- " or "1. ", because "•" stays plain text. Write each URL as <url>, <url|label>, or [label](url), because a bare URL that touches other text links wrongly or not at all. Mentions such as <@U…> and <#C…> work as in mrkdwn.
-To broadcast a PNG, JPEG, or GIF image, use %[1]s_upload_file with thread_ts and broadcast=true.
-If an answer needs any tool besides %[1]s_send, first show that you started where you will answer.
+Write %[1]s_send text and %[1]s_upload_file captions in Markdown, not in the Slack mrkdwn that inputs and read tools show:
+- Bold takes two asterisks, because one makes italics.
+- Start each list item with "- " or "1. ", because "•" stays plain text.
+- Write each URL as <url>, <url|label>, or [label](url). A bare URL that touches other text links wrongly or not at all.
+- Mentions such as <@U…> and <#C…> work as in mrkdwn.
+If an answer needs any tool besides %[1]s_send, first show that you started, in the place where you will answer.
 For a thread, call %[1]s_set_status, including when work continues after a post. At top level, call %[1]s_react with channel and timestamp.`, a.name)
 	if a.owner == "" {
 		return notes
@@ -101,11 +103,11 @@ func (a *adapter) Tools() []domain.Tool {
 		tool("read_history", "Read recent channel messages. Returns messages and the next cursor.", map[string]any{"channel": str, "limit": limit, "cursor": str}, []string{"channel"}, a.readHistory),
 		tool("search", "Search Slack messages.", map[string]any{"query": str, "limit": limit, "page": map[string]any{"type": "integer", "minimum": 1}}, []string{"query"}, a.search),
 		tool("download_file", "Download a file to a new local path as raw bytes.", map[string]any{"file_id": str, "path": str}, []string{"file_id", "path"}, a.download),
-		tool("upload_file", "Upload a local file. Copy channel and thread_ts from the input header. Omit thread_ts for a top-level post. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
-		tool("react", "Add an emoji reaction using a bare channel ID and message timestamp.", reactionProperties, reactionRequired, a.react),
-		tool("unreact", "Remove your own emoji reaction using a bare channel ID and message timestamp.", reactionProperties, reactionRequired, a.unreact),
-		tool("set_status", "Show status text as given with a loading animation in a thread, without adding the app name. For example: \"Looking into it…\". Slack clears it when you post in that thread or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": status}, []string{"channel", "thread_ts", "status"}, a.setStatus),
-		tool("send", domain.PostingGuidance+" Copy channel and thread_ts from the input header. Omit thread_ts for a top-level post. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
+		tool("upload_file", "Upload a local file. Omit thread_ts for a top-level post. Set broadcast with thread_ts to show a PNG, JPEG, or GIF image in the channel too.", map[string]any{"channel": str, "thread_ts": str, "path": str, "title": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "path"}, a.upload),
+		tool("react", "Add an emoji reaction to a message.", reactionProperties, reactionRequired, a.react),
+		tool("unreact", "Remove your own emoji reaction from a message.", reactionProperties, reactionRequired, a.unreact),
+		tool("set_status", "Show status text with a loading animation in a thread. Slack shows the text exactly as given, without the app name. Example status: \"Looking into it…\". Slack clears it when you post in that thread, or after two minutes without a post.", map[string]any{"channel": str, "thread_ts": str, "status": status}, []string{"channel", "thread_ts", "status"}, a.setStatus),
+		tool("send", domain.PostingGuidance+" Omit thread_ts for a top-level post. Set broadcast on a thread reply to also show it in the channel.", map[string]any{"channel": str, "thread_ts": str, "text": str, "broadcast": map[string]any{"type": "boolean"}}, []string{"channel", "text"}, a.sendTool),
 	}
 }
 

@@ -29,9 +29,9 @@ func TestPromptMemoryNotes(t *testing.T) {
 	require.Contains(t, prompt, "Memory: core.md\nMemory index")
 	require.Contains(t, prompt, "Session and messaging notes:\nMessaging instructions")
 	require.Contains(t, prompt, "Hook instructions")
-	require.Contains(t, prompt, "because subagents and background commands also commit here.")
+	require.Contains(t, prompt, "Subagents and background commands also commit here. Commit only the paths you changed. Retry if git reports a lock.")
 	require.Contains(t, prompt, "Before you call compact, make sure short-term.md lists all open work.")
-	require.Contains(t, prompt, "procedures/ holds procedures. The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure, and procedures/rest.md adds this instance's own rest steps.")
+	require.Contains(t, prompt, "The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure. procedures/rest.md adds this instance's own rest steps.")
 	require.Contains(t, prompt, "Follow the rest procedure only when the nightly schedule sends it. Call the rest tool only as its last step.")
 	require.NotContains(t, prompt, "when you judge that your context needs a fresh start")
 	prompt, err = memoryusecase.Prompt(nil, "", nil)(t.Context(), domain.ToolSession{})
@@ -40,7 +40,7 @@ func TestPromptMemoryNotes(t *testing.T) {
 }
 
 func TestPromptRemoteBackup(t *testing.T) {
-	const bullet = "- The memory repository pushes to a remote backup that nothing else writes. Push after each commit. When a push is rejected, run `git push --force-with-lease`; never pull. Tell the owner when a push fails for another reason.\n"
+	const bullet = "- The memory repository pushes to a remote backup that nothing else writes. Push after each commit. If a push is rejected, run `git push --force-with-lease`. Never pull. If a push fails for another reason, tell the owner.\n"
 	store, err := memory.New(t.Context(), memory.Config{Path: t.TempDir()})
 	require.NoError(t, err)
 	assemble := memoryusecase.Prompt(store, "", nil)

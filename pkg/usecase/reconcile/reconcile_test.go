@@ -434,7 +434,7 @@ func TestCompactRequestsLiveSession(t *testing.T) {
 	f.status(t, id, "done")
 	tool := f.runner.Tools()[3]
 	require.Equal(t, "compact", tool.Name)
-	require.Equal(t, "Compact the main session's context after this turn ends. The session continues from a summary, and background tasks keep running. Call it at a break when an input includes a Context line.", tool.Description)
+	require.Equal(t, "Compact the main session's context after this turn ends. The session continues from a summary. Background tasks keep running. Call it at a break when an input includes a Context line.", tool.Description)
 	require.JSONEq(t, `{"type":"object","properties":{},"additionalProperties":false}`, string(tool.InputSchema))
 	ctx := domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
 	out, err := tool.Handler(ctx, json.RawMessage(`{}`))

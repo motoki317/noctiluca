@@ -102,7 +102,7 @@ The process closes once no turn, waiting input, or native background work of the
 Inputs that arrive before that idle point still run in the old process.
 This wait has no deadline.
 Any process that opens after the call starts fresh, even if the old process never reached idle.
-Completing the procedure without calling `rest` keeps the context.
+The procedure ends with a call to `rest`. If the model skips that call, the process keeps its context.
 
 ## Work and failure
 

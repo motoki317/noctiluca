@@ -328,7 +328,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				continue
 			}
 			if model == nil {
-				prompt := "Use the messaging send tools to post messages. Final assistant text is private."
+				prompt := "Post messages with the messaging send tools. Your final assistant text is private."
 				if r.config.Prompt != nil {
 					var extra string
 					promptCtx, cancel := context.WithTimeout(ctx, operationTimeout)

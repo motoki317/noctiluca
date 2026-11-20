@@ -21,18 +21,19 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 			fmt.Fprintf(&context, "Memory notes:\n"+
 				"- Read and edit memory in %q with your own file tools.\n"+
 				"- owner/ holds the owner's handwritten files. Never edit, move, or delete them. Propose fixes to the owner.\n"+
-				"- owner/ files and core.md are in this system prompt. Edits take effect in the next model process, after rest or a restart.\n"+
+				"- This system prompt includes the owner/ files and core.md. Edits to them take effect in the next model process, after rest or a restart.\n"+
 				"- Everything outside owner/ is your own memory, in three tiers. Keep each file under 8 KB.\n"+
 				"  - Short-term, short-term.md: the exact state of open work, such as requests and promised follow-ups. Delete an entry when its work ends.\n"+
-				"  - Long-term, core.md and long-term/: rules generalized from repeated experience, with few specific facts. core.md holds what every turn needs, an index of long-term/, and pointers to at most ten theme hubs: pages that link the pages of one external theme.\n"+
-				"  - External: specific facts and procedures, organized by theme. Put what may be shared in the knowledge system the owner connected, if any, and private ones under external/. procedures/ holds procedures. The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure, and procedures/rest.md adds this instance's own rest steps.\n"+
+				"  - Long-term, core.md and long-term/: rules generalized from repeated experience, with few specific facts. core.md holds what every turn needs and an index of long-term/. "+
+				"It also points to at most ten theme hubs. A theme hub is a page that links the pages of one external theme.\n"+
+				"  - External: specific facts and procedures, organized by theme. If the owner connected a knowledge system, put the shareable ones there. Put all others under external/. "+
+				"procedures/ holds procedures. The heartbeat schedule sends procedures/heartbeat.md. The rest schedule sends noctiluca's rest procedure. procedures/rest.md adds this instance's own rest steps.\n"+
 				"- Commit each change with a message that says why.\n"+
-				"- Commit only paths you changed, because subagents and background commands also commit here.\n"+
-				"- Retry if git reports a lock.\n"+
+				"- Subagents and background commands also commit here. Commit only the paths you changed. Retry if git reports a lock.\n"+
 				"- Before you call compact, make sure short-term.md lists all open work.\n"+
 				"- Follow the rest procedure only when the nightly schedule sends it. Call the rest tool only as its last step.\n", memory.Dir())
 			if hasRemote {
-				context.WriteString("- The memory repository pushes to a remote backup that nothing else writes. Push after each commit. When a push is rejected, run `git push --force-with-lease`; never pull. Tell the owner when a push fails for another reason.\n")
+				context.WriteString("- The memory repository pushes to a remote backup that nothing else writes. Push after each commit. If a push is rejected, run `git push --force-with-lease`. Never pull. If a push fails for another reason, tell the owner.\n")
 			}
 			context.WriteString("\n")
 			names, err := memory.List(ctx, "owner")

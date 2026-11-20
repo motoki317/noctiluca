@@ -102,7 +102,7 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	}
 	if started && turn.Continuations < 1 {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
-		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\nThe interrupted turn may cover several inputs: finish each unfinished part using the posting instructions in its input."}}}
+		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\nThe interrupted turn may cover several inputs. Finish each unfinished part, following the posting instructions in its input."}}}
 		if _, err := insertInbox(ctx, tx, item); err != nil {
 			return err
 		}

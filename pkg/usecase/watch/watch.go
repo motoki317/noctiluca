@@ -49,7 +49,7 @@ func (w *watcher) Start(ctx context.Context) error {
 		return err
 	}
 	for _, pending := range unfinished {
-		if err := w.repo.Complete(ctx, pending.ID, fmt.Sprintf("watch %q interrupted by restart; exit unknown", pending.Command), time.Now()); err != nil {
+		if err := w.repo.Complete(ctx, pending.ID, fmt.Sprintf("watch %q was interrupted by a restart, so its exit code is unknown", pending.Command), time.Now()); err != nil {
 			return err
 		}
 	}
@@ -80,7 +80,7 @@ func (w *watcher) complete(ctx context.Context, id int64, outcome string) error 
 
 func (w *watcher) Tools() []domain.Tool {
 	return []domain.Tool{
-		{Name: "wake_at", Description: "Schedule a note at an RFC3339 time, then end this turn. The note returns as a new input. Include where to post the result in the note, since a fresh session can receive it.", InputSchema: json.RawMessage(`{"type":"object","properties":{"at":{"type":"string"},"note":{"type":"string","minLength":1}},"required":["at","note"],"additionalProperties":false}`), Handler: w.wake},
+		{Name: "wake_at", Description: "Schedule a note at an RFC3339 time, then end this turn. The note returns as a new input. A fresh session can receive it, so write in the note where to post the result.", InputSchema: json.RawMessage(`{"type":"object","properties":{"at":{"type":"string"},"note":{"type":"string","minLength":1}},"required":["at","note"],"additionalProperties":false}`), Handler: w.wake},
 		{Name: "watch", Description: "Start a shell command and end this turn immediately. The command, exit code, and output tail return as a new input.", InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","minLength":1},"cwd":{"type":"string","minLength":1}},"required":["command","cwd"],"additionalProperties":false}`), Handler: w.watch},
 	}
 }
