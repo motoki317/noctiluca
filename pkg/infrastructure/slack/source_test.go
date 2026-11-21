@@ -27,7 +27,7 @@ func TestSourceInfoNamesAndRoot(t *testing.T) {
 				fmt.Fprint(w, `{"ok":true,"channel":{"name":"general"}}`)
 			}
 		case "/conversations.replies":
-			fmt.Fprint(w, `{"ok":true,"messages":[{"ts":"1730000000.123456","bot_id":"BOTHER","attachments":[{"title":"Root question","text":"Details"}]}]}`)
+			fmt.Fprint(w, `{"ok":true,"messages":[{"ts":"1730000000.123456","bot_id":"BOTHER","attachments":`+chatbotAttachmentsJSON+`}]}`)
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
 		}
@@ -36,7 +36,7 @@ func TestSourceInfoNamesAndRoot(t *testing.T) {
 	require.Equal(t, "slack: channel=C1 thread_ts=1730000000.123456 timestamp=1730000001.000001", info.Location)
 	require.Equal(t, "#general", info.Conversation)
 	require.Equal(t, "Alex", info.Sender)
-	require.Equal(t, "Root question\nDetails", info.ThreadText)
+	require.Equal(t, chatbotBlockText, info.ThreadText)
 	require.Equal(t, time.Unix(1730000000, 123456000), info.ThreadAt)
 	a.SourceInfo(t.Context(), domain.InboundEvent{Conversation: Conversation("slack", "C1", "1730000000.123456"), MessageRef: Conversation("slack", "C1", "1730000001.000001"), Sender: domain.Sender{ID: "U1"}}, false)
 	require.Equal(t, 1, calls["/users.info"])

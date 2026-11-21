@@ -15,6 +15,29 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
+const chatbotAttachmentsJSON = `[
+	{"id":1,"color":"#E01E5A","fallback":":exclamation: :exclamation: Security Hub Finding | ap-northeast-1 | Account: ACCOUNT_ID","blocks":[
+		{"type":"section","text":{"type":"mrkdwn","text":"*<https://console.aws.amazon.com/securityhub/home?region=ap-northeast-1#/findings|:exclamation: :exclamation: Security Hub Finding | ap-northeast-1 | Account: ACCOUNT_ID>*","verbatim":false}},
+		{"type":"section","text":{"type":"mrkdwn","text":"Potential data compromise of one or more S3 buckets.\n\nFinding Type: TTPs/AttackSequence:S3/CompromisedData","verbatim":false}},
+		{"type":"section","fields":[{"type":"mrkdwn","text":"*First Seen*\nThu, 19 Nov 2026 05:33:39 GMT","verbatim":false},{"type":"mrkdwn","text":"*Last Seen*\nThu, 19 Nov 2026 05:33:39 GMT","verbatim":false}]},
+		{"type":"section","fields":[{"type":"mrkdwn","text":"*Affected Resource*\narn:aws:s3:::EXAMPLE-BUCKET1","verbatim":false},{"type":"mrkdwn","text":"*Severity*\nCritical","verbatim":false}]},
+		{"type":"actions","elements":[{"type":"button","action_id":"suppress","text":{"type":"plain_text","text":"Suppress finding","emoji":true},"value":"suppress"}]}
+	]}
+]`
+
+const chatbotBlockText = `*<https://console.aws.amazon.com/securityhub/home?region=ap-northeast-1#/findings|:exclamation: :exclamation: Security Hub Finding | ap-northeast-1 | Account: ACCOUNT_ID>*
+Potential data compromise of one or more S3 buckets.
+
+Finding Type: TTPs/AttackSequence:S3/CompromisedData
+*First Seen*
+Thu, 19 Nov 2026 05:33:39 GMT
+*Last Seen*
+Thu, 19 Nov 2026 05:33:39 GMT
+*Affected Resource*
+arn:aws:s3:::EXAMPLE-BUCKET1
+*Severity*
+Critical`
+
 func TestInboundNotifications(t *testing.T) {
 	for _, tc := range []struct {
 		name, event, replies, text          string
@@ -25,6 +48,56 @@ func TestInboundNotifications(t *testing.T) {
 		{name: "DM edit", event: `{"type":"message","subtype":"message_changed","channel":"DTEST","message":{"user":"UMEMBER","ts":"125.000001","text":"edited"}}`, accepted: true, text: "edited"},
 		{name: "text and attachments", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Summary","attachments":[{"title":"Alert","from_url":"https://example.test/forwarded","is_share":true,"fallback":"Ignored title summary"}]}`, accepted: true, text: "Summary\nAlert"},
 		{name: "bot attachments", event: `{"type":"message","subtype":"bot_message","channel":"CTEST","bot_id":"BOTHER","ts":"2","text":"Summary","attachments":[{},{"title":"Alert","fallback":"Ignored title summary"},{"text":"Service unavailable","fallback":"Ignored text summary"},{"fallback":"Details"},{"original_url":"https://example.test","title":"Preview"},{}]}`, accepted: true, text: "Summary\nAlert\nService unavailable\nDetails"},
+		{name: "Chatbot finding", event: `{"type":"message","subtype":"bot_message","channel":"CTEST","bot_id":"BOTHER","ts":"2","text":"","attachments":` + chatbotAttachmentsJSON + `}`, accepted: true, text: chatbotBlockText},
+		{
+			name: "Sentry issue",
+			event: `{"type":"message","subtype":"bot_message","bot_id":"BOTHER","channel":"CTEST","ts":"2","text":"[api] SearchService/Search: Missing request message.","blocks":[
+				{"type":"section","text":{"type":"mrkdwn","text":":red_circle: <https://example.sentry.io/issues/1/|*SearchService/Search*>","verbatim":false}},
+				{"type":"context","elements":[{"type":"mrkdwn","text":"alloc::vec::Vec&lt;T&gt;::len","verbatim":false}]},
+				{"type":"section","text":{"type":"mrkdwn","text":"` + "```Missing request message.```" + `","verbatim":false}},
+				{"type":"context","elements":[{"type":"mrkdwn","text":"State: *New*   First Seen: *1\u00a0minute ago*","verbatim":false}]},
+				{"type":"actions","elements":[{"type":"button","action_id":"resolve_dialog","text":{"type":"plain_text","text":"Resolve","emoji":true},"value":"resolve_dialog"},{"type":"button","action_id":"archive_dialog","text":{"type":"plain_text","text":"Archive","emoji":true},"value":"archive_dialog"},{"type":"external_select","action_id":"assign","placeholder":{"type":"plain_text","text":"Select Assignee...","emoji":true}}]},
+				{"type":"context","elements":[{"type":"mrkdwn","text":"Project: <https://example.sentry.io/issues/?project=1|api>    Alert: <https://sentry.io/organizations/example/monitors/alerts/1/|Notify #alerts via Slack>    Short ID: API-EXAMPLE","verbatim":false}]}
+			]}`,
+			accepted: true,
+			text: ":red_circle: <https://example.sentry.io/issues/1/|*SearchService/Search*>\n" +
+				"alloc::vec::Vec&lt;T&gt;::len\n```Missing request message.```\n" +
+				"State: *New*   First Seen: *1\u00a0minute ago*\n" +
+				"Project: <https://example.sentry.io/issues/?project=1|api>    Alert: <https://sentry.io/organizations/example/monitors/alerts/1/|Notify #alerts via Slack>    Short ID: API-EXAMPLE",
+		},
+		{
+			name: "rich text keeps human message text",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Hello *team*","blocks":[
+				{"type":"section","text":{"type":"mrkdwn","text":"Section text"}},
+				{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"Hello "},{"type":"text","text":"team","style":{"bold":true}}]}]}
+			]}`,
+			accepted: true, text: "Hello *team*",
+		},
+		{
+			name: "empty block text keeps message text",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Summary","blocks":[
+				{"type":"section","text":{"type":"mrkdwn","text":""}},
+				{"type":"context","elements":[{"type":"image","image_url":"https://example.test/icon.png","alt_text":"Icon"}]},
+				{"type":"divider"}
+			]}`,
+			accepted: true, text: "Summary",
+		},
+		{
+			name: "block-only edit without a text mention",
+			event: `{"type":"message","subtype":"message_changed","channel":"CTEST",
+				"message":{"bot_id":"BOTHER","ts":"2","text":"Summary","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Resolved <@USELF>"}}]},
+				"previous_message":{"bot_id":"BOTHER","ts":"2","text":"Summary","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Firing"}}]}
+			}`,
+			accepted: true, text: "Resolved <@USELF>",
+		},
+		{
+			name: "edit adds a text mention with identical blocks",
+			event: `{"type":"message","subtype":"message_changed","channel":"CTEST",
+				"message":{"bot_id":"BOTHER","ts":"2","text":"Summary <@USELF>","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Details"}}]},
+				"previous_message":{"bot_id":"BOTHER","ts":"2","text":"Summary","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Details"}}]}
+			}`,
+			accepted: true, text: "Details", mentionsMe: true,
+		},
 		{name: "attachment mention", event: `{"type":"message","subtype":"bot_message","channel":"CTEST","bot_id":"BOTHER","ts":"2","attachments":[{"text":"hi <@USELF>"}]}`, accepted: true, text: "hi <@USELF>"},
 		{name: "bot attachment edit", event: `{"type":"message","subtype":"message_changed","channel":"CTEST","message":{"bot_id":"BOTHER","ts":"2","attachments":[{"title":"[RESOLVED]","text":"Service recovered","fallback":"Ignored summary"}]},"previous_message":{"bot_id":"BOTHER","ts":"2","attachments":[{"title":"[FIRING]","text":"Service unavailable"}]}}`, accepted: true, text: "[RESOLVED]\nService recovered"},
 		{name: "unfurl attachment", event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"link","attachments":[{"title":"Preview","text":"Page content","fallback":"Page summary"}]}`, accepted: true, text: "link"},

@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -53,7 +54,10 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			return event, false
 		}
 		// Unfurls change attachments without changing the user's message.
-		if e.SubType == "message_changed" && e.Message != nil && e.PreviousMessage != nil && messageText(e.Message) == messageText(e.PreviousMessage) && slices.EqualFunc(e.Message.Files, e.PreviousMessage.Files, func(a, b sdk.File) bool { return a.ID == b.ID }) {
+		// Mention detection reads raw text that messageText can omit.
+		if e.SubType == "message_changed" && e.Message != nil && e.PreviousMessage != nil &&
+			e.Message.Text == e.PreviousMessage.Text && messageText(e.Message) == messageText(e.PreviousMessage) &&
+			slices.EqualFunc(e.Message.Files, e.PreviousMessage.Files, func(a, b sdk.File) bool { return a.ID == b.ID }) {
 			return event, false
 		}
 		if thread == m.Timestamp {
@@ -148,11 +152,44 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 	return event, true
 }
 
+func blockText(blocks sdk.Blocks) string {
+	var parts []string
+	appendText := func(text *sdk.TextBlockObject) {
+		if text != nil && text.Text != "" {
+			parts = append(parts, text.Text)
+		}
+	}
+	for _, block := range blocks.BlockSet {
+		switch b := block.(type) {
+		case *sdk.RichTextBlock:
+			return ""
+		case *sdk.SectionBlock:
+			appendText(b.Text)
+			for _, field := range b.Fields {
+				appendText(field)
+			}
+		case *sdk.HeaderBlock:
+			appendText(b.Text)
+		case *sdk.ContextBlock:
+			for _, element := range b.ContextElements.Elements {
+				if text, ok := element.(*sdk.TextBlockObject); ok {
+					appendText(text)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func messageText(m *sdk.Msg) string {
-	parts := []string{m.Text}
+	parts := []string{cmp.Or(blockText(m.Blocks), m.Text)}
 	for _, attachment := range m.Attachments {
 		// People can only attach forwarded messages, so their other attachments are unfurls.
 		if (m.BotID == "" && !attachment.IsShare) || (m.BotID != "" && attachment.OriginalURL != "") {
+			continue
+		}
+		if text := blockText(attachment.Blocks); text != "" {
+			parts = append(parts, text)
 			continue
 		}
 		parts = append(parts, attachment.Title, attachment.Text)
