@@ -100,6 +100,7 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 			require.Len(t, active, 1)
 			require.Equal(t, id, active[0].ID)
 			require.Equal(t, domain.InboxPending, active[0].Status)
+			require.Zero(t, active[0].Attempts)
 			require.Equal(t, item.Payload, active[0].Payload)
 			var count int
 			require.NoError(t, db.QueryRow("SELECT count(*) FROM model_events").Scan(&count))
@@ -109,7 +110,8 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 }
 
 func TestInterruptChecksOpeningInput(t *testing.T) {
-	for _, status := range []domain.InboxStatus{domain.InboxDispatched, domain.InboxDead, domain.InboxDone, "legacy"} {
+	const noOpeningInput = "no opening input"
+	for _, status := range []domain.InboxStatus{domain.InboxDispatched, domain.InboxDead, domain.InboxDone, noOpeningInput} {
 		t.Run(string(status), func(t *testing.T) {
 			db := openDB(t)
 			inbox := repository.NewInboxRepository(db)
@@ -121,7 +123,7 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, claimed)
 			turn := &domain.SessionTurn{InputID: id}
-			if status == "legacy" {
+			if status == noOpeningInput {
 				turn.InputID = 0
 			}
 			state := domain.Session{Key: item.SessionKey, ResumeToken: "resume", Context: &item.Payload.Context, Turn: turn}
@@ -163,7 +165,7 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 			require.NoError(t, db.QueryRow("SELECT count(*) FROM model_events WHERE kind='error'").Scan(&notes))
 			require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'interrupted:%'").Scan(&followups))
 			expected := 0
-			if status == domain.InboxDone || status == "legacy" {
+			if status == domain.InboxDone || status == noOpeningInput {
 				expected = 1
 			}
 			require.Equal(t, 1, notes)
