@@ -1,0 +1,51 @@
+# Slack app manifest for one noctiluca `messaging` entry of type slack.
+display_information:
+  name: noctiluca
+features:
+  bot_user:
+    display_name: noctiluca
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    # DMs with the bot need the messages tab.
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+oauth_config:
+  scopes:
+    bot:
+      # Receive messages and read history and threads.
+      - channels:history
+      - groups:history
+      - im:history
+      # Read channel names.
+      - channels:read
+      - groups:read
+      - im:read
+      # Post messages, and show a loading status in a thread.
+      - chat:write
+      # Open the DM with the owner.
+      - im:write
+      # Receive reactions, and react.
+      - reactions:read
+      - reactions:write
+      # Tell human senders from bots.
+      - users:read
+      # Upload and download files.
+      - files:read
+      - files:write
+      # Read the members of trust.groups.
+      - usergroups:read
+    # Optional: scopes for slack.user_token (see config.example.yaml).
+    # user:
+    #   - channels:history
+    #   - channels:read
+    #   - search:read
+    #   - files:read
+settings:
+  socket_mode_enabled: true
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - reaction_added

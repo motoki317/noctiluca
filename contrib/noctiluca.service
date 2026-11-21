@@ -3,6 +3,7 @@ Description=noctiluca agent
 
 [Service]
 ExecStart=%h/.local/bin/noctiluca run --config %h/.config/noctiluca/config.yaml
+# git and the model CLI must be on this PATH. A user unit does not read the login shell's PATH.
 Environment="PATH=%h/.local/bin:%h/.nix-profile/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=-%h/.config/noctiluca/environment
 Restart=on-failure

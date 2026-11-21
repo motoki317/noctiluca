@@ -1,54 +1,32 @@
-# Design decisions
+# Design
 
-noctiluca replaces [OpenClaw](https://github.com/openclaw/openclaw), a general agent gateway that previously ran this Slack assistant. Several decisions below answer problems seen there. [architecture.md](architecture.md) shows how the parts fit together.
+## How a message becomes a reply
 
-## Scope
+1. A messaging adapter receives a chat event from Slack, Discord, or traQ.
+2. The core decides whether the sender can start a turn ([Trust](#trust)) and stores the event as a row in the SQLite inbox. The platform gets its acknowledgement only after the row is stored.
+3. The reconciler sends the rows, in arrival order, to the one model session. The model adapter runs that session as a `claude` or `codex` CLI process.
+4. The model works on the input: this is a turn. It uses the CLI's own tools and, over MCP, the tools that noctiluca provides.
+5. The model replies by calling the send tool of a messaging adapter.
 
-- One agent per instance. Several agents run as several instances that talk on the messaging platform.
-- One agent, several chat accounts, each a named `messaging` entry whose name prefixes its refs and tool names. The core needs a prefix anyway to route a ref to its adapter. A name instead of a platform type also lets two workspaces of one platform run side by side.
-- Only what a current workload needs (see Workloads). noctiluca replaces OpenClaw mainly to drop features and configuration that got in the way.
+Scheduled tasks enter the same inbox as rows. So do the notes that the model sets for a later time with the `wake_at` tool, and the results of the background commands that it starts with the `watch` tool.
 
-## Runtime
+## Decisions
 
-- Durable inbox plus one reconciler. With every unit of work as a SQLite row and one loop that dispatches rows, a failure stays with its row instead of stopping the process.
-- Done once delivered. Platform posts are not idempotent, so a row handed to the model is never replayed. A crash between `Send` and the commit that marks the row done can still repeat one delivery.
-- No waiting inside a turn. One turn runs at a time, so a turn that waits holds every conversation. Long work runs in background subagents or `watch`, and timed follow-ups use `wake_at`. Small jobs stay local, because delegation costs tokens and context.
-- Subagents draft, and only `main` posts. A subagent gets a standalone brief and disjoint work, and returns a short draft with its evidence. `main` checks the draft and posts it only to an audience allowed to see it, so content crosses conversations in one place ([research credits](../THIRD_PARTY_NOTICES.md#research-and-design)).
-- Tool access lasts as long as the model process, not the turn. OpenClaw tied tool access to a turn, so a background subagent lost its tools when the turn ended.
+- **One agent per instance.** To run several agents, start several instances, and they talk to each other in chat.
+- **One session for everything.** The agent answers each message with every conversation and task in view.
+- **A turn never waits.** One turn runs at a time, so a turn that waits holds every conversation. Long work runs in the background, as a subagent of the CLI or as a command under `watch`, and its result arrives as a new input.
+- **Only tools post.** noctiluca never posts the model's final text. The model posts by calling a send tool, so a turn with nothing to say posts nothing.
+- **Subagents draft, and only the main session posts.** Subagents have no send tools. The main session sees every conversation, so it decides which content can go to which conversation.
+- **noctiluca never sends an input again once the model started on it.** A second run could post the same chat message twice. A row that fails before the model starts on it is tried up to three times, and then noctiluca reports it to you. A turn that fails after that is reported to you too. Only a crash before noctiluca records the start can repeat an input.
+- **The model CLI does the agent's work.** noctiluca drives the official `claude` or `codex` CLI on your subscription. The CLI already provides a shell, subagents, and context compaction.
+- **Memory is Markdown in a Git repository.** The model reads, edits, and commits it with the CLI's file tools, so noctiluca needs no memory API. Git gives every change a diff and a revert.
+- **Memory has three tiers.** Short-term memory points to open work, such as requests and promised follow-ups. Long-term memory holds general rules, and its index `core.md` loads into every system prompt. External memory holds specific facts by theme, and the model reads it on demand: from other files, or from a knowledge system that you connected. The part that loads into every prompt stays small as memory grows.
+- **The agent rests.** The optional nightly `rest` procedure saves what only the session knows, compresses your teachings and corrections into general rules, and restructures memory. After it, the session starts over with an empty context.
+- **The model chooses when to compact.** The CLIs compact by themselves at a fixed context size, which usually comes in the middle of a task. So noctiluca shows the model its context size with each input once the size reaches 200k tokens, and the model calls the `compact` tool at a break in its work.
 
-## Sessions and replies
+## Trust
 
-- One session, `main`, per instance. All conversations, scheduled tasks, and background results share context. Due inputs arrive in FIFO order, without priorities.
-- Adapter send tools are the only posting path. Each adapter puts its native destination IDs in the input header and documents its owner's DM channel. The model remembers where requested work belongs when its background result arrives.
-- Only tools post. OpenClaw posted the final text unless it was a magic `NO_REPLY` string, which caused stray posts.
-
-## Model adapter
-
-- The official `claude` CLI on the owner's subscription, over stream-json. Claude Code already provides shell, subagents, and context compaction.
-- Codex through `codex app-server`. `turn/steer` adds input to the running turn. Codex keeps a thread's first developer instructions on resume, so a changed system prompt is added to the resumed thread as a developer message. Earlier instructions stay in the thread's history, including ones since deleted from memory.
-
-## Memory
-
-- Markdown in a Git repository. Claude reads and edits files natively, and Git gives every change a diff and a revert. Mem0, Graphiti, cognee, and Letta each add a service for the same job.
-- The model edits and commits memory with its own tools, so the harness has no memory API.
-- A small core loaded into the system prompt when each model process opens, the rest on demand. Changes to loaded files take effect on the next process, including on resume. Forgotten instructions in a large prompt were the most common OpenClaw failure.
-- The model searches files with its native shell tools. An index is not needed at the current size.
-- Memory has three tiers. Short-term memory points to open work and loses each entry when the work ends. Long-term memory holds rules generalized from repeated experience: `core.md`, loaded every time, and leaf files it points to. External memory holds specific facts and procedures by theme: in a knowledge system the owner connected when they may be shared, so that people and other agents can use them, and in local files otherwise. Keeping specific facts out of the loaded core, and every file under 8 KB, bounds what a turn loads as memory grows.
-- Memory links to the source of each detail instead of copying it. Less memory is easier to read and follow, and the source keeps the detail.
-- The `rest` procedure saves what only the session knows, then restructures memory. It compresses the owner's teachings and corrections into general principles in `core.md` and applies them to current and subsequent work. It gives each fact and open item one home in its tier. It compares each item with that home, then adds, updates, deletes, or changes nothing, following Mem0 (arXiv 2504.19413). Changes to `owner/`, tools, and the harness go to the owner as proposals. OpenClaw's nightly memory job promoted only memories that were searched often, so forgotten knowledge never qualified. Small item-level edits follow ACE (arXiv 2510.04618), which found that whole-document rewrites shrink memory and lose accuracy.
-- noctiluca ships the heartbeat and rest procedures in the binary. Each one tells the model to read a memory file with the instance's own steps first. A copy of shipped text in memory would miss later fixes, and without shipped text each owner writes the generic steps again. An instance step names where it fits in a shipped procedure, or quotes a shipped sentence and replaces it. Replacement lets the owner change a default, such as where heartbeat reports go. The model writes a replacing step only at the owner's request, because it changes what the harness ships.
-- The model, not the harness, decides when to compact. At 200k tokens or more, each input shows the context size, and the model calls `compact` at a break: nothing it started is half-done, and every reply it owes is posted. The CLIs compact by themselves when the context reaches a fixed size, and the context grows while a turn runs, so that compaction usually comes in the middle of a task.
-
-## Workloads
-
-| Workload | What it needs |
-|---|---|
-| DMs and team channels open to humans and bots, with or without mentions | any sender by default, optional `trust` allowlists, conversation overrides, group refresh |
-| Alert channels where bot posts start an investigation, a reaction marks it done | top-level bot posts, replies in joined threads, read tools that show reactions on alert posts |
-| Hourly heartbeat over open work | heartbeat schedule and procedure |
-| Daily photo: morning DM preview, evening thread post sent to the channel too | cron with timezone, upload and broadcast tools |
-| Long PR reviews and delegated coding runs | native background tools, `watch` |
-| Issue tracker, wiki, error tracker, read-only metrics CLI | external MCP servers with a shared OAuth login, native shell |
-| Reading any thread, searching the workspace, downloading files | Slack read tools on an optional user token |
-| Saving session context, learning from the owner's teachings, and keeping memory short | `rest` |
-| Long or many tasks in one session | `Context` line from 200k tokens, `compact` |
+- In a DM, every message starts a turn. In a channel that the bot is in, these start a turn: a top-level message, a message that mentions the bot, a post in a thread that the bot takes part in, and a reaction to one of its posts.
+- Anyone who can reach the bot can send these, unless an optional `trust` allowlist in the config names the senders.
+- Every turn has every tool, including a shell that runs as the Unix user of noctiluca. No tool call asks for approval.
+- Nothing isolates the model from noctiluca's config, tokens, and database. Isolation is out of scope for noctiluca.

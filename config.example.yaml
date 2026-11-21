@@ -1,27 +1,51 @@
+# Every key of the noctiluca config.
+# Relative paths resolve against this file.
+# A token is {env: NAME} or {file: path}.
+# An environment variable overrides a key: NOCTILUCA_LOG_LEVEL sets log.level.
+
+# One entry per chat bot. noctiluca reports its own failures to the owner of the
+# first entry, in a DM.
 messaging:
+  # The name prefixes the entry's tool names (slack_send) and the conversation
+  # refs in the database, so a rename detaches the entry's history.
   - name: slack
-    type: slack
-    owner: U_OWNER_ID
+    type: slack  # slack, discord, or traq
+    owner: U_OWNER_ID  # your user ID on this platform
     slack:
       app_token: {env: SLACK_APP_TOKEN}
       bot_token: {env: SLACK_BOT_TOKEN}
-      # Optional read token. Choose env or file for each token.
+      # Optional. With it, the agent reads the public channels that the token's
+      # user joined and searches the workspace. Posts always use the bot token.
       # user_token: {file: secrets/slack-user-token}
-      group_refresh_interval: 1h
-    # Without trust, anyone in a channel the bot is in, or in a DM with it,
-    # starts turns, bots included. To restrict senders, uncomment this
-    # allowlist; trust: {} permits only the owner.
+      # How often noctiluca reloads the members of the Slack user groups under trust.
+      # group_refresh_interval: 1h
+
+    # trust is an allowlist of the senders whose messages start turns.
+    # Without trust, any human or bot that reaches the agent starts turns, and
+    # every turn has a shell (docs/design.md, Trust).
+    # The owner is always trusted, so `trust: {}` permits only the owner.
     # trust:
     #   users: [U_FRIEND_ID]
-    #   groups: [S_USER_GROUP_ID]
-    # Optional, rarely needed overrides by channel ID. An override's trust
-    # replaces the entry's trust there.
+    #   groups: [S_USER_GROUP_ID]  # Slack user groups, Discord role IDs, or traQ group IDs
+    #   # Bot senders. A Slack post without a user ID, such as one
+    #   # from an incoming webhook, carries only its bot ID (B…). If you do not
+    #   # know which ID a bot posts with, list its user ID and its bot ID.
+    #   # A bot listed here is trusted in every channel. If people you do not
+    #   # trust can make the bot post, list it only in the conversations override
+    #   # (below) of the channel that it serves.
+    #   bots: [U_ALERT_BOT_ID]
+
+    # conversations are overrides by channel or DM ID. An override also covers
+    # the channel's threads. An override without trust follows the entry's trust.
     # conversations:
     #   - id: C_NOISY_CHANNEL_ID
-    #     ignore: true
+    #     ignore: true  # no message starts a turn here, not even the owner's
     #   - id: C_SUPPORT_CHANNEL_ID
+    #     # Only a message that mentions the agent starts a turn, the owner's
+    #     # included. Reactions start none.
     #     require_mention: true
     #   - id: C_ALERTS_CHANNEL_ID
+    #     # This trust replaces the entry's trust in this channel.
     #     trust: {groups: [S_USER_GROUP_ID], bots: [U_ALERT_BOT_ID]}
   # - name: discord
   #   type: discord
@@ -38,45 +62,59 @@ messaging:
   #   trust: {groups: [TRAQ_GROUP_UUID]}
 
 model:
-  type: claude  # or codex; executable defaults to the type name
-  name: haiku  # with codex: a Codex model name, or omit for Codex's default
+  # claude or codex. After a change, the agent starts a fresh session, because
+  # neither CLI resumes the other's sessions.
+  type: claude
+  # executable: claude  # defaults to the type
+  name: haiku  # the CLI's name for the model. Omit it for the CLI's default.
   # reasoning_effort: medium  # codex only
-  # Defaults to work/ beside the database, created with mode 0700.
-  # Keep config, database, token files, and memory outside this directory.
-  workdir: work
+  # The directory where the model runs. It defaults to work/ beside the
+  # database, and noctiluca sets its mode to 0700. noctiluca refuses a workdir
+  # that overlaps the config, the database, a token file, or memory.
+  # With codex, create no .codex/ directory in the workdir. If one exists, Codex
+  # marks the workdir as trusted in the config.toml of its own home.
+  # workdir: work
 
 memory:
-  dir: memory
+  dir: memory  # the memory Git repository. noctiluca creates it if it is missing.
 
 database:
   path: noctiluca.db
 
 toolhub:
-  listen: 127.0.0.1:0
+  listen: 127.0.0.1:0  # port 0 picks a free port
 
+# The heartbeat makes the agent check its open work.
 heartbeat:
   enabled: true
   interval: 1h
 
+# The nightly rest restructures memory and starts a fresh session.
 rest:
   enabled: false
-  cron: '0 4 * * *'
-  tz: UTC
+  cron: '0 4 * * *'  # five fields
+  tz: UTC  # an IANA timezone
 
+# Your own scheduled tasks. The names heartbeat and rest are reserved.
 cron: []
 # cron:
 #   - name: morning
 #     cron: '0 9 * * *'
-#     tz: UTC
-#     prompt: Read procedures/morning.md and follow it.
+#     tz: UTC  # required
+#     prompt: Read procedures/morning.md in your memory and follow it.
+#     # Optional. The task input shows this path as a hint. The model still runs
+#     # in model.workdir.
 #     workdir: /path/to/project
 
+# External MCP servers. The agent can use their tools.
+# Log in once per server: noctiluca --config config.yaml mcp-login <name>
+# When a login expires, noctiluca tells the owner. Log in again and restart noctiluca.
 mcp_servers: []
 # mcp_servers:
 #   - name: tracker
 #     url: https://tracker.example/mcp
-#     scopes: [read, offline_access]
-#     tools: [search]
+#     scopes: [read, offline_access]  # the OAuth scopes that mcp-login requests
+#     tools: [search]  # only these tools load. Omit it to load all.
 
 log:
-  level: INFO
+  level: INFO  # DEBUG, INFO, WARN, or ERROR

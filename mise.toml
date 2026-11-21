@@ -15,7 +15,11 @@ run = 'go build -ldflags "-X main.version=$APP_VERSION -X main.revision=$APP_REV
 
 [tasks.test]
 description = "Run tests"
-run = "go test -shuffle=on ./..."
+run = "go test -race -shuffle=on ./..."
+
+[tasks.test-live]
+description = "Run the tests that drive the real Claude and Codex CLIs. Spends subscription requests. The Codex test runs only when NOCTILUCA_LIVE_CODEX_WORKDIR names an existing directory without .codex/"
+run = "go test -tags live -run Live -v ./cmd/noctiluca ./pkg/infrastructure/codex"
 
 [tasks.lint]
 description = "Run Go linters"
