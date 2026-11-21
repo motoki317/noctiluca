@@ -113,7 +113,10 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		return nil, err
 	}
 
-	jobs := append([]domain.Schedule(nil), config.Cron...)
+	var jobs []domain.Schedule
+	for _, job := range config.Cron {
+		jobs = append(jobs, domain.Schedule{Name: job.Name, Cron: job.Cron, TZ: job.TZ, Prompt: job.Prompt, Workdir: job.Workdir})
+	}
 	if config.Heartbeat.Enabled {
 		jobs = append(jobs, domain.Schedule{Name: domain.HeartbeatSchedule, Cron: "@every " + config.Heartbeat.Interval.String(), TZ: "UTC"})
 	}

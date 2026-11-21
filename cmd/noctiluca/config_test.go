@@ -244,6 +244,14 @@ func TestCronConfigRequiresFiveFields(t *testing.T) {
 	require.ErrorContains(t, err, "five fields")
 }
 
+func TestCronConfigRejectsUnknownKey(t *testing.T) {
+	_, err := loadConfig(writeConfig(t, slackEntry+`cron:
+  - {name: daily, cron: '0 9 * * *', tz: UTC, prompt: run, nextrun: 2026-01-01T00:00:00Z}
+`))
+	require.ErrorContains(t, err, "invalid config")
+	require.ErrorContains(t, err, "invalid keys: nextrun")
+}
+
 func TestWorkdirRejectsSecretSymlinkInside(t *testing.T) {
 	path := writeConfig(t, slackEntry+"    slack: {bot_token: {file: work/token}}\nmodel: {workdir: work}\n")
 	dir := filepath.Dir(path)
