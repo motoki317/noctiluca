@@ -23,6 +23,13 @@ type Config struct {
 	NeedGroups bool
 }
 
+var (
+	_ domain.SourceInfoProvider    = (*adapter)(nil)
+	_ domain.UserGroupProvider     = (*adapter)(nil)
+	_ domain.DirectMessageProvider = (*adapter)(nil)
+	_ domain.ConversationFilter    = (*adapter)(nil)
+)
+
 type adapter struct {
 	ownerDMMu          sync.Mutex
 	ownerDM            string
