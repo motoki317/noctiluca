@@ -98,11 +98,11 @@ type callbackResult struct {
 }
 
 type callbackServer struct {
-	server  *http.Server
-	serve   chan error
-	mu      sync.Mutex
-	state   string              // state of the authorization request being waited for
-	results chan callbackResult // capacity 1: the browser can return before receive starts waiting
+	server       *http.Server
+	serve        chan error
+	mu           sync.Mutex
+	awaitedState string
+	results      chan callbackResult // capacity 1: the browser can return before receive starts waiting
 }
 
 func serveCallbacks(listener net.Listener) *callbackServer {
@@ -111,9 +111,9 @@ func serveCallbacks(listener net.Listener) *callbackServer {
 	mux.HandleFunc("GET /callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		c.mu.Lock()
-		valid := c.state != "" && q.Get("state") == c.state
+		valid := c.awaitedState != "" && q.Get("state") == c.awaitedState
 		if valid {
-			c.state = ""
+			c.awaitedState = ""
 		}
 		c.mu.Unlock()
 		if !valid {
@@ -141,7 +141,7 @@ func (c *callbackServer) receive(ctx context.Context, authorizationURL string, o
 		return nil, err
 	}
 	c.mu.Lock()
-	c.state = u.Query().Get("state")
+	c.awaitedState = u.Query().Get("state")
 	c.mu.Unlock()
 	if _, err := fmt.Fprintln(output, authorizationURL); err != nil {
 		return nil, err

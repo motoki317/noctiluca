@@ -58,8 +58,7 @@ func (s *tokenSource) tokenLocked() (*oauth2.Token, error) {
 			return nil, s.ctx.Err()
 		}
 		// OAuth error bodies can contain credentials and must not reach logs or model inputs.
-		var rejected *oauth2.RetrieveError
-		if errors.As(err, &rejected) && rejected.Response != nil && rejected.Response.StatusCode < 500 && rejected.Response.StatusCode != http.StatusTooManyRequests && rejected.Response.StatusCode != http.StatusRequestTimeout && rejected.ErrorCode != "temporarily_unavailable" && rejected.ErrorCode != "server_error" {
+		if permanentRefreshFailure(err) {
 			return nil, s.failLocked("token refresh rejected")
 		}
 		return nil, errors.New("MCP token refresh failed; retry later")
@@ -85,6 +84,16 @@ func (s *tokenSource) tokenLocked() (*oauth2.Token, error) {
 		s.stored = stored
 	}
 	return token, nil
+}
+
+func permanentRefreshFailure(err error) bool {
+	var rejected *oauth2.RetrieveError
+	if !errors.As(err, &rejected) || rejected.Response == nil {
+		return false
+	}
+	status := rejected.Response.StatusCode
+	return status < 500 && status != http.StatusTooManyRequests && status != http.StatusRequestTimeout &&
+		rejected.ErrorCode != "temporarily_unavailable" && rejected.ErrorCode != "server_error"
 }
 
 func (s *tokenSource) refreshRejected(bearer string) error {
