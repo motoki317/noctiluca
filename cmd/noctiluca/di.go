@@ -120,6 +120,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	if config.Rest.Enabled {
 		jobs = append(jobs, domain.Schedule{Name: "rest", Cron: config.Rest.Cron, TZ: config.Rest.TZ, Workdir: config.Model.Workdir})
 	}
+	// Schedules persist in SQLite, so a schedule from an earlier run keeps firing until it is deleted.
 	for name, enabled := range map[string]bool{"heartbeat": config.Heartbeat.Enabled, "rest": config.Rest.Enabled} {
 		if !enabled {
 			if err := repository.NewScheduleRepository(db).Delete(ctx, name); err != nil {

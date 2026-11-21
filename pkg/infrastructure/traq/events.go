@@ -118,7 +118,7 @@ func (a *adapter) connected(ctx context.Context, conn *websocket.Conn, consume f
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	conn.SetReadLimit(4 << 20)
-	// Freeze every cursor before live events can advance the stored history.
+	// backfillTargets must read each last stored message time before a live event advances it.
 	targets := a.backfillTargets(ctx)
 	group, ctx := errgroup.WithContext(ctx)
 	stopGroup := context.AfterFunc(ctx, func() { _ = conn.Close() })
@@ -152,7 +152,8 @@ func (a *adapter) connected(ctx context.Context, conn *websocket.Conn, consume f
 		if err := a.backfill(backfillCtx, targets, consume); err != nil {
 			return err
 		}
-		// Live persistence must not move a cursor past an interrupted backfill.
+		// Live events wait for the backfill. A live event stored first would move the next backfill
+		// past the messages that an interrupted one left unread.
 		for {
 			select {
 			case <-ctx.Done():

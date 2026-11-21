@@ -134,7 +134,7 @@ func (a *adapter) Start(ctx context.Context, consume func(context.Context, domai
 	closeGateway := func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
-		// Disgo may reconnect after Close (disgoorg/disgo#648).
+		// Disgo can reconnect after Close (disgoorg/disgo#648).
 		// The handler's `ctx.Err()` check drops events from such a connection.
 		g.Close(closeCtx)
 		close(gatewayClosed)

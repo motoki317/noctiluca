@@ -183,6 +183,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	}
 	blocked := map[domain.SessionKey]bool{}
 	for _, item := range items {
+		// A database from a version with per-conversation sessions holds rows with other keys. They run in main.
 		if !item.SessionKey.IsNotice() {
 			item.SessionKey = domain.MainSessionKey
 		}
@@ -368,12 +369,12 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 	}
 }
 
-// handleWriteTimeout bounds the writes of one handle call. Writes slower than this mean storage is stuck:
-// stop the process and let restart recovery reconcile from SQLite.
+// Writes slower than this mean that storage is stuck. The reconciler then stops,
+// and recovery at restart reads the state from SQLite.
 const handleWriteTimeout = 30 * time.Second
 
 func (r *Reconciler) handle(ctx context.Context, out result) error {
-	// Shutdown must record successful delivery before recovery can retry the row.
+	// handle also runs after shutdown cancels ctx. It must still record a delivery, or recovery sends the row again.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handleWriteTimeout)
 	defer cancel()
 	p := out.process

@@ -93,7 +93,7 @@ func (s *tokenSource) refreshRejected(bearer string) error {
 	if _, err := s.tokenLocked(); err != nil {
 		return err
 	}
-	// Concurrent requests can reject a token that another request already refreshed.
+	// Another request can already have refreshed the token that the server rejected.
 	if bearer != "Bearer "+s.saved.AccessToken {
 		return nil
 	}
@@ -150,7 +150,7 @@ func restoreTokens(ctx context.Context, config ServerConfig, repository domain.O
 		reg.Audience = reg.Resource
 	}
 	if reg.LoginID == "" {
-		// Older logins need a stable notice key across restarts without exposing credentials.
+		// A stored login without a LoginID needs a notice key that is stable across restarts and exposes no credential.
 		reg.LoginID = fmt.Sprintf("%x", sha256.Sum256(stored.Registration))
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient(config.URL))

@@ -59,7 +59,7 @@ func New(config Config) (domain.ToolHub, error) {
 // Start blocks until Shutdown or cancellation, as other services do under an errgroup.
 func (h *hub) Start(ctx context.Context) error {
 	h.mu.Lock()
-	// A shutdown that wins the race with Start leaves nothing to serve; that is not an error.
+	// A Shutdown that wins the race with Start leaves nothing to serve. That is not an error.
 	if h.closed {
 		h.mu.Unlock()
 		return nil
@@ -100,7 +100,7 @@ func (h *hub) Shutdown(ctx context.Context) error {
 		delete(h.sessions, key)
 	}
 	h.mu.Unlock()
-	// Shutdown owns active listeners. Close ours afterward if Start was never called.
+	// http.Server.Shutdown closes only a listener that Serve registered. This defer closes ours if Start never ran.
 	defer h.listener.Close()
 	if err := h.http.Shutdown(ctx); err != nil {
 		_ = h.http.Close()

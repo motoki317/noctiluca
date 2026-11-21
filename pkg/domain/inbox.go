@@ -13,6 +13,7 @@ func (key SessionKey) IsNotice() bool {
 }
 
 type InboxPayload struct {
+	// Continuations counts the interruption notes that led to this input.
 	Continuations int    `json:",omitempty"`
 	Procedure     string `json:",omitempty"`
 	Notice        string `json:",omitempty"`
@@ -42,13 +43,14 @@ func NewOwnerNotice(source, text string) InboxItem {
 		ReadyAt:    time.Now(),
 		Payload: InboxPayload{
 			Notice: text,
-			// Owner notices must pass acceptance without a conversation rule.
+			// The empty Conversation lets a notice pass the accept check.
 			Context: SessionContext{TaskName: "owner-notice"},
 		},
 	}
 }
 
-// InboxRepository commits source outcomes and their next input together.
+// Each method commits all of its writes in one transaction: an event with its row,
+// a schedule's next run with its row, a delivery with its session state.
 type InboxRepository interface {
 	Delivered(context.Context, int64, Session) error
 	Reject(context.Context, int64, string) error

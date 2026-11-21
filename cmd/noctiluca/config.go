@@ -27,7 +27,8 @@ import (
 type secretRef struct {
 	Env  string `mapstructure:"env"`
 	File string `mapstructure:"file"`
-	// Unknown keeps other keys out of decoder errors: a token pasted over `env: NAME` becomes a key.
+	// Unknown collects unexpected keys before the decoder names them in its error.
+	// A token pasted over `env: NAME` becomes a key and would leak there.
 	Unknown map[string]any `mapstructure:",remain"`
 }
 
@@ -190,7 +191,7 @@ func loadConfig(path string) (Config, error) {
 	default:
 		return Config{}, errors.New("model.type must be claude or codex")
 	}
-	// Viper omits empty maps and null values from strict decoding.
+	// UnmarshalExact does not reject a key whose value is null or an empty map, so check these keys by presence.
 	keys := v.AllKeys()
 	for _, key := range []string{"owner", "slack", "conversations"} {
 		if v.InConfig(key) || slices.Contains(keys, key) {
@@ -232,7 +233,8 @@ func loadConfig(path string) (Config, error) {
 		}
 	}
 	var config Config
-	// Decoder errors name fields and unknown keys but omit values, except that an invalid duration's error keeps the value up to its last space. Durations hold no secrets.
+	// The decoder error names fields and unknown keys and omits values, so it is safe to return.
+	// An invalid duration is the exception: its error keeps the value up to its last space. Durations hold no secrets.
 	if err := v.UnmarshalExact(&config); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
@@ -242,7 +244,7 @@ func loadConfig(path string) (Config, error) {
 		}
 		return nil
 	}
-	// Check key presence because strict decoding also accepts explicit false and null values.
+	// The decoded struct cannot tell an absent key from an explicit false or null, so check the raw keys.
 	for i, instance := range config.Messaging {
 		entry, _ := entries[i].(map[string]any)
 		if err := validateTrust(entry, fmt.Sprintf("messaging entry %d", i+1)); err != nil {

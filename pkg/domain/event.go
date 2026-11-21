@@ -47,14 +47,19 @@ type Attachment struct {
 }
 
 type InboundEvent struct {
-	SourceKey     string
-	Accepted      *bool
-	Deleted       bool
-	Kind          InboundEventKind
-	Conversation  ConversationRef
-	Parent        ConversationRef
-	MessageRef    ConversationRef
-	Direct        bool
+	// SourceKey identifies the platform event. The inbox stores one row per key. The core fills an empty one.
+	SourceKey string
+	// Accepted is the core's accept decision. Adapters leave it nil.
+	Accepted *bool
+	Deleted  bool
+	Kind     InboundEventKind
+	// Conversation is where a reply goes. Parent is a thread's channel and is empty at top level.
+	Conversation ConversationRef
+	Parent       ConversationRef
+	// MessageRef names this message, or the message that a reaction is on.
+	MessageRef ConversationRef
+	Direct     bool
+	// AlsoInChannel marks a thread reply that its sender also posted to the channel.
 	AlsoInChannel bool
 	Sender        Sender
 	Text          string

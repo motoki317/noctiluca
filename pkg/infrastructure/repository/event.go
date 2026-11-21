@@ -137,6 +137,7 @@ func (r *eventRepository) Search(ctx context.Context, query string, limit int) (
 	if !utf8.ValidString(query) || strings.ContainsRune(query, 0) {
 		return nil, errors.New("query must be UTF-8 text without NUL")
 	}
+	// The trigram tokenizer cannot match a query shorter than three characters.
 	if utf8.RuneCountInString(query) < 3 {
 		pattern := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query) + "%"
 		return r.queryInbound(ctx, `SELECT `+inboundColumns+` FROM events e

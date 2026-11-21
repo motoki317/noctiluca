@@ -7,14 +7,17 @@ import (
 )
 
 type Tool struct {
-	ReadOnly    bool
-	WritesChat  bool
+	ReadOnly bool
+	// Subagents must not get a tool that writes to chat.
+	WritesChat bool
+	// OnDemand lets the model CLI load the schema when needed. Other tools carry the hub's always-offered metadata.
 	OnDemand    bool
 	Name        string
 	Description string
 	InputSchema json.RawMessage
-	TextResult  bool
-	Handler     func(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
+	// TextResult means that the handler returns a JSON string, which the hub sends as plain text.
+	TextResult bool
+	Handler    func(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
 }
 
 type ToolSession struct {

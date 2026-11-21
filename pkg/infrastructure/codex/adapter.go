@@ -64,6 +64,7 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 	if err := s.write(initCtx, rpcFrame{Method: "initialized"}); err != nil {
 		return nil, err
 	}
+	// The hub is the only tool source, so ChatGPT connectors stay off.
 	overrides := map[string]any{"features.apps": false}
 	if a.effort != "" {
 		overrides["model_reasoning_effort"] = a.effort
@@ -98,6 +99,7 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 	if result.Thread.ID == "" {
 		return nil, errors.New("codex returned no thread id")
 	}
+	// Codex keeps a thread's first developer instructions on resume, so a changed prompt goes in as a developer message.
 	if params.ThreadID != "" && previousHash != promptHash(prompt) {
 		err := s.call(initCtx, "thread/inject_items", map[string]any{
 			"threadId": result.Thread.ID,

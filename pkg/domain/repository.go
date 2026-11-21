@@ -52,6 +52,7 @@ type ModelRecord struct {
 }
 
 type SessionTurn struct {
+	// InputID is the input that opened the turn. It is zero when the model started the turn itself.
 	InputID       int64 `json:",omitempty"`
 	Continuations int
 	Failure       string `json:",omitempty"`

@@ -105,6 +105,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		}
 		channel = e.Item.Channel
 		reactionUser = e.ItemUser
+		// The sender stays a bot until users.info shows a human, so a failed lookup cannot pass a bot as a human.
 		sender := domain.Sender{ID: e.User, Kind: domain.SenderBot}
 		// The target timestamp keeps the reaction useful even when its message is unavailable.
 		event = domain.InboundEvent{MessageRef: Conversation(a.name, channel, e.Item.Timestamp), Kind: domain.InboundEventReaction, Sender: sender, Text: fmt.Sprintf(":%s: on message %s", e.Reaction, e.Item.Timestamp), ReceivedAt: time.Now()}
@@ -129,6 +130,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			if reactionUser != a.selfUser {
 				return event, false
 			}
+		// In a conversation that the core ignores, the adapter skips the lookup.
 		case thread != "" && !mentionsMe && acceptsConversation:
 			joined, err := a.joinedThread(ctx, channel, thread)
 			if err != nil {
@@ -139,7 +141,6 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 		}
 	}
 	if event.Kind == domain.InboundEventReaction && acceptsConversation {
-		// Unknown senders must not bypass the core's bot restriction.
 		if user, err := a.bot.GetUserInfoContext(ctx, event.Sender.ID); err == nil {
 			if !user.IsBot {
 				event.Sender.Kind = domain.SenderHuman

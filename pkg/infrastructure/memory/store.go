@@ -87,7 +87,7 @@ func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return nil, err
 		}
-		// An empty baseline must leave the owner's staged files in the index.
+		// --only keeps the owner's staged files out of the empty first commit.
 		if _, err := s.git(ctx, "commit", "--quiet", "--allow-empty", "--only", "--message", "Initialize memory"); err != nil {
 			return nil, err
 		}

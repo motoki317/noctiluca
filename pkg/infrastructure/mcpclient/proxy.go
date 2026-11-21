@@ -224,7 +224,7 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 				return nil, err
 			}
 			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool.Name, Arguments: input})
-			// Calls can have side effects. Reconnection only affects subsequent calls.
+			// A call can have side effects, so the handler never retries a failed call.
 			if err != nil {
 				if authErr := r.tokens.err(); authErr != nil {
 					return nil, authErr
@@ -317,7 +317,7 @@ func (r *remote) close() error {
 	r.stopClose()
 	err := r.session.Close()
 	r.session = nil
-	// A revoked token can also reject the session's DELETE request.
+	// The server can also reject the session's DELETE request after it revokes the token.
 	if r.tokens.err() != nil {
 		return nil
 	}
@@ -330,6 +330,7 @@ func (r *remote) disable(ctx context.Context, notify func()) error {
 	}
 	reason := r.tokens.err().Error()
 	r.logger.WarnContext(ctx, "Skipping MCP server until re-login", "server", r.config.Name, "error", reason)
+	// One login keeps one key, and the inbox stores one row per source key, so each login sends one notice.
 	key := "mcp-auth:" + r.config.Name + ":" + r.loginID
 	_, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice(key, reason))
 	if err == nil && notify != nil {

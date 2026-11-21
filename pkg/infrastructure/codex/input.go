@@ -59,9 +59,9 @@ func (s *session) sendInputs() {
 				Turn   turn   `json:"turn"`
 				TurnID string `json:"turnId"`
 			}
-			// Shutdown still needs the turn/start reply's ID for turn/interrupt if
-			// turn/started is absent. Waiting for the turn/steer reply also resolves
-			// whether its input was accepted or must remain queued.
+			// This call outlives session cancellation. If turn/started is absent, shutdown needs the
+			// turn ID from the turn/start reply for turn/interrupt. The turn/steer reply tells whether
+			// its input was accepted or stays queued.
 			err := s.call(context.WithoutCancel(s.ctx), method, params, &result)
 			s.mu.Lock()
 			var rpcErr *rpcError
@@ -99,7 +99,7 @@ func (s *session) sendInputs() {
 					return
 				}
 			} else {
-				// Publish the turn lifecycle before its input acknowledgement.
+				// The ModelSession contract puts turn_started before input_started.
 				select {
 				case <-t.started:
 				case <-s.ctx.Done():

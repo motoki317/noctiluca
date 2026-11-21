@@ -20,8 +20,7 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
-// Login prints each authorization URL to output and, when open is non-nil, also opens it in a
-// browser. A failed open is ignored: the printed URL still works.
+// Login ignores a failed open, because the printed URL still works.
 func Login(ctx context.Context, config ServerConfig, repository domain.OAuthTokenRepository, output io.Writer, open func(string) error) error {
 	if err := Validate([]ServerConfig{config}); err != nil {
 		return err
@@ -31,8 +30,8 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	if err != nil {
 		return fmt.Errorf("listen for OAuth redirect: %w", err)
 	}
-	// One callback server serves the whole login: the SDK can ask for authorization more than
-	// once (for example after a scope challenge), and a per-request server would close the listener.
+	// The SDK can ask for authorization more than once, for example after a scope challenge.
+	// A server per request would close the listener between requests.
 	callbacks := serveCallbacks(listener)
 	defer callbacks.close()
 	redirect := "http://" + listener.Addr().String() + "/callback"
@@ -136,7 +135,6 @@ func serveCallbacks(listener net.Listener) *callbackServer {
 	return c
 }
 
-// receive prints the authorization URL and waits for the browser's redirect for that request.
 func (c *callbackServer) receive(ctx context.Context, authorizationURL string, output io.Writer, open func(string) error) (*auth.AuthorizationResult, error) {
 	u, err := url.Parse(authorizationURL)
 	if err != nil {

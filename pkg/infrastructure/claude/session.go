@@ -191,7 +191,7 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		if f.Type == "control_request" {
 			response := map[string]any{"subtype": "error", "request_id": f.RequestID, "error": "Unsupported control request"}
 			if f.Request.Subtype == "can_use_tool" {
-				// Accepted sessions share the Unix user and its native tool permissions.
+				// Every input gets the native tools of noctiluca's Unix user, so the adapter allows each permission prompt.
 				response = map[string]any{"subtype": "success", "request_id": f.RequestID, "response": map[string]any{"behavior": "allow", "updatedInput": f.Request.Input}}
 			}
 			controlCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
@@ -221,6 +221,7 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		if compactionFinished && f.failedResult() {
 			s.warnCompactionFailure()
 		}
+		// An empty background_done tells the reconciler that the session became idle.
 		if !compactionFinished && !wasIdle && s.idle() && len(events) == 0 {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone})
 		}
@@ -232,7 +233,8 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 		for _, event := range events {
 			s.emit(event)
 		}
-		// An initialization write can fail before the CLI's final diagnostic is read.
+		// Before initialization completes, keep reading after cancellation.
+		// The CLI's final diagnostic explains a failed start.
 		if initialized && s.ctx.Err() != nil {
 			break
 		}
@@ -301,7 +303,7 @@ func (s *session) runCompaction() {
 }
 
 func (s *session) compactIfReady() {
-	// Reserve stdin before checking the gate so a concurrent Send cannot overtake /compact.
+	// Take writeLock before checking canCompact so a concurrent Send cannot overtake /compact.
 	select {
 	case s.writeLock <- struct{}{}:
 	case <-s.ctx.Done():
@@ -373,6 +375,7 @@ func (s *session) writeLocked(ctx context.Context, value any) error {
 }
 
 func (s *session) Send(ctx context.Context, input domain.UserInput) error {
+	// Send ignores input.SentDuringTurn. The CLI wraps a message that it delivers within a running turn in its own reminder.
 	// Attachment references remain opaque. The model downloads them through adapter tools.
 	text := input.Text
 	if len(input.Attachments) > 0 {

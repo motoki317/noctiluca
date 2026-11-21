@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-// Keep status and operation separate from response bodies and transport errors.
+// lookupError carries only the operation and the HTTP status, so response bodies and transport errors stay out of logs.
 type lookupError struct {
 	operation string
 	status    int

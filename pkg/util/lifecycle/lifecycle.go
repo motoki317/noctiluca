@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// Group retains one lifetime across startup phases and joins them on shutdown.
+// Group gives every Begin call one shared context. Shutdown waits for all of them.
 type Group struct {
 	mu      sync.Mutex
 	ctx     context.Context

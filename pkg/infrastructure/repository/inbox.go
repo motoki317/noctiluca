@@ -22,7 +22,7 @@ func insertInbox(ctx context.Context, db executor, item domain.InboxItem) (sql.R
 	if item.Status == "" {
 		item.Status = "pending"
 	}
-	// The schema requires actor and deadline values.
+	// The schema requires actor and deadline. No code reads them.
 	return db.ExecContext(ctx, `INSERT INTO inbox(source_key,session_key,actor,payload,ready_at,lane,status,retry_at,deadline) VALUES(?,?,'owner',?,?,?,?,?,?) ON CONFLICT(source_key) DO NOTHING`, item.SourceKey, item.SessionKey, string(raw), item.ReadyAt.UTC(), item.Lane, item.Status, item.RetryAt.UTC(), time.Time{})
 }
 func (r *inboxRepository) Enqueue(ctx context.Context, item domain.InboxItem) (int64, error) {

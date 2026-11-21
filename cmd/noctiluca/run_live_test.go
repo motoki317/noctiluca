@@ -179,7 +179,7 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		reply(t, "D_OWNER", "", "QUEUE_SECOND")
 		idle(t)
 		require.Equal(t, "done", status())
-		// Whether Claude answers it in the same turn or the next one is its own choice; it must reach the running process.
+		// Claude chooses whether to answer it in the same turn or the next one. Either way, it must reach the running process.
 		require.Equal(t, before, launches(), "second message must reach the running process")
 	})
 	run("a_shared_session_threads", func(t *testing.T) {

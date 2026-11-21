@@ -243,7 +243,7 @@ func TestConversationFlow(t *testing.T) {
 	require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
 	records, err := f.events.ListModel(t.Context(), domain.MainSessionKey, 30)
 	require.NoError(t, err)
-	// The exit may record an interruption after the background event.
+	// The exit can record an interruption after the background event.
 	require.True(t, slices.ContainsFunc(records, func(r domain.ModelRecord) bool { return r.Event.Kind == domain.ModelEventBackgroundDone }))
 	select {
 	case posted := <-f.messaging.out:

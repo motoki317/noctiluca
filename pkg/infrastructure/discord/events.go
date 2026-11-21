@@ -34,7 +34,7 @@ func (a *adapter) dispatch(ctx context.Context, data gateway.EventData, consume 
 		if e.EditedTimestamp == nil {
 			return nil
 		}
-		// Updates can omit author, mentions and attachments; fetch the complete message.
+		// An update can omit the author, mentions, and attachments, so the adapter fetches the complete message.
 		var message *sdk.Message
 		message, err = a.api.GetMessage(e.ChannelID, e.ID, rest.WithCtx(ctx))
 		if rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage) {
@@ -164,6 +164,7 @@ func (a *adapter) inThread(ctx context.Context, thread sdk.GuildThread) (bool, e
 	if !rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMember) {
 		return false, &lookupError{"GetThreadMember", err}
 	}
+	// A thread started from a message has that message's ID.
 	root, err := a.api.GetMessage(*thread.ParentID(), thread.ID(), rest.WithCtx(ctx))
 	if rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownMessage) {
 		return false, nil
@@ -259,7 +260,7 @@ func (a *adapter) backfill(ctx context.Context, consume func(context.Context, do
 	if err != nil {
 		a.warnLookup(ctx, 0, 0, &lookupError{"ListConversations", err})
 	}
-	owner, _ := parseID(a.config.Owner) // Validated by newAdapter.
+	owner, _ := parseID(a.config.Owner) // newAdapter validated the owner ID.
 	dm, err := a.api.CreateDMChannel(owner, rest.WithCtx(ctx))
 	if err != nil {
 		a.warnLookup(ctx, 0, 0, &lookupError{"CreateDMChannel", err})
