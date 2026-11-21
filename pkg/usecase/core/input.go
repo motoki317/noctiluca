@@ -48,7 +48,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 		if prefix, _, ok := strings.Cut(item.SourceKey, ":"); ok && (prefix == "watch" || prefix == "wake") {
 			return input
 		}
-		if item.Lane == "task" {
+		if item.Lane == domain.LaneTask {
 			header := fmt.Sprintf("Task %s | system | %s\n", item.Payload.Context.TaskName, item.ReadyAt.In(location).Format("15:04:05 MST"))
 			if hint := item.Payload.Context.Workdir; hint != "" && hint != workdir {
 				header += "workdir: " + hint + "\n"

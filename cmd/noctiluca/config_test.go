@@ -181,7 +181,7 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 	require.NoError(t, err)
 	db, err := repository.New(t.Context(), c.Database)
 	require.NoError(t, err)
-	for _, name := range []string{"heartbeat", "rest"} {
+	for _, name := range []string{domain.HeartbeatSchedule, domain.RestSchedule} {
 		require.NoError(t, repository.NewScheduleRepository(db).Save(t.Context(), domain.Schedule{Name: name, Cron: "0 * * * *", TZ: "UTC"}))
 	}
 	require.NoError(t, db.Close())
@@ -194,7 +194,7 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 }
 
 func TestReservedCronNames(t *testing.T) {
-	for _, name := range []string{"heartbeat", "rest"} {
+	for _, name := range []string{domain.HeartbeatSchedule, domain.RestSchedule} {
 		c, err := loadConfig(writeConfig(t, slackEntry+"cron:\n  - {name: "+name+", cron: '0 4 * * *', tz: UTC, prompt: run}\n"))
 		require.NoError(t, err)
 		_, _, err = c.validateRun()
@@ -242,6 +242,14 @@ func TestCronConfigRequiresFiveFields(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = c.validateRun()
 	require.ErrorContains(t, err, "five fields")
+}
+
+func TestCronConfigRejectsUnknownKey(t *testing.T) {
+	_, err := loadConfig(writeConfig(t, slackEntry+`cron:
+  - {name: daily, cron: '0 9 * * *', tz: UTC, prompt: run, nextrun: 2026-01-01T00:00:00Z}
+`))
+	require.ErrorContains(t, err, "invalid config")
+	require.ErrorContains(t, err, "invalid keys: nextrun")
 }
 
 func TestWorkdirRejectsSecretSymlinkInside(t *testing.T) {

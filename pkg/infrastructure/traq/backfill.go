@@ -11,6 +11,11 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
+const (
+	backfillWindow = 24 * time.Hour
+	backfillLimit  = 200
+)
+
 type backfillTarget struct {
 	channel string
 	direct  bool
@@ -32,6 +37,7 @@ func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
 		}
 	}
 	now := time.Now()
+	oldest := now.Add(-backfillWindow)
 	targets := make([]backfillTarget, 0, len(conversations))
 	seen := make(map[domain.ConversationRef]bool)
 	for _, conversation := range conversations {
@@ -53,7 +59,7 @@ func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
 			a.warnLookup(ctx, "read traQ backfill cursor", err, "channel_id", channel)
 			continue
 		}
-		since := now.Add(-24 * time.Hour)
+		since := oldest
 		if last.After(since) {
 			since = last
 		}
@@ -67,7 +73,7 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 		if ctx.Err() != nil {
 			return errReconnect
 		}
-		joined := target.direct
+		botInChannel := target.direct
 		if !target.direct {
 			bots, response, err := a.api.ChannelAPI.GetChannelBots(ctx, target.channel).Execute()
 			if err != nil {
@@ -76,10 +82,10 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 				}
 				a.warnLookup(ctx, "read traQ channel bots", apiError("read traQ channel bots", response, err), "channel_id", target.channel)
 			} else {
-				joined = slices.ContainsFunc(bots, func(bot sdk.BotUser) bool { return bot.BotUserId == a.self })
+				botInChannel = slices.ContainsFunc(bots, func(bot sdk.BotUser) bool { return bot.BotUserId == a.self })
 			}
 		}
-		messages, response, err := a.api.MessageAPI.GetMessages(ctx, target.channel).Since(target.since).Until(target.until).Inclusive(true).Limit(200).Order("desc").Execute()
+		messages, response, err := a.api.MessageAPI.GetMessages(ctx, target.channel).Since(target.since).Until(target.until).Inclusive(true).Limit(backfillLimit).Order("desc").Execute()
 		if err != nil {
 			if ctx.Err() != nil {
 				return errReconnect
@@ -88,8 +94,8 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 			continue
 		}
 		// The cap keeps the newest messages, then delivers that window chronologically.
-		if len(messages) > 200 {
-			messages = messages[:200]
+		if len(messages) > backfillLimit {
+			messages = messages[:backfillLimit]
 		}
 		slices.SortFunc(messages, func(a, b sdk.Message) int {
 			if order := a.CreatedAt.Compare(b.CreatedAt); order != 0 {
@@ -105,7 +111,7 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 				continue
 			}
 			mentions := a.mentions(message.Content, nil)
-			if !joined && !mentions {
+			if !botInChannel && !mentions {
 				continue
 			}
 			user, err := a.lookupUser(ctx, message.UserId)

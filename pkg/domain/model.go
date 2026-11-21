@@ -15,11 +15,12 @@ type MCPEndpoint struct {
 }
 
 type ModelSessionConfig struct {
-	Key              SessionKey
-	ResumeToken      string
-	SystemPrompt     string
-	ToolHub          MCPEndpoint
-	Workdir          string
+	Key          SessionKey
+	ResumeToken  string
+	SystemPrompt string
+	ToolHub      MCPEndpoint
+	Workdir      string
+	// Subagents must not get these tools.
 	ChatWritingTools []string
 	// OnCompactionDone runs when a requested compaction ends, whether it succeeded or failed.
 	// It is optional and must return immediately.
@@ -68,15 +69,16 @@ type ModelAdapter interface {
 }
 
 type ModelSession interface {
-	// For each Send that returns nil, the session emits exactly one
-	// ModelEventInputStarted or ModelEventInputRefused for the input's ID, unless it
-	// closes first. Refusals include Err. Several inputs can await acknowledgement, and
-	// acknowledgements can arrive in any order. InputStarted follows TurnStarted,
-	// but can arrive after TurnFinished.
+	// Send can be called during a turn. The adapter adds the input to the running turn or queues it.
+	// For each Send that returns nil, the session emits exactly one ModelEventInputStarted or
+	// ModelEventInputRefused for the input's ID, unless it closes first. A refusal carries Err.
+	// Several inputs can await acknowledgement, and acknowledgements can arrive in any order.
+	// InputStarted follows TurnStarted. It can arrive after TurnFinished.
 	Send(ctx context.Context, input UserInput) error
 	Events() <-chan ModelEvent
 	ResumeToken() string
-	// ContextTokens reports the last measured size of the main context, or zero if unknown.
+	// ContextTokens reports the size of the session's own context after its last model request, or zero if unknown.
+	// Subagent contexts do not count.
 	ContextTokens() int
 	// Compact requests compaction between turns and returns immediately.
 	Compact()

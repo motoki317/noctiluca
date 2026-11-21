@@ -52,6 +52,7 @@ type ModelRecord struct {
 }
 
 type SessionTurn struct {
+	// InputID is the input that opened the turn. It is zero when the model started the turn itself.
 	InputID       int64 `json:",omitempty"`
 	Continuations int
 	Failure       string `json:",omitempty"`
@@ -73,10 +74,15 @@ type SessionContext struct {
 
 type SessionRepository interface {
 	Recover(context.Context) error
-	Interrupt(context.Context, SessionKey, string) error
+	Interrupt(ctx context.Context, key SessionKey, reason string) error
 	Get(ctx context.Context, key SessionKey) (Session, error)
 	Save(ctx context.Context, session Session) error
 }
+
+const (
+	HeartbeatSchedule = "heartbeat"
+	RestSchedule      = "rest"
+)
 
 type Schedule struct {
 	NextRun time.Time

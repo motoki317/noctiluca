@@ -100,7 +100,7 @@ func (w *watcher) wake(ctx context.Context, raw json.RawMessage) (json.RawMessag
 	if in.At.IsZero() || in.Note == "" {
 		return nil, errors.New("at and note are required")
 	}
-	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation}
 	item.SourceKey = "wake:" + uuid.NewString()
 	item.ReadyAt = in.At
 	item.Payload.Input.Text = in.Note
@@ -127,7 +127,7 @@ func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	if in.Command == "" || in.CWD == "" {
 		return nil, errors.New("command and cwd are required")
 	}
-	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.ctx == nil || w.ctx.Err() != nil {
@@ -174,6 +174,8 @@ func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	return json.Marshal(map[string]int{"pid": cmd.Process.Pid})
 }
 
+const tailBytes = 4096
+
 type tail struct {
 	mu   sync.Mutex
 	data []byte
@@ -183,10 +185,10 @@ func (t *tail) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	n := len(p)
-	if len(p) >= 4096 {
-		t.data = append(t.data[:0], p[len(p)-4096:]...)
+	if len(p) >= tailBytes {
+		t.data = append(t.data[:0], p[len(p)-tailBytes:]...)
 	} else {
-		if extra := len(t.data) + len(p) - 4096; extra > 0 {
+		if extra := len(t.data) + len(p) - tailBytes; extra > 0 {
 			copy(t.data, t.data[extra:])
 			t.data = t.data[:len(t.data)-extra]
 		}

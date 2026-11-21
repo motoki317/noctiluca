@@ -27,7 +27,7 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	db := openDB(t)
 	inbox := repository.NewInboxRepository(db)
 	sessions := repository.NewSessionRepository(db)
-	item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now()}
+	item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation, ReadyAt: time.Now()}
 	deliveredTurn(t, db, item)
 	// An expired deadline in legacy turn JSON must not suppress recovery.
 	_, err := db.Exec(`UPDATE sessions SET turn_json=json_set(turn_json,'$.Deadline','2000-01-01T00:00:00Z') WHERE key=?`, domain.MainSessionKey)
@@ -39,7 +39,7 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 	require.Len(t, active, 1)
 	continued := active[0]
 	require.Equal(t, domain.MainSessionKey, continued.SessionKey)
-	require.Equal(t, "conv", continued.Lane)
+	require.Equal(t, domain.LaneConversation, continued.Lane)
 	require.Equal(t, 1, continued.Payload.Continuations)
 	require.Nil(t, continued.Payload.Event)
 	require.Contains(t, continued.Payload.Input.Text, "Finish each unfinished part")
@@ -58,8 +58,8 @@ func TestRestartContinuesDeliveredTurnOnce(t *testing.T) {
 
 func TestInterruptContinuesRegardlessOfTaskOrReason(t *testing.T) {
 	for _, reason := range []string{"model process exited", "shutdown"} {
-		for _, lane := range []string{"conv", "task"} {
-			t.Run(reason+"/"+lane, func(t *testing.T) {
+		for _, lane := range []domain.Lane{domain.LaneConversation, domain.LaneTask} {
+			t.Run(reason+"/"+string(lane), func(t *testing.T) {
 				db := openDB(t)
 				sessions := repository.NewSessionRepository(db)
 				item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: lane, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}}}
@@ -68,7 +68,7 @@ func TestInterruptContinuesRegardlessOfTaskOrReason(t *testing.T) {
 				active, err := repository.NewInboxRepository(db).Active(t.Context())
 				require.NoError(t, err)
 				require.Len(t, active, 1)
-				require.Equal(t, "conv", active[0].Lane)
+				require.Equal(t, domain.LaneConversation, active[0].Lane)
 				require.Equal(t, 1, active[0].Payload.Continuations)
 				require.Contains(t, active[0].Payload.Input.Text, "previous turn was interrupted: "+reason)
 				require.Contains(t, active[0].Payload.Input.Text, "Finish each unfinished part")
@@ -84,7 +84,7 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 			db := openDB(t)
 			inbox := repository.NewInboxRepository(db)
 			sessions := repository.NewSessionRepository(db)
-			item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
+			item := domain.InboxItem{SourceKey: "unsent", SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation, ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "original"}}}
 			id, err := inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
 			_, err = inbox.Claim(t.Context(), id)
@@ -99,7 +99,8 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, active, 1)
 			require.Equal(t, id, active[0].ID)
-			require.Equal(t, "pending", active[0].Status)
+			require.Equal(t, domain.InboxPending, active[0].Status)
+			require.Zero(t, active[0].Attempts)
 			require.Equal(t, item.Payload, active[0].Payload)
 			var count int
 			require.NoError(t, db.QueryRow("SELECT count(*) FROM model_events").Scan(&count))
@@ -109,32 +110,33 @@ func TestUnsentHandoffReturnsPending(t *testing.T) {
 }
 
 func TestInterruptChecksOpeningInput(t *testing.T) {
-	for _, status := range []string{"dispatched", "dead", "done", "legacy"} {
-		t.Run(status, func(t *testing.T) {
+	const noOpeningInput = "no opening input"
+	for _, status := range []domain.InboxStatus{domain.InboxDispatched, domain.InboxDead, domain.InboxDone, noOpeningInput} {
+		t.Run(string(status), func(t *testing.T) {
 			db := openDB(t)
 			inbox := repository.NewInboxRepository(db)
 			sessions := repository.NewSessionRepository(db)
-			item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}, Input: domain.UserInput{Text: "original"}}}
+			item := domain.InboxItem{SourceKey: "opening", SessionKey: domain.MainSessionKey, Lane: domain.LaneTask, ReadyAt: time.Now(), Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily"}, Input: domain.UserInput{Text: "original"}}}
 			id, err := inbox.Enqueue(t.Context(), item)
 			require.NoError(t, err)
 			claimed, err := inbox.Claim(t.Context(), id)
 			require.NoError(t, err)
 			require.True(t, claimed)
 			turn := &domain.SessionTurn{InputID: id}
-			if status == "legacy" {
+			if status == noOpeningInput {
 				turn.InputID = 0
 			}
 			state := domain.Session{Key: item.SessionKey, ResumeToken: "resume", Context: &item.Payload.Context, Turn: turn}
 			require.NoError(t, sessions.Save(t.Context(), state))
-			expectedStatus := "pending"
+			expectedStatus := domain.InboxPending
 			switch status {
-			case "dead":
-				_, err := inbox.Finish(t.Context(), id, "refused", 1, time.Now().Add(time.Hour))
+			case domain.InboxDead:
+				_, err := inbox.Fail(t.Context(), id, "refused", 1, time.Now().Add(time.Hour))
 				require.NoError(t, err)
-				expectedStatus = "dead"
-			case "done":
+				expectedStatus = domain.InboxDead
+			case domain.InboxDone:
 				require.NoError(t, inbox.Delivered(t.Context(), id, state))
-				expectedStatus = "done"
+				expectedStatus = domain.InboxDone
 				// Later unstarted input must not hide an acknowledged opening item.
 				item.SourceKey = "queued"
 				queued, err := inbox.Enqueue(t.Context(), item)
@@ -156,14 +158,14 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 			after, err := events.InputContext(t.Context(), item.SessionKey, "", time.Now())
 			require.NoError(t, err)
 			require.False(t, after.Running)
-			var originalStatus string
+			var originalStatus domain.InboxStatus
 			require.NoError(t, db.QueryRow("SELECT status FROM inbox WHERE id=?", id).Scan(&originalStatus))
 			require.Equal(t, expectedStatus, originalStatus)
 			var notes, followups int
 			require.NoError(t, db.QueryRow("SELECT count(*) FROM model_events WHERE kind='error'").Scan(&notes))
 			require.NoError(t, db.QueryRow("SELECT count(*) FROM inbox WHERE source_key LIKE 'interrupted:%'").Scan(&followups))
 			expected := 0
-			if status == "done" || status == "legacy" {
+			if status == domain.InboxDone || status == noOpeningInput {
 				expected = 1
 			}
 			require.Equal(t, 1, notes)
@@ -185,7 +187,7 @@ func TestInterruptResetsOldKeysAndKeepsNoticeIndependent(t *testing.T) {
 	sessions := repository.NewSessionRepository(db)
 	ids := make(map[domain.SessionKey]int64)
 	for _, key := range []domain.SessionKey{"old-room", "task:old", domain.MainSessionKey, "notice:owner"} {
-		item := domain.InboxItem{SessionKey: key, SourceKey: string(key), Lane: "conv"}
+		item := domain.InboxItem{SessionKey: key, SourceKey: string(key), Lane: domain.LaneConversation}
 		id, err := inbox.Enqueue(t.Context(), item)
 		require.NoError(t, err)
 		ids[key] = id
@@ -193,25 +195,25 @@ func TestInterruptResetsOldKeysAndKeepsNoticeIndependent(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, claimed)
 	}
-	status := func(key domain.SessionKey, want string) {
+	status := func(key domain.SessionKey, want domain.InboxStatus) {
 		t.Helper()
-		var got string
+		var got domain.InboxStatus
 		require.NoError(t, db.QueryRow("SELECT status FROM inbox WHERE id=?", ids[key]).Scan(&got))
 		require.Equal(t, want, got)
 	}
 	require.NoError(t, sessions.Interrupt(t.Context(), domain.MainSessionKey, "exit"))
 	for _, key := range []domain.SessionKey{"old-room", "task:old", domain.MainSessionKey} {
-		status(key, "pending")
+		status(key, domain.InboxPending)
 	}
-	status("notice:owner", "dispatched")
+	status("notice:owner", domain.InboxDispatched)
 	_, err := inbox.Claim(t.Context(), ids["old-room"])
 	require.NoError(t, err)
 	require.NoError(t, sessions.Interrupt(t.Context(), "notice:owner", "exit"))
-	status("old-room", "dispatched")
-	status("notice:owner", "pending")
+	status("old-room", domain.InboxDispatched)
+	status("notice:owner", domain.InboxPending)
 	_, err = inbox.Claim(t.Context(), ids["notice:owner"])
 	require.NoError(t, err)
 	require.NoError(t, sessions.Recover(t.Context()))
-	status("old-room", "pending")
-	status("notice:owner", "pending")
+	status("old-room", domain.InboxPending)
+	status("notice:owner", domain.InboxPending)
 }

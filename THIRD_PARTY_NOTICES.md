@@ -7,7 +7,7 @@ noctiluca uses the [MIT License](LICENSE). The following projects and research i
 Source: [openclaw/openclaw](https://github.com/openclaw/openclaw), version 2026.10.10. License: MIT.
 
 The Go adapter in `pkg/infrastructure/claude/` reimplements the Claude CLI invocation, stream-json messages, control handshake, and follow-up input protocol.
-The measured protocol is summarized in `pkg/infrastructure/claude/doc.go`.
+Comments in that package record the measured CLI behavior.
 No OpenClaw source files or implementation code were copied. CLI argument values and JSON field names follow the reference protocol.
 The adapter tests, the fake CLI in `cmd/noctiluca/run_test.go`, and the live test in `cmd/noctiluca/run_live_test.go` exercise that protocol.
 

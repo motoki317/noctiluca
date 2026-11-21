@@ -12,6 +12,9 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
+const maxContinuations = 1
+const continuationInstructions = "The interrupted turn may cover several inputs. Finish each unfinished part, following the posting instructions in its input."
+
 type sessionRepository struct{ db *sql.DB }
 
 func NewSessionRepository(db *sql.DB) domain.SessionRepository { return &sessionRepository{db: db} }
@@ -78,6 +81,7 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 			return err
 		}
 	}
+	// A dispatched row never started. It returns to pending with attempts unchanged, because the row did not fail.
 	if _, err := tx.ExecContext(ctx, `UPDATE inbox SET status='pending' WHERE status='dispatched' AND session_key NOT GLOB ?`, domain.NoticeSessionPrefix+"*"); err != nil {
 		return err
 	}
@@ -87,22 +91,23 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET turn_json='null' WHERE key=?`, key); err != nil {
 		return err
 	}
-	started := true
+	openingInputStarted := true
 	if turn.InputID != 0 {
-		var status string
+		var status domain.InboxStatus
 		if err := tx.QueryRowContext(ctx, `SELECT status FROM inbox WHERE id=?`, turn.InputID).Scan(&status); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		started = status == "done"
+		openingInputStarted = status == domain.InboxDone
 	}
 	now := time.Now()
 	note := "previous turn was interrupted: " + reason
 	if err := saveModel(ctx, tx, domain.ModelRecord{SessionKey: key, RecordedAt: now, Event: domain.ModelEvent{Kind: domain.ModelEventError, Text: note, Err: errors.New(note)}}); err != nil {
 		return err
 	}
-	if started && turn.Continuations < 1 {
+	// A started input is not sent again. The continuation asks the model to finish it instead.
+	if openingInputStarted && turn.Continuations < maxContinuations {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
-		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\nThe interrupted turn may cover several inputs. Finish each unfinished part, following the posting instructions in its input."}}}
+		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation, ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\n" + continuationInstructions}}}
 		if _, err := insertInbox(ctx, tx, item); err != nil {
 			return err
 		}

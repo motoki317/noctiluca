@@ -55,7 +55,7 @@ type session struct {
 
 type runningTurn struct {
 	id         string
-	ready      chan struct{}
+	idSettled  chan struct{}
 	started    chan struct{}
 	refused    bool
 	compaction *compaction
@@ -72,8 +72,8 @@ type sessionInput struct {
 }
 
 type runningCommand struct {
-	turnID   string
-	finished bool
+	turnID       string
+	outlivedTurn bool
 }
 
 func startSession(ctx context.Context, executable string, config domain.ModelSessionConfig) (*session, error) {
@@ -133,15 +133,15 @@ func (s *session) shutdown() {
 	defer close(s.shutdownDone)
 	<-s.ctx.Done()
 	s.mu.RLock()
-	var ready chan struct{}
+	var idSettled chan struct{}
 	if s.current != nil {
-		ready = s.current.ready
+		idSettled = s.current.idSettled
 	}
 	s.mu.RUnlock()
-	if ready != nil {
+	if idSettled != nil {
 		timer := time.NewTimer(time.Second)
 		select {
-		case <-ready:
+		case <-idSettled:
 		case <-s.readerDone:
 		case <-timer.C:
 		}
@@ -250,7 +250,7 @@ func (s *session) read(stdout io.ReadCloser) {
 				s.current = &runningTurn{id: n.Turn.ID, started: make(chan struct{})}
 			} else if s.current.id == "" {
 				s.current.id = n.Turn.ID
-				s.current.markReady()
+				s.current.settleID()
 			}
 			started = s.current
 		case "turn/completed":
@@ -271,7 +271,7 @@ func (s *session) read(stdout io.ReadCloser) {
 			}
 			for _, command := range s.commands {
 				if command.turnID == n.Turn.ID {
-					command.finished = true
+					command.outlivedTurn = true
 				}
 			}
 		}
@@ -294,7 +294,7 @@ func (s *session) read(stdout io.ReadCloser) {
 			} else if event.Kind == domain.ModelEventToolResult {
 				if command := s.commands[event.ToolCall.ID]; command != nil {
 					delete(s.commands, event.ToolCall.ID)
-					if command.finished {
+					if command.outlivedTurn {
 						event.Kind = domain.ModelEventBackgroundDone
 					}
 				}
@@ -322,7 +322,7 @@ func (s *session) read(stdout io.ReadCloser) {
 	if s.ctx.Err() == nil {
 		s.mu.Lock()
 		if t := s.current; t != nil && t.compaction != nil {
-			t.markReady()
+			t.settleID()
 			s.current = nil
 			slog.WarnContext(s.ctx, "Codex compaction failed when the stream closed", "thread", s.threadID)
 		}
@@ -341,10 +341,10 @@ func (s *session) read(stdout io.ReadCloser) {
 	<-s.inputDone
 }
 
-func (t *runningTurn) markReady() {
-	if t.ready != nil {
-		close(t.ready)
-		t.ready = nil
+func (t *runningTurn) settleID() {
+	if t.idSettled != nil {
+		close(t.idSettled)
+		t.idSettled = nil
 	}
 }
 

@@ -25,7 +25,8 @@ import (
 // MinimumVersion is the oldest CLI whose stream protocol was measured.
 const MinimumVersion = "2.1.316"
 
-// AlwaysOfferedToolMeta keeps built-in tool schemas available after CLI compaction.
+// Measured on CLI 2.1.316 and 2.1.321: the CLI never defers a tool that carries this metadata,
+// so its schema survives compaction. A server-level alwaysLoad: false in --mcp-config overrides it.
 var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
 
 const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the chat-writing tools.`
@@ -39,7 +40,6 @@ func systemPrompt(prompt string) string {
 
 type adapter struct{ executable, model string }
 
-// New uses the CLI's configured model when model is empty.
 func New(executable, model string) domain.ModelAdapter {
 	if executable == "" {
 		executable = "claude"
@@ -51,6 +51,8 @@ func childEnv() []string {
 	var env []string
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
+		// Without the API-key and base-URL variables, turns bill to the subscription.
+		// CLAUDE_CODE_SIMPLE turns on bare mode, which skips the subscription login and ~/.claude.
 		switch key {
 		case "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDECODE", "CLAUDE_CODE_SIMPLE":
 			continue
@@ -97,6 +99,7 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 			_ = os.RemoveAll(dir)
 		}
 	}()
+	// No --bare: bare mode skips the subscription login and ~/.claude.
 	args := []string{"--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool", "stdio",
 		"--permission-mode", "default", "--setting-sources", "user,project,local", "--strict-mcp-config"}
@@ -171,6 +174,7 @@ func checkVersion(ctx context.Context, output string) error {
 	if slices.Compare(version[:], minimum[:]) < 0 {
 		return fmt.Errorf("claude version must be at least %s", MinimumVersion)
 	}
+	// A newer version only warns, because the CLI updates itself.
 	if version[0] > minimum[0] || version[1] > minimum[1] {
 		slog.WarnContext(ctx, "Claude major or minor version exceeds the measured version; verify stream protocol compatibility",
 			"version", fields[0], "measured_version", MinimumVersion)

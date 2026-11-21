@@ -25,6 +25,13 @@ type Config struct {
 	Owner     string
 }
 
+var (
+	_ domain.SourceInfoProvider    = (*adapter)(nil)
+	_ domain.UserGroupProvider     = (*adapter)(nil)
+	_ domain.DirectMessageProvider = (*adapter)(nil)
+	_ domain.ConversationFilter    = (*adapter)(nil)
+)
+
 type adapter struct {
 	ownerDMMu          sync.Mutex
 	ownerDM            string
@@ -127,6 +134,7 @@ func (a *adapter) Start(ctx context.Context, consume func(context.Context, domai
 						}
 					}
 				}
+				// Slack sends an unacknowledged event again, so the ack must follow consume.
 				if e.Request != nil && e.Request.EnvelopeID != "" {
 					ackCtx, done := context.WithTimeout(ctx, 3*time.Second)
 					err := a.ack(ackCtx, e.Request.EnvelopeID, nil)
@@ -144,7 +152,7 @@ func (a *adapter) Start(ctx context.Context, consume func(context.Context, domai
 func (a *adapter) UserGroups(ctx context.Context, ids []string) (map[string][]string, error) {
 	groups := make(map[string][]string, len(ids))
 	for _, id := range ids {
-		// The optional read token need not have the usergroups:read scope.
+		// The bot token reads groups, because the user token need not have the usergroups:read scope.
 		members, err := a.bot.GetUserGroupMembersContext(ctx, id)
 		if err != nil {
 			if ctx.Err() != nil {

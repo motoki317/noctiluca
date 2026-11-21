@@ -102,7 +102,7 @@ func TestEntryTrustRefreshAndRestore(t *testing.T) {
 	require.Contains(t, take(t, s.inputs).Text, "accepted without restart")
 	require.NoError(t, s.Close())
 	require.Equal(t, domain.MainSessionKey, take(t, f.hub.closed))
-	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation}
 	item.SourceKey = "wake-test"
 	item.ReadyAt = time.Now()
 	item.Payload.Input.Text = "wake after close"

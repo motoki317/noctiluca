@@ -58,8 +58,7 @@ func (s *tokenSource) tokenLocked() (*oauth2.Token, error) {
 			return nil, s.ctx.Err()
 		}
 		// OAuth error bodies can contain credentials and must not reach logs or model inputs.
-		var rejected *oauth2.RetrieveError
-		if errors.As(err, &rejected) && rejected.Response != nil && rejected.Response.StatusCode < 500 && rejected.Response.StatusCode != http.StatusTooManyRequests && rejected.Response.StatusCode != http.StatusRequestTimeout && rejected.ErrorCode != "temporarily_unavailable" && rejected.ErrorCode != "server_error" {
+		if permanentRefreshFailure(err) {
 			return nil, s.failLocked("token refresh rejected")
 		}
 		return nil, errors.New("MCP token refresh failed; retry later")
@@ -87,13 +86,23 @@ func (s *tokenSource) tokenLocked() (*oauth2.Token, error) {
 	return token, nil
 }
 
+func permanentRefreshFailure(err error) bool {
+	var rejected *oauth2.RetrieveError
+	if !errors.As(err, &rejected) || rejected.Response == nil {
+		return false
+	}
+	status := rejected.Response.StatusCode
+	return status < 500 && status != http.StatusTooManyRequests && status != http.StatusRequestTimeout &&
+		rejected.ErrorCode != "temporarily_unavailable" && rejected.ErrorCode != "server_error"
+}
+
 func (s *tokenSource) refreshRejected(bearer string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.tokenLocked(); err != nil {
 		return err
 	}
-	// Concurrent requests can reject a token that another request already refreshed.
+	// Another request can already have refreshed the token that the server rejected.
 	if bearer != "Bearer "+s.saved.AccessToken {
 		return nil
 	}
@@ -150,7 +159,7 @@ func restoreTokens(ctx context.Context, config ServerConfig, repository domain.O
 		reg.Audience = reg.Resource
 	}
 	if reg.LoginID == "" {
-		// Older logins need a stable notice key across restarts without exposing credentials.
+		// A stored login without a LoginID needs a notice key that is stable across restarts and exposes no credential.
 		reg.LoginID = fmt.Sprintf("%x", sha256.Sum256(stored.Registration))
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient(config.URL))

@@ -107,6 +107,7 @@ func (a *adapter) roleMembers(ctx context.Context, guild snowflake.ID, groups ma
 		}
 		previous := after
 		for _, member := range members {
+			// The @everyone role has the guild's ID, and member.RoleIDs omits it.
 			if _, ok := groups[guild.String()]; ok {
 				groups[guild.String()] = append(groups[guild.String()], member.User.ID.String())
 			}

@@ -57,12 +57,12 @@ func TestPreparationHasBoundBeforeModelOpens(t *testing.T) {
 				require.WithinDuration(t, at.Add(operationTimeout), take(t, started), 0)
 				require.Empty(t, f.model.opened)
 				time.Sleep(operationTimeout)
-				f.status(t, id, "dead")
+				f.status(t, id, domain.InboxDead)
 				require.Contains(t, take(t, notes), "failed after 1 attempts: context deadline exceeded")
 				require.Empty(t, f.model.opened)
 				next := f.enqueue(t, "room", "next")
 				take(t, f.model.opened)
-				f.status(t, next, "done")
+				f.status(t, next, domain.InboxDone)
 			})
 		})
 	}
@@ -100,13 +100,13 @@ func TestPromptHasBoundBeforeModelOpens(t *testing.T) {
 		require.WithinDuration(t, at.Add(operationTimeout), take(t, started), 0)
 		require.Empty(t, f.model.opened)
 		time.Sleep(operationTimeout)
-		f.status(t, id, "dead")
+		f.status(t, id, domain.InboxDead)
 		require.Contains(t, take(t, notes), "context deadline exceeded")
 		require.Empty(t, f.model.opened)
 		next := f.enqueue(t, "room", "next")
 		s := take(t, f.model.opened)
 		require.Contains(t, s.config.SystemPrompt, "tool notes")
-		f.status(t, next, "done")
+		f.status(t, next, domain.InboxDone)
 	})
 }
 
@@ -138,7 +138,7 @@ func TestOwnerNoticeTimeoutKeepsRetryBudget(t *testing.T) {
 		for attempt := 1; attempt <= 2; attempt++ {
 			require.WithinDuration(t, at.Add(operationTimeout), take(t, started), 0)
 			time.Sleep(operationTimeout)
-			f.status(t, id, map[bool]string{false: "pending", true: "dead"}[attempt == 2])
+			f.status(t, id, map[bool]domain.InboxStatus{false: domain.InboxPending, true: domain.InboxDead}[attempt == 2])
 			if attempt == 1 {
 				require.NoError(t, f.db.QueryRow("SELECT retry_at FROM inbox WHERE id=?", id).Scan(&at))
 				time.Sleep(time.Until(at))
@@ -153,7 +153,7 @@ func TestOwnerNoticeTimeoutKeepsRetryBudget(t *testing.T) {
 		require.NoError(t, err)
 		f.runner.Notify()
 		require.Equal(t, "next", take(t, notes))
-		f.status(t, nextID, "done")
+		f.status(t, nextID, domain.InboxDone)
 		synctest.Wait()
 		active, err := f.inbox.Active(t.Context())
 		require.NoError(t, err)

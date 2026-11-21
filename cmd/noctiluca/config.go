@@ -27,7 +27,8 @@ import (
 type secretRef struct {
 	Env  string `mapstructure:"env"`
 	File string `mapstructure:"file"`
-	// Unknown keeps other keys out of decoder errors: a token pasted over `env: NAME` becomes a key.
+	// Unknown collects unexpected keys before the decoder names them in its error.
+	// A token pasted over `env: NAME` becomes a key and would leak there.
 	Unknown map[string]any `mapstructure:",remain"`
 }
 
@@ -106,9 +107,11 @@ type messagingConfig struct {
 	Conversations []conversationConfig `mapstructure:"conversations"`
 }
 
+const defaultGroupRefreshInterval = time.Hour
+
 func (c messagingConfig) groupRefreshInterval() time.Duration {
-	if c.Type != "slack" || c.Slack.GroupRefreshInterval == nil {
-		return time.Hour
+	if c.Slack.GroupRefreshInterval == nil {
+		return defaultGroupRefreshInterval
 	}
 	return *c.Slack.GroupRefreshInterval
 }
@@ -121,6 +124,14 @@ type messagingTokens struct {
 	Slack           slack.Config
 	DiscordToken    string
 	TraQAccessToken string
+}
+
+type cronConfig struct {
+	Name    string `mapstructure:"name"`
+	Cron    string `mapstructure:"cron"`
+	TZ      string `mapstructure:"tz"`
+	Prompt  string `mapstructure:"prompt"`
+	Workdir string `mapstructure:"workdir"`
 }
 
 type Config struct {
@@ -148,7 +159,7 @@ type Config struct {
 		Interval time.Duration `mapstructure:"interval"`
 		Enabled  bool          `mapstructure:"enabled"`
 	} `mapstructure:"heartbeat"`
-	Cron       []domain.Schedule        `mapstructure:"cron"`
+	Cron       []cronConfig             `mapstructure:"cron"`
 	MCPServers []mcpclient.ServerConfig `mapstructure:"mcp_servers"`
 	Log        struct {
 		Level string `mapstructure:"level"`
@@ -190,49 +201,14 @@ func loadConfig(path string) (Config, error) {
 	default:
 		return Config{}, errors.New("model.type must be claude or codex")
 	}
-	// Viper omits empty maps and null values from strict decoding.
-	keys := v.AllKeys()
-	for _, key := range []string{"owner", "slack", "conversations"} {
-		if v.InConfig(key) || slices.Contains(keys, key) {
-			return Config{}, errors.New("invalid config: move owner, slack, and conversations into messaging entries")
-		}
-	}
-	_, effortEnv := os.LookupEnv("NOCTILUCA_MODEL_REASONING_EFFORT")
-	if v.GetString("model.type") != "codex" && (v.InConfig("model.reasoning_effort") || slices.Contains(keys, "model.reasoning_effort") || effortEnv) {
-		return Config{}, errors.New("model.reasoning_effort requires model.type codex")
+	entries, err := validateConfigShape(v)
+	if err != nil {
+		return Config{}, err
 	}
 	v.SetDefault("model.reasoning_effort", "")
-	rawMessaging := v.Get("messaging")
-	entries, list := rawMessaging.([]any)
-	if rawMessaging != nil && !list {
-		return Config{}, errors.New("invalid config: messaging must be a list of entries")
-	}
-	for i, raw := range entries {
-		entry, _ := raw.(map[string]any)
-		if _, mapping := entry["conversations"].(map[string]any); mapping {
-			return Config{}, errors.New("invalid config: replace conversations.direct_messages and conversations.rules with entry trust.users, trust.groups, trust.bots, and a conversations list of overrides")
-		}
-		trust, _ := entry["trust"].(map[string]any)
-		fields := []map[string]any{entry, trust}
-		overrides, _ := entry["conversations"].([]any)
-		for _, raw := range overrides {
-			override, _ := raw.(map[string]any)
-			trust, _ := override["trust"].(map[string]any)
-			fields = append(fields, override, trust)
-		}
-		for _, field := range fields {
-			if _, present := field["allow_bots"]; present {
-				return Config{}, errors.New("invalid config: replace allow_bots with trust.bots listing bot sender IDs")
-			}
-		}
-		for _, platform := range []string{"slack", "discord", "traq"} {
-			if _, present := entry[platform]; present && entry["type"] != platform {
-				return Config{}, fmt.Errorf("invalid config: messaging entry %d has %s settings but a different type", i+1, platform)
-			}
-		}
-	}
 	var config Config
-	// Decoder errors name fields and unknown keys but omit values, except that an invalid duration's error keeps the value up to its last space. Durations hold no secrets.
+	// The decoder error names fields and unknown keys and omits values, so it is safe to return.
+	// An invalid duration is the exception: its error keeps the value up to its last space. Durations hold no secrets.
 	if err := v.UnmarshalExact(&config); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
@@ -242,7 +218,7 @@ func loadConfig(path string) (Config, error) {
 		}
 		return nil
 	}
-	// Check key presence because strict decoding also accepts explicit false and null values.
+	// The decoded struct cannot tell an absent key from an explicit false or null, so check the raw keys.
 	for i, instance := range config.Messaging {
 		entry, _ := entries[i].(map[string]any)
 		if err := validateTrust(entry, fmt.Sprintf("messaging entry %d", i+1)); err != nil {
@@ -296,6 +272,50 @@ func loadConfig(path string) (Config, error) {
 	return config, mcpclient.Validate(config.MCPServers)
 }
 
+func validateConfigShape(v *viper.Viper) ([]any, error) {
+	// UnmarshalExact does not reject a key whose value is null or an empty map, so check these keys by presence.
+	keys := v.AllKeys()
+	for _, key := range []string{"owner", "slack", "conversations"} {
+		if v.InConfig(key) || slices.Contains(keys, key) {
+			return nil, errors.New("invalid config: move owner, slack, and conversations into messaging entries")
+		}
+	}
+	_, effortEnv := os.LookupEnv("NOCTILUCA_MODEL_REASONING_EFFORT")
+	if v.GetString("model.type") != "codex" && (v.InConfig("model.reasoning_effort") || slices.Contains(keys, "model.reasoning_effort") || effortEnv) {
+		return nil, errors.New("model.reasoning_effort requires model.type codex")
+	}
+	rawMessaging := v.Get("messaging")
+	entries, list := rawMessaging.([]any)
+	if rawMessaging != nil && !list {
+		return nil, errors.New("invalid config: messaging must be a list of entries")
+	}
+	for i, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if _, mapping := entry["conversations"].(map[string]any); mapping {
+			return nil, errors.New("invalid config: replace conversations.direct_messages and conversations.rules with entry trust.users, trust.groups, trust.bots, and a conversations list of overrides")
+		}
+		trust, _ := entry["trust"].(map[string]any)
+		fields := []map[string]any{entry, trust}
+		overrides, _ := entry["conversations"].([]any)
+		for _, raw := range overrides {
+			override, _ := raw.(map[string]any)
+			trust, _ := override["trust"].(map[string]any)
+			fields = append(fields, override, trust)
+		}
+		for _, field := range fields {
+			if _, present := field["allow_bots"]; present {
+				return nil, errors.New("invalid config: replace allow_bots with trust.bots listing bot sender IDs")
+			}
+		}
+		for _, platform := range []string{"slack", "discord", "traq"} {
+			if _, present := entry[platform]; present && entry["type"] != platform {
+				return nil, fmt.Errorf("invalid config: messaging entry %d has %s settings but a different type", i+1, platform)
+			}
+		}
+	}
+	return entries, nil
+}
+
 func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if len(c.Messaging) == 0 {
 		return nil, 0, errors.New("messaging requires at least one entry")
@@ -333,8 +353,8 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 		if err := reconcile.ValidateCron(job.Cron); err != nil {
 			return nil, 0, err
 		}
-		if job.Name == "heartbeat" || job.Name == "rest" {
-			return nil, 0, errors.New("heartbeat and rest are reserved cron names")
+		if reconcile.IsBuiltInProcedure(job.Name) {
+			return nil, 0, fmt.Errorf("%s and %s are reserved cron names", domain.HeartbeatSchedule, domain.RestSchedule)
 		}
 	}
 	tokens := make([]messagingTokens, len(c.Messaging))

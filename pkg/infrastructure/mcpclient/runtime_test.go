@@ -109,7 +109,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 				claimed, err := inbox.Claim(t.Context(), items[0].ID)
 				require.NoError(t, err)
 				require.True(t, claimed)
-				_, err = inbox.Finish(t.Context(), items[0].ID, "", 0, time.Time{})
+				err = inbox.Delivered(t.Context(), items[0].ID, domain.Session{Key: items[0].SessionKey})
 				require.NoError(t, err)
 				stored, err = repo.Get(t.Context(), config.Name)
 				require.NoError(t, err)

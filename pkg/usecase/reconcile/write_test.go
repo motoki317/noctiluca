@@ -85,7 +85,7 @@ func TestHandleWriteDeadline(t *testing.T) {
 					require.ErrorIs(t, <-done, tc.wantErr)
 					return
 				}
-				f.status(t, id, "done")
+				f.status(t, id, domain.InboxDone)
 				cancel()
 				synctest.Wait()
 				require.NotEmpty(t, done)

@@ -14,7 +14,7 @@ func TestReadableInput(t *testing.T) {
 	at := time.Date(2026, 11, 6, 7, 29, 1, 0, time.UTC)
 	zone := time.FixedZone("JST", 9*60*60)
 	event := domain.InboundEvent{Kind: domain.InboundEventMessage, Conversation: "thread", Parent: "room", MessageRef: "entry:channel:message", Sender: domain.Sender{ID: "owner"}, Text: "add 了解 at the end", ReceivedAt: at}
-	item := domain.InboxItem{Lane: "conv", Payload: domain.InboxPayload{Event: &event}}
+	item := domain.InboxItem{Lane: domain.LaneConversation, Payload: domain.InboxPayload{Event: &event}}
 	info := domain.SourceInfo{Location: "entry: native IDs", Conversation: "#general", Sender: "Alex", ThreadAt: at.Add(-time.Minute), ThreadText: "What did\nyou run?"}
 	noHistoryText := formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text
 	require.Equal(t, "#general · thread 16:28:01 JST \"What did you run?\" | Alex (owner) | 16:29:01 JST\nentry: native IDs\n\nadd 了解 at the end", noHistoryText)
@@ -43,7 +43,7 @@ func TestReadableInput(t *testing.T) {
 	event.Parent, event.Conversation, event.Direct = "", "room", true
 	require.Contains(t, formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, "owner", zone, "").Text, "DM with Alex · top level | ")
 	item.Payload.Event = nil
-	item.Lane, item.Payload.Context.TaskName, item.ReadyAt = "task", "heartbeat", at
+	item.Lane, item.Payload.Context.TaskName, item.ReadyAt = domain.LaneTask, domain.HeartbeatSchedule, at
 	require.Equal(t, "Task heartbeat | system | 16:29:01 JST\n\n", formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text)
 	require.Equal(t, strings.Repeat("あ", 80)+"…", excerpt(strings.Repeat("あ", 81)))
 }
@@ -160,7 +160,7 @@ func TestTaskWorkdirHint(t *testing.T) {
 	for _, workdir := range []string{"", "/default", "/project"} {
 		t.Run(workdir, func(t *testing.T) {
 			c := &core{config: Config{Workdir: "/default"}}
-			item := domain.InboxItem{Lane: "task", Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily", Workdir: workdir}, Input: domain.UserInput{Text: "work"}}}
+			item := domain.InboxItem{Lane: domain.LaneTask, Payload: domain.InboxPayload{Context: domain.SessionContext{TaskName: "daily", Workdir: workdir}, Input: domain.UserInput{Text: "work"}}}
 			input, err := c.prepare(t.Context(), item)
 			require.NoError(t, err)
 			require.Contains(t, input.Text, "Task daily | system |")

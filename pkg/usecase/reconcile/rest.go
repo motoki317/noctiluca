@@ -45,7 +45,7 @@ func (r *Reconciler) requestSessionAction(ctx context.Context, action sessionAct
 	}
 	done := make(chan error, 1)
 	select {
-	case r.results <- result{process: p, action: action, actionDone: done}:
+	case r.results <- result{kind: sessionActionRequested, process: p, action: action, actionDone: done}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -55,4 +55,27 @@ func (r *Reconciler) requestSessionAction(ctx context.Context, action sessionAct
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (r *Reconciler) handleSessionAction(ctx context.Context, p *process, action sessionAction, done chan<- error) error {
+	if r.live[p.key] != p || p.closing {
+		done <- errInactiveSession
+		return nil
+	}
+	if action == compactSession {
+		switch {
+		case p.model == nil:
+			done <- errInactiveSession
+		case p.closeAtIdle:
+			done <- errors.New("session is closing when idle")
+		default:
+			p.model.Compact()
+			done <- nil
+		}
+		return nil
+	}
+	p.closeAtIdle = true
+	err := r.save(ctx, p)
+	done <- err
+	return err
 }

@@ -43,8 +43,13 @@ func Next(s domain.Schedule, now time.Time) (time.Time, error) {
 	return next, nil
 }
 func TaskItem(name, prompt, workdir string) domain.InboxItem {
-	return domain.InboxItem{SourceKey: "task:" + uuid.NewString(), SessionKey: domain.MainSessionKey, Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: prompt}, Context: domain.SessionContext{TaskName: name, Workdir: workdir}}}
+	return domain.InboxItem{SourceKey: "task:" + uuid.NewString(), SessionKey: domain.MainSessionKey, Lane: domain.LaneTask, ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: prompt}, Context: domain.SessionContext{TaskName: name, Workdir: workdir}}}
 }
+
+func IsBuiltInProcedure(name string) bool {
+	return name == domain.HeartbeatSchedule || name == domain.RestSchedule
+}
+
 func (r *Reconciler) Install(ctx context.Context, schedules []domain.Schedule) error {
 	for _, s := range schedules {
 		if s.Workdir == "" {
@@ -71,7 +76,7 @@ func (r *Reconciler) Tools() []domain.Tool {
 			if err := ValidateCron(s.Cron); err != nil {
 				return nil, err
 			}
-			if s.Name == "heartbeat" || s.Name == "rest" || strings.TrimSpace(s.Prompt) == "" {
+			if IsBuiltInProcedure(s.Name) || strings.TrimSpace(s.Prompt) == "" {
 				return nil, errors.New("reserved task name or empty prompt")
 			}
 			if err := r.Install(ctx, []domain.Schedule{s}); err != nil {

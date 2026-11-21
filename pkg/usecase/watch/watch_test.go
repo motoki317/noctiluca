@@ -72,7 +72,7 @@ func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	items, err := inbox.Active(t.Context())
 	require.NoError(t, err)
 	require.True(t, items[0].ReadyAt.Equal(at))
-	require.Equal(t, "pending", items[0].Status)
+	require.Equal(t, domain.InboxPending, items[0].Status)
 	require.Equal(t, domain.MainSessionKey, items[0].SessionKey)
 	cancel()
 	require.NoError(t, take(t, done))

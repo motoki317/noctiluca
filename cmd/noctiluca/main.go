@@ -103,7 +103,6 @@ func main() {
 	}
 }
 
-// openBrowser opens a login URL with the platform's browser launcher (xdg-open, wslview, open, ...).
 func openBrowser(url string) error {
 	browser.Stdout, browser.Stderr = io.Discard, io.Discard
 	return browser.OpenURL(url)

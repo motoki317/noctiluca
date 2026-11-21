@@ -29,7 +29,7 @@ func (s *session) sendInputs() {
 		for s.ctx.Err() == nil {
 			s.mu.Lock()
 			if s.compactRequested && s.idle() {
-				t := &runningTurn{ready: make(chan struct{}), started: make(chan struct{}), compaction: &compaction{preTokens: s.contextTokens}}
+				t := &runningTurn{idSettled: make(chan struct{}), started: make(chan struct{}), compaction: &compaction{preTokens: s.contextTokens}}
 				threadID := s.threadID
 				s.current = t
 				s.compactRequested = false
@@ -48,7 +48,7 @@ func (s *session) sendInputs() {
 			method := "turn/steer"
 			params := map[string]any{"threadId": s.threadID, "input": []map[string]string{{"type": "text", "text": input.text}}}
 			if t == nil {
-				t = &runningTurn{ready: make(chan struct{}), started: make(chan struct{})}
+				t = &runningTurn{idSettled: make(chan struct{}), started: make(chan struct{})}
 				s.current = t
 				method = "turn/start"
 			} else {
@@ -59,9 +59,9 @@ func (s *session) sendInputs() {
 				Turn   turn   `json:"turn"`
 				TurnID string `json:"turnId"`
 			}
-			// Shutdown still needs the turn/start reply's ID for turn/interrupt if
-			// turn/started is absent. Waiting for the turn/steer reply also resolves
-			// whether its input was accepted or must remain queued.
+			// This call outlives session cancellation. If turn/started is absent, shutdown needs the
+			// turn ID from the turn/start reply for turn/interrupt. The turn/steer reply tells whether
+			// its input was accepted or stays queued.
 			err := s.call(context.WithoutCancel(s.ctx), method, params, &result)
 			s.mu.Lock()
 			var rpcErr *rpcError
@@ -81,7 +81,7 @@ func (s *session) sendInputs() {
 					t.id = id
 				}
 			}
-			t.markReady()
+			t.settleID()
 			s.inputs = s.inputs[1:]
 			if err != nil && s.current == t {
 				s.current = nil
@@ -99,7 +99,7 @@ func (s *session) sendInputs() {
 					return
 				}
 			} else {
-				// Publish the turn lifecycle before its input acknowledgement.
+				// The ModelSession contract puts turn_started before input_started.
 				select {
 				case <-t.started:
 				case <-s.ctx.Done():
@@ -116,7 +116,7 @@ func (s *session) sendInputs() {
 func (s *session) startCompaction(t *runningTurn, threadID string) {
 	if err := s.call(context.WithoutCancel(s.ctx), "thread/compact/start", map[string]string{"threadId": threadID}, nil); err != nil {
 		s.mu.Lock()
-		t.markReady()
+		t.settleID()
 		released := s.current == t
 		if released {
 			s.current = nil

@@ -66,7 +66,7 @@ func (h *hub) setSource(name string, tools []domain.Tool, replace bool) error {
 			return fmt.Errorf("tool %s already registered", tool)
 		}
 	}
-	// Validate the whole source before adding anything. A collision must not replace permissions.
+	// Every check runs before the first change, so a rejected source leaves the registered tools as they were.
 	for tool, source := range h.tools {
 		if _, exists := names[tool]; source == name && !exists {
 			h.server.RemoveTools(tool)

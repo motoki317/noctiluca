@@ -119,7 +119,7 @@ func parseFrame(data []byte) (frame, error) {
 	if err := json.Unmarshal(data, &f); err != nil || f.Type == "" {
 		return f, errors.New("invalid claude stream frame")
 	}
-	// Replayed user text is a string; tool results arrive as user content blocks.
+	// The CLI replays user text as a string. Tool results arrive as user content blocks.
 	if f.Type == "assistant" || (f.Type == "user" && len(f.Message.Content) > 0 && f.Message.Content[0] == '[') {
 		if err := json.Unmarshal(f.Message.Content, &f.Content); err != nil {
 			return f, errors.New("invalid claude message content")
@@ -136,22 +136,29 @@ type parser struct {
 	compacting  bool
 }
 
-func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
+func (p *parser) consumesCompactionFrame(f frame) bool {
 	if f.Type == "command_lifecycle" && f.CommandUUID == p.compactUUID && p.compactUUID != "" {
 		if f.State == "started" {
 			p.compacting = true
 		}
-		return nil
+		return true
 	}
 	if f.Type == "user" && p.compacting {
-		return nil
+		return true
 	}
 	if f.Type == "result" && f.LocalCommand == "compact" && p.compactUUID != "" {
 		p.compacting = false
 		p.compactUUID = ""
-		return nil
+		return true
 	}
 	if p.compacting && f.ParentToolUseID == "" && (f.Type == "stream_event" || f.Type == "assistant") {
+		return true
+	}
+	return false
+}
+
+func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
+	if p.consumesCompactionFrame(f) {
 		return nil
 	}
 	var events []domain.ModelEvent
@@ -200,7 +207,7 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 			break
 		}
 		start()
-		// Complete tool inputs arrive here. Partial deltas and replayed text would duplicate them.
+		// Take tool calls from this frame, where their inputs are complete. Its text already arrived as deltas.
 		for _, c := range f.Content {
 			if c.Type == "tool_use" {
 				events = append(events, domain.ModelEvent{Kind: domain.ModelEventToolCall, ToolCall: &domain.ToolCall{ID: c.ID, Name: c.Name, Input: c.Input}})
@@ -224,11 +231,13 @@ func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
 		case "task_notification":
 			delete(p.tasks, f.TaskID)
 		}
+		// After a background task finishes, the CLI starts a turn by itself, without input.
 		if f.Subtype == "task_notification" {
 			events = append(events, domain.ModelEvent{Kind: domain.ModelEventBackgroundDone, Text: fmt.Sprintf("%s (%s): %s", f.TaskID, f.Status, f.Summary)})
 			p.command = ""
 			start()
 		}
+	// Only result ends a turn. message_stop also appears between tool calls.
 	case "result":
 		if f.failedResult() {
 			// CLI error bodies can contain prompts, credentials, or tool output.

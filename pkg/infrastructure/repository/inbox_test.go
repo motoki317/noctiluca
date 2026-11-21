@@ -10,7 +10,7 @@ import (
 )
 
 func inboxItem(source string) domain.InboxItem {
-	return domain.InboxItem{SourceKey: source, SessionKey: "room", Lane: "conv", ReadyAt: time.Now().UTC(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "hello"}}}
+	return domain.InboxItem{SourceKey: source, SessionKey: "room", Lane: domain.LaneConversation, ReadyAt: time.Now().UTC(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: "hello"}}}
 }
 func TestInboxAtomicReceiveAndRetry(t *testing.T) {
 	db := openDB(t)
@@ -35,7 +35,7 @@ func TestInboxAtomicReceiveAndRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 	retry := time.Now().Add(time.Second).UTC()
-	dead, err := r.Finish(t.Context(), items[0].ID, "model failed", 2, retry)
+	dead, err := r.Fail(t.Context(), items[0].ID, "model failed", 2, retry)
 	require.NoError(t, err)
 	require.False(t, dead)
 	items, err = r.Active(t.Context())
@@ -44,10 +44,10 @@ func TestInboxAtomicReceiveAndRetry(t *testing.T) {
 	require.Equal(t, retry, items[0].RetryAt)
 	_, err = r.Claim(t.Context(), items[0].ID)
 	require.NoError(t, err)
-	dead, err = r.Finish(t.Context(), items[0].ID, "model failed again", 2, retry)
+	dead, err = r.Fail(t.Context(), items[0].ID, "model failed again", 2, retry)
 	require.NoError(t, err)
 	require.True(t, dead)
-	dead, err = r.Finish(t.Context(), items[0].ID, "duplicate callback", 2, retry)
+	dead, err = r.Fail(t.Context(), items[0].ID, "duplicate callback", 2, retry)
 	require.NoError(t, err)
 	require.False(t, dead)
 }
@@ -66,8 +66,8 @@ func TestInboxStatesAndWatchOutcome(t *testing.T) {
 	items, err := r.Active(t.Context())
 	require.NoError(t, err)
 	require.Len(t, items, 2)
-	require.Equal(t, "dispatched", items[0].Status)
-	require.Equal(t, "pending", items[1].Status)
+	require.Equal(t, domain.InboxDispatched, items[0].Status)
+	require.Equal(t, domain.InboxPending, items[1].Status)
 	unfinished, err := watches.Unfinished(t.Context())
 	require.NoError(t, err)
 	require.Len(t, unfinished, 1)
@@ -126,7 +126,7 @@ func TestInboxFailureRollsBackWithoutNotice(t *testing.T) {
 	db := openDB(t)
 	r := repository.NewInboxRepository(db)
 	item := inboxItem("schedule:daily:2026-11-14T00:00:00Z")
-	item.Lane = "task"
+	item.Lane = domain.LaneTask
 	id, err := r.Enqueue(t.Context(), item)
 	require.NoError(t, err)
 	claimed, err := r.Claim(t.Context(), id)
@@ -134,12 +134,13 @@ func TestInboxFailureRollsBackWithoutNotice(t *testing.T) {
 	require.True(t, claimed)
 	_, err = db.Exec(`CREATE TRIGGER fail_notice BEFORE INSERT ON inbox WHEN NEW.source_key LIKE 'failure:%' BEGIN SELECT RAISE(FAIL, 'notice unavailable'); END`)
 	require.NoError(t, err)
-	_, err = r.Finish(t.Context(), id, "delivery failed", 1, time.Now())
+	_, err = r.Fail(t.Context(), id, "delivery failed", 1, time.Now())
 	require.ErrorContains(t, err, "notice unavailable")
-	var status, lastError string
+	var status domain.InboxStatus
+	var lastError string
 	var attempts int
 	require.NoError(t, db.QueryRow("SELECT status,attempts,last_error FROM inbox WHERE id=?", id).Scan(&status, &attempts, &lastError))
-	require.Equal(t, "dispatched", status)
+	require.Equal(t, domain.InboxDispatched, status)
 	require.Zero(t, attempts)
 	require.Empty(t, lastError)
 }
@@ -148,12 +149,12 @@ func TestDeadNoticeClassificationUsesSessionKey(t *testing.T) {
 	r := repository.NewInboxRepository(openDB(t))
 	for _, item := range []domain.InboxItem{
 		domain.NewOwnerNotice("empty", ""),
-		{SourceKey: "legacy", SessionKey: "room", Lane: "conv", Payload: domain.InboxPayload{Notice: "unused"}},
+		{SourceKey: "legacy", SessionKey: "room", Lane: domain.LaneConversation, Payload: domain.InboxPayload{Notice: "unused"}},
 	} {
-		item.Status = "dispatched"
+		item.Status = domain.InboxDispatched
 		id, err := r.Enqueue(t.Context(), item)
 		require.NoError(t, err)
-		dead, err := r.Finish(t.Context(), id, "failed", 1, time.Now())
+		dead, err := r.Fail(t.Context(), id, "failed", 1, time.Now())
 		require.NoError(t, err)
 		require.True(t, dead)
 	}
