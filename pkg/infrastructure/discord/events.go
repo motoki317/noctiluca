@@ -255,6 +255,12 @@ func (a *adapter) reaction(ctx context.Context, e gateway.EventMessageReactionAd
 		Sender: sender(user, e.Member), Text: fmt.Sprintf(":%s: on message %s", *e.Emoji.Name, e.MessageID), ReceivedAt: time.Now()}, nil
 }
 
+const (
+	backfillWindow   = 24 * time.Hour
+	backfillLimit    = 200
+	backfillPageSize = 100
+)
+
 func (a *adapter) backfill(ctx context.Context, consume func(context.Context, domain.InboundEvent) error) error {
 	conversations, err := a.history.ListConversations(ctx, a.name)
 	if err != nil {
@@ -307,8 +313,8 @@ func (a *adapter) backfillChannel(ctx context.Context, ref domain.ConversationRe
 	if location.thread != nil {
 		return nil, nil
 	}
-	window := time.Now().Add(-24 * time.Hour)
-	since := window
+	oldest := time.Now().Add(-backfillWindow)
+	since := oldest
 	last, err := a.history.LatestMessageTime(ctx, ref)
 	if err != nil {
 		return nil, &lookupError{"LatestMessageTime", err}
@@ -318,8 +324,8 @@ func (a *adapter) backfillChannel(ctx context.Context, ref domain.ConversationRe
 	}
 	var events []domain.InboundEvent
 	var before snowflake.ID
-	for count := 0; count < 200; {
-		page, err := a.api.GetMessages(channel, 0, before, 0, 100, rest.WithCtx(ctx))
+	for count := 0; count < backfillLimit; {
+		page, err := a.api.GetMessages(channel, 0, before, 0, backfillPageSize, rest.WithCtx(ctx))
 		if err != nil {
 			return nil, &lookupError{"GetMessages", err}
 		}
@@ -327,13 +333,13 @@ func (a *adapter) backfillChannel(ctx context.Context, ref domain.ConversationRe
 			break
 		}
 		count += len(page)
-		oldest := page[0].ID
+		oldestID := page[0].ID
 		stop := false
 		for _, m := range page {
-			if m.ID < oldest {
-				oldest = m.ID
+			if m.ID < oldestID {
+				oldestID = m.ID
 			}
-			if m.CreatedAt.Before(window) {
+			if m.CreatedAt.Before(oldest) {
 				stop = true
 				continue
 			}
@@ -358,13 +364,13 @@ func (a *adapter) backfillChannel(ctx context.Context, ref domain.ConversationRe
 				}
 			}
 		}
-		if stop || len(page) < 100 {
+		if stop || len(page) < backfillPageSize {
 			break
 		}
-		if before != 0 && oldest >= before {
+		if before != 0 && oldestID >= before {
 			return nil, errors.New("history cursor did not advance for Discord")
 		}
-		before = oldest
+		before = oldestID
 	}
 	// Consume in `ReceivedAt` order. The next backfill starts at the newest stored message or edit,
 	// so an edit stored before older unconsumed messages would make it skip them.

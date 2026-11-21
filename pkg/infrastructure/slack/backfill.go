@@ -14,7 +14,10 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
-const backfillLimit = 200
+const (
+	backfillWindow = 24 * time.Hour
+	backfillLimit  = 200
+)
 
 type backfillTarget struct {
 	channel, thread string
@@ -23,7 +26,7 @@ type backfillTarget struct {
 
 func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
 	now := time.Now()
-	since := now.Add(-24 * time.Hour)
+	oldest := now.Add(-backfillWindow)
 	conversations, err := a.history.ListConversations(ctx, a.name)
 	if err != nil {
 		slog.WarnContext(ctx, "List Slack backfill conversations failed", "error", err)
@@ -40,7 +43,7 @@ func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
 	for _, conversation := range conversations {
 		refs = append(refs, conversation.Ref)
 	}
-	threads, err := a.history.ListThreads(ctx, a.name, since)
+	threads, err := a.history.ListThreads(ctx, a.name, oldest)
 	if err != nil {
 		slog.WarnContext(ctx, "List Slack backfill threads failed", "error", err)
 	}
@@ -75,11 +78,11 @@ func (a *adapter) backfillTargets(ctx context.Context) []backfillTarget {
 				last = sent[0].SentAt
 			}
 		}
-		start := since
-		if last.After(start) {
-			start = last
+		since := oldest
+		if last.After(since) {
+			since = last
 		}
-		targets = append(targets, backfillTarget{channel: channel, thread: thread, since: start, until: now})
+		targets = append(targets, backfillTarget{channel: channel, thread: thread, since: since, until: now})
 	}
 	return targets
 }
@@ -116,7 +119,7 @@ func formatTimestamp(at time.Time) string {
 }
 
 func (a *adapter) readBackfill(ctx context.Context, target backfillTarget) ([]sdk.Message, error) {
-	oldest, latest := formatTimestamp(target.since), formatTimestamp(target.until)
+	since, until := formatTimestamp(target.since), formatTimestamp(target.until)
 	reader := a.bot
 	var cursor string
 	var messages []sdk.Message
@@ -127,14 +130,14 @@ func (a *adapter) readBackfill(ctx context.Context, target backfillTarget) ([]sd
 		if target.thread == "" {
 			var result *sdk.GetConversationHistoryResponse
 			result, err = reader.GetConversationHistoryContext(ctx, &sdk.GetConversationHistoryParameters{
-				ChannelID: target.channel, Oldest: oldest, Latest: latest, Limit: backfillLimit - len(messages), Cursor: cursor,
+				ChannelID: target.channel, Oldest: since, Latest: until, Limit: backfillLimit - len(messages), Cursor: cursor,
 			})
 			if err == nil {
 				page, next = result.Messages, result.ResponseMetaData.NextCursor
 			}
 		} else {
 			page, _, next, err = reader.GetConversationRepliesContext(ctx, &sdk.GetConversationRepliesParameters{
-				ChannelID: target.channel, Timestamp: target.thread, Oldest: oldest, Latest: latest, Limit: backfillLimit, Cursor: cursor,
+				ChannelID: target.channel, Timestamp: target.thread, Oldest: since, Latest: until, Limit: backfillLimit, Cursor: cursor,
 			})
 		}
 		if reader == a.bot && a.fallbackReader(err) {
