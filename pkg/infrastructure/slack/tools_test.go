@@ -44,22 +44,31 @@ func TestReadTools(t *testing.T) {
 			require.Equal(t, "CTEST", r.Form.Get("channel"))
 			require.Equal(t, "123.000001", r.Form.Get("ts"))
 			require.Equal(t, "next", r.Form.Get("cursor"))
-			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"user":"UMEMBER","text":"thread","ts":"124.000001"}],"has_more":true,"response_metadata":{"next_cursor":"later"}}`))
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"user":"UMEMBER","text":"thread summary","ts":"124.000001","blocks":[
+				{"type":"header","text":{"type":"plain_text","text":"Incident report"}},
+				{"type":"section","text":{"type":"mrkdwn","text":"Service unavailable"},"fields":[{"type":"mrkdwn","text":"*Critical*"}]},
+				{"type":"context","elements":[{"type":"mrkdwn","text":"Started at 12:00"},{"type":"image","image_url":"https://example.test/icon.png","alt_text":"Icon"},{"type":"plain_text","text":"Awaiting response"}]}
+			]}],"has_more":true,"response_metadata":{"next_cursor":"later"}}`))
 		case "/conversations.history":
 			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"text":"history","ts":"123.000001"}],"response_metadata":{"next_cursor":"next"}}`))
 		case "/search.messages":
 			require.Equal(t, "query", r.Form.Get("query"))
 			require.Equal(t, "2", r.Form.Get("page"))
-			_, _ = w.Write([]byte(`{"ok":true,"messages":{"total":1,"matches":[{"channel":{"id":"CTEST"},"text":"match","ts":"123.000001","permalink":"https://example.test/message"}]}}`))
+			_, _ = w.Write([]byte(`{"ok":true,"messages":{"total":2,"matches":[
+				{"channel":{"id":"CTEST"},"text":"match","ts":"123.000001","permalink":"https://example.test/message"},
+				{"channel":{"id":"CTEST"},"text":"","ts":"124.000001","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Block-only match"}}]}
+			]}}`))
 		default:
 			t.Errorf("unexpected API %s", r.URL.Path)
 		}
 	}, true)
 	result := invoke(t, a, "slack_read_thread", map[string]any{"channel": "CTEST", "thread_ts": "123.000001", "cursor": "next"})
 	require.Contains(t, string(result), `"next_cursor":"later"`)
-	require.Contains(t, string(result), `"text":"thread"`)
+	require.Contains(t, string(result), `"text":"Incident report\nService unavailable\n*Critical*\nStarted at 12:00\nAwaiting response"`)
 	require.Contains(t, string(invoke(t, a, "slack_read_history", map[string]string{"channel": "CTEST"})), `"text":"history"`)
-	require.Contains(t, string(invoke(t, a, "slack_search", map[string]any{"query": "query", "page": 2})), `"text":"match"`)
+	result = invoke(t, a, "slack_search", map[string]any{"query": "query", "page": 2})
+	require.Contains(t, string(result), `"text":"match"`)
+	require.Contains(t, string(result), `"text":"Block-only match"`)
 }
 
 func TestReadToolsReactions(t *testing.T) {
@@ -86,6 +95,7 @@ func TestReadToolsAttachments(t *testing.T) {
 		key  string
 		args map[string]string
 	}{
+		{name: "slack_read_thread", path: "/conversations.replies", key: "messages", args: map[string]string{"channel": "CTEST", "thread_ts": "123.000001"}},
 		{name: "slack_read_history", path: "/conversations.history", key: "messages", args: map[string]string{"channel": "CTEST"}},
 		{name: "slack_search", path: "/search.messages", key: "matches", args: map[string]string{"query": "alert"}},
 	} {
@@ -93,11 +103,17 @@ func TestReadToolsAttachments(t *testing.T) {
 			for _, tc := range []struct {
 				name        string
 				attachments string
-				want        string
+				want        []map[string]string
 			}{
 				{name: "absent"},
-				{name: "full", attachments: `[{"title":"Service alert","text":"Service unavailable","fallback":"Service failed","color":"danger"}]`, want: `[{"title":"Service alert","text":"Service unavailable","fallback":"Service failed"}]`},
-				{name: "mixed", attachments: `[{},{"title":"First alert"},{"color":"danger"},{"text":"Second alert"},{"fallback":"Fallback alert"},{"title":"First alert"}]`, want: `[{"title":"First alert"},{"text":"Second alert"},{"fallback":"Fallback alert"},{"title":"First alert"}]`},
+				{name: "full", attachments: `[{"title":"Service alert","text":"Service unavailable","fallback":"Service failed","color":"danger"}]`, want: []map[string]string{{"title": "Service alert", "text": "Service unavailable", "fallback": "Service failed"}}},
+				{name: "mixed", attachments: `[{},{"title":"First alert"},{"color":"danger"},{"text":"Second alert"},{"fallback":"Fallback alert"},{"title":"First alert"}]`, want: []map[string]string{{"title": "First alert"}, {"text": "Second alert"}, {"fallback": "Fallback alert"}, {"title": "First alert"}}},
+				{name: "Chatbot finding", attachments: chatbotAttachmentsJSON, want: []map[string]string{{"text": chatbotBlockText}}},
+				{
+					name:        "blocks replace legacy fields",
+					attachments: `[{"title":"Title","text":"Text","fallback":"Fallback","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Details"}}]}]`,
+					want:        []map[string]string{{"text": "Details"}},
+				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					message := map[string]any{"text": "", "ts": "123.000001"}
@@ -122,8 +138,8 @@ func TestReadToolsAttachments(t *testing.T) {
 					if tool.key == "matches" {
 						want["channel"], want["user"], want["permalink"] = "", "", ""
 					}
-					if tc.want != "" {
-						want["attachments"] = json.RawMessage(tc.want)
+					if tc.want != nil {
+						want["attachments"] = tc.want
 					}
 					expected, err := json.Marshal(want)
 					require.NoError(t, err)

@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -130,7 +131,9 @@ type attachmentView struct {
 func attachmentsView(attachments []sdk.Attachment) []attachmentView {
 	var result []attachmentView
 	for _, a := range attachments {
-		if a.Title != "" || a.Text != "" || a.Fallback != "" {
+		if text := blockText(a.Blocks); text != "" {
+			result = append(result, attachmentView{Text: text})
+		} else if a.Title != "" || a.Text != "" || a.Fallback != "" {
 			result = append(result, attachmentView{Title: a.Title, Text: a.Text, Fallback: a.Fallback})
 		}
 	}
@@ -145,7 +148,7 @@ type reactionView struct {
 func messagesView(messages []sdk.Message) []messageView {
 	result := make([]messageView, 0, len(messages))
 	for _, m := range messages {
-		v := messageView{User: m.User, Text: m.Text, Timestamp: m.Timestamp, Thread: m.ThreadTimestamp}
+		v := messageView{User: m.User, Text: cmp.Or(blockText(m.Blocks), m.Text), Timestamp: m.Timestamp, Thread: m.ThreadTimestamp}
 		v.Attachments = attachmentsView(m.Attachments)
 		for _, f := range m.Files {
 			v.Files = append(v.Files, domain.Attachment{Ref: f.ID, Name: f.Name, MIMEType: f.Mimetype})
@@ -202,7 +205,7 @@ func (a *adapter) search(ctx context.Context, in toolInput) (any, error) {
 	}
 	matches := make([]map[string]any, 0, len(result.Matches))
 	for _, m := range result.Matches {
-		match := map[string]any{"channel": m.Channel.ID, "user": m.User, "text": m.Text, "ts": m.Timestamp, "permalink": m.Permalink}
+		match := map[string]any{"channel": m.Channel.ID, "user": m.User, "text": cmp.Or(blockText(m.Blocks), m.Text), "ts": m.Timestamp, "permalink": m.Permalink}
 		if attachments := attachmentsView(m.Attachments); len(attachments) > 0 {
 			match["attachments"] = attachments
 		}
