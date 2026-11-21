@@ -24,7 +24,6 @@ For an item without a conversation, use the tool and channel that an "Owner DM" 
 Keep one `status:` line per item, with its latest state, when that state last changed, and when you last reported the item.
 Compaction and rest drop what earlier runs saw, so put in that line anything else that a later run needs.
 When nothing can change before a known time or event, end the line with `Next check: <time or event>`.
-Update the line in place. Do not append a log of past checks.
 Delete any step in procedures/heartbeat.md that only repeats a step here.
 Commit your edits in one commit.
 
