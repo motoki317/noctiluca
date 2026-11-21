@@ -174,6 +174,8 @@ func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	return json.Marshal(map[string]int{"pid": cmd.Process.Pid})
 }
 
+const tailBytes = 4096
+
 type tail struct {
 	mu   sync.Mutex
 	data []byte
@@ -183,10 +185,10 @@ func (t *tail) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	n := len(p)
-	if len(p) >= 4096 {
-		t.data = append(t.data[:0], p[len(p)-4096:]...)
+	if len(p) >= tailBytes {
+		t.data = append(t.data[:0], p[len(p)-tailBytes:]...)
 	} else {
-		if extra := len(t.data) + len(p) - 4096; extra > 0 {
+		if extra := len(t.data) + len(p) - tailBytes; extra > 0 {
 			copy(t.data, t.data[extra:])
 			t.data = t.data[:len(t.data)-extra]
 		}
