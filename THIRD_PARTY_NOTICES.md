@@ -89,6 +89,13 @@ Source: [traPtitech/traQ](https://github.com/traPtitech/traQ). License: MIT.
 The field names follow the [bot protocol documentation](https://github.com/traPtitech/traQ-bot-console/tree/master/src/docs/bot) in traPtitech/traQ-bot-console.
 No upstream implementation code was copied.
 
+## Fraunces
+
+Source: [undercasetype/Fraunces](https://github.com/undercasetype/Fraunces). License: SIL Open Font License 1.1. Copyright 2018 The Fraunces Project Authors.
+
+The wordmark in `assets/lockup.svg` and `assets/lockup-dark.svg` and the tagline in `assets/social/tagline.svg` are outlines of Fraunces glyphs.
+This repository contains no font file.
+
 ## Research and design
 
 These credits acknowledge ideas, not copied research code or paper text. They do not apply noctiluca's MIT License to the referenced works.
