@@ -15,7 +15,7 @@ import (
 )
 
 type Config struct {
-	Path string `mapstructure:"path"`
+	Path string
 }
 type store struct {
 	dir string
@@ -23,7 +23,7 @@ type store struct {
 
 func New(ctx context.Context, config Config) (domain.MemoryStore, error) {
 	if config.Path == "" {
-		return nil, errors.New("memory.path is required")
+		return nil, errors.New("memory.dir is required")
 	}
 	dir, err := filepath.Abs(config.Path)
 	if err != nil {
