@@ -25,6 +25,7 @@ func Prompt(memory domain.MemoryStore, notes string, next domain.PromptAssembler
 				"- Everything outside owner/ is your own memory, in three tiers. Keep each file under 8 KB.\n"+
 				"  - Short-term, short-term.md: the exact state of open work, such as requests, promised follow-ups, questions and offers that await an answer, and things you keep past their task. "+
 				"When you take on a task that may outlive this turn, add it at once. Give each entry its date, its requester, the send tool and IDs to answer it with, its done condition, and its latest state. "+
+				"Replace the state when it changes, and keep no log of past events, because the entry's conversation and git history keep them. "+
 				"Delete an entry when its done condition holds.\n"+
 				"  - Long-term, core.md and long-term/: rules generalized from repeated experience, with few specific facts. core.md holds what every turn needs and an index of long-term/. "+
 				"It also points to at most ten theme hubs. A theme hub is a page that links the pages of one external theme.\n"+

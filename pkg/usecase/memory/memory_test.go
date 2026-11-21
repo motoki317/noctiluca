@@ -32,6 +32,7 @@ func TestPromptMemoryNotes(t *testing.T) {
 	require.Contains(t, prompt, "Subagents and background commands also commit here. Commit only the paths you changed.")
 	require.Contains(t, prompt, "stage only your own hunks, and commit only what you staged. Retry if git reports a lock.")
 	require.Contains(t, prompt, "When you take on a task that may outlive this turn, add it at once.")
+	require.Contains(t, prompt, "Replace the state when it changes, and keep no log of past events, because the entry's conversation and git history keep them.")
 	require.Contains(t, prompt, "The heartbeat and rest schedules send procedures built into noctiluca. procedures/heartbeat.md and procedures/rest.md hold this instance's own steps for them.")
 	require.Contains(t, prompt, "Follow the rest procedure only when the nightly schedule sends it. Call the rest tool only as its last step.")
 	require.NotContains(t, prompt, "when you judge that your context needs a fresh start")
