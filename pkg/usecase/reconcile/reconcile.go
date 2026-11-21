@@ -14,9 +14,14 @@ import (
 )
 
 const (
-	operationTimeout   = 30 * time.Minute
-	modelProcessExited = "model process exited"
-	compactNudgeTokens = 200000
+	operationTimeout       = 30 * time.Minute
+	defaultRetryDelay      = time.Second
+	defaultMaxAttempts     = 3
+	compactNudgeTokens     = 200000
+	modelProcessExited     = "model process exited"
+	ownerNoticeSent        = "owner notice sent"
+	restCompletedAtIdle    = "rest"
+	reconcilerShuttingDown = "shutdown"
 )
 
 type Config struct {
@@ -62,12 +67,23 @@ type process struct {
 	lastError   string
 }
 
+type resultKind uint8
+
+const (
+	sessionActionRequested resultKind = iota + 1
+	modelOpened
+	noticeDeliveryFinished
+	preparationFailed
+	inputDeliveryFinished
+	modelEventReceived
+	modelEventsClosed
+	pumpExited
+)
+
 type result struct {
+	kind       resultKind
 	action     sessionAction
 	actionDone chan error
-	skipped    bool
-	delivered  bool
-	exited     bool
 	process    *process
 	model      domain.ModelSession
 	event      *domain.ModelEvent
@@ -76,10 +92,10 @@ type result struct {
 
 func New(config Config, inbox domain.InboxRepository, schedules domain.ScheduleRepository, sessions domain.SessionRepository, events domain.EventRepository, model domain.ModelAdapter, hub domain.ToolHub) *Reconciler {
 	if config.RetryDelay <= 0 {
-		config.RetryDelay = time.Second
+		config.RetryDelay = defaultRetryDelay
 	}
 	if config.MaxAttempts <= 0 {
-		config.MaxAttempts = 3
+		config.MaxAttempts = defaultMaxAttempts
 	}
 	return &Reconciler{config: config, inbox: inbox, schedules: schedules, sessions: sessions, events: events, model: model, hub: hub, live: map[domain.SessionKey]*process{}, changed: make(chan struct{}, 1), results: make(chan result)}
 }
@@ -94,7 +110,7 @@ func (r *Reconciler) Start(ctx context.Context) (retErr error) {
 	defer func() {
 		cancel()
 		for _, p := range r.live {
-			r.retire(p, "shutdown")
+			r.retire(p, reconcilerShuttingDown)
 		}
 		done := make(chan struct{})
 		go func() { r.workers.Wait(); close(done) }()
@@ -227,7 +243,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			}
 			endpoint, err := r.hub.OpenSession(item.SessionKey)
 			if err != nil {
-				if err := r.fail(ctx, item, err, r.config.MaxAttempts); err != nil {
+				if err := r.retryWithBackoff(ctx, item, err); err != nil {
 					return 0, err
 				}
 				continue
@@ -245,7 +261,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 	}
 	for _, p := range r.live {
 		if p.closeAtIdle && p.idle() {
-			r.retire(p, "rest")
+			r.retire(p, restCompletedAtIdle)
 		}
 	}
 	return delay, nil
@@ -280,12 +296,12 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 					events = nil
 					continue
 				}
-				emit(result{event: &event})
+				emit(result{kind: modelEventReceived, event: &event})
 			default:
 				events = nil
 			}
 		}
-		emit(result{exited: true})
+		emit(result{kind: pumpExited})
 	}()
 	for {
 		select {
@@ -301,7 +317,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 					err = r.config.NotifyOwner(noticeCtx, item.Payload.Notice)
 					cancel()
 				}
-				emit(result{delivered: true, skipped: true, err: err})
+				emit(result{kind: noticeDeliveryFinished, err: err})
 				return
 			}
 			input := item.Payload.Input
@@ -317,7 +333,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 			}
 			cancel()
 			if err != nil {
-				emit(result{delivered: true, skipped: true, err: err})
+				emit(result{kind: preparationFailed, err: err})
 				continue
 			}
 			if model == nil {
@@ -337,7 +353,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				}
 				if err == nil {
 					events = model.Events()
-					emit(result{model: model})
+					emit(result{kind: modelOpened, model: model})
 				}
 			}
 			if err == nil {
@@ -350,19 +366,16 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				}
 				err = model.Send(ctx, input)
 			}
-			emit(result{delivered: true, err: err})
+			emit(result{kind: inputDeliveryFinished, err: err})
 			if err != nil {
-				if errors.Is(err, domain.ErrRejected) {
-					continue
-				}
 				return
 			}
 		case event, ok := <-events:
 			if !ok {
-				emit(result{err: errors.New(modelProcessExited)})
+				emit(result{kind: modelEventsClosed})
 				return
 			}
-			emit(result{event: &event})
+			emit(result{kind: modelEventReceived, event: &event})
 		}
 	}
 }
@@ -376,167 +389,188 @@ func (r *Reconciler) handle(ctx context.Context, out result) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handleWriteTimeout)
 	defer cancel()
 	p := out.process
-	if out.actionDone != nil {
-		if r.live[p.key] != p || p.closing {
-			out.actionDone <- errInactiveSession
-			return nil
-		}
-		if out.action == compactSession {
-			switch {
-			case p.model == nil:
-				out.actionDone <- errInactiveSession
-			case p.closeAtIdle:
-				out.actionDone <- errors.New("session is closing when idle")
-			default:
-				p.model.Compact()
-				out.actionDone <- nil
-			}
-			return nil
-		}
-		p.closeAtIdle = true
-		err := r.save(ctx, p)
-		out.actionDone <- err
-		return err
-	}
-	if r.live[p.key] != p {
+	if out.kind != sessionActionRequested && r.live[p.key] != p {
 		return nil
 	}
-	if out.exited {
-		reason := p.reason
-		if reason == "" {
-			reason = modelProcessExited
-		}
-		if p.model != nil {
-			attrs := []any{"session", p.key, "reason", reason}
-			if reason == modelProcessExited && p.lastError != "" {
-				attrs = append(attrs, "error", p.lastError)
-			}
-			slog.InfoContext(ctx, "Model process exited", attrs...)
-		}
-		if err := r.sessions.Interrupt(ctx, p.key, reason); err != nil {
-			return err
-		}
-		r.retire(p, reason)
-		r.mu.Lock()
-		delete(r.live, p.key)
-		r.mu.Unlock()
-		return nil
-	}
-	if out.model != nil {
-		p.model = out.model
-		slog.InfoContext(ctx, "Model process started", "session", p.key)
-		return r.save(ctx, p)
-	}
-	if out.delivered {
+	switch out.kind {
+	case sessionActionRequested:
+		return r.handleSessionAction(ctx, p, out.action, out.actionDone)
+	case modelOpened:
+		return r.handleModelOpened(ctx, p, out.model)
+	case noticeDeliveryFinished, preparationFailed, inputDeliveryFinished:
 		item := p.delivering
 		p.delivering = nil
-		if out.err != nil {
-			if p.closing {
-				return nil
-			}
-			if out.skipped && !p.key.IsNotice() {
-				return r.fail(ctx, *item, out.err, 1)
-			}
-			if err := r.fail(ctx, *item, out.err, r.config.MaxAttempts); err != nil {
-				return err
-			}
-			if !errors.Is(out.err, domain.ErrRejected) || p.model == nil {
-				r.retire(p, out.err.Error())
-			}
+		if out.err != nil && p.closing {
 			return nil
 		}
-		if !out.skipped && p.turn == nil {
-			p.turn = &domain.SessionTurn{InputID: item.ID}
+		switch out.kind {
+		case noticeDeliveryFinished:
+			return r.handleNoticeDeliveryFinished(ctx, p, item, out.err)
+		case preparationFailed:
+			return r.handlePreparationFailed(ctx, item, out.err)
+		case inputDeliveryFinished:
+			return r.handleInputDeliveryFinished(ctx, p, item, out.err)
 		}
-		if !out.skipped {
-			if p.unstarted == nil {
-				p.unstarted = make(map[int64]domain.InboxItem)
-			}
-			p.unstarted[item.ID] = *item
-			return r.save(ctx, p)
-		}
-		if err := r.inbox.Delivered(ctx, item.ID, r.state(p)); err != nil {
-			return err
-		}
-		if p.model == nil {
-			r.retire(p, "empty input")
-		}
-		return nil
+	case modelEventReceived:
+		return r.handleModelEvent(ctx, p, *out.event)
+	case modelEventsClosed:
+		r.retire(p, modelProcessExited)
+	case pumpExited:
+		return r.handlePumpExited(ctx, p)
 	}
-	if out.event != nil && (out.event.Kind == domain.ModelEventInputStarted || out.event.Kind == domain.ModelEventInputRefused) {
-		item, found := p.unstarted[out.event.InputID]
-		if !found {
-			return nil
-		}
-		delete(p.unstarted, item.ID)
-		if out.event.Kind == domain.ModelEventInputRefused {
-			if err := r.fail(ctx, item, out.event.Err, r.config.MaxAttempts); err != nil {
-				return err
-			}
-			if p.turn != nil && p.turn.InputID == item.ID && len(p.unstarted) == 0 {
-				p.turn = nil
-			}
-			return r.save(ctx, p)
-		}
-		if p.turn != nil && p.turnStarted {
-			p.turn.Continuations = max(p.turn.Continuations, item.Payload.Continuations)
-		}
-		return r.inbox.Delivered(ctx, item.ID, r.state(p))
+	return nil
+}
+
+func (r *Reconciler) handleModelOpened(ctx context.Context, p *process, model domain.ModelSession) error {
+	p.model = model
+	slog.InfoContext(ctx, "Model process started", "session", p.key)
+	return r.save(ctx, p)
+}
+
+func (r *Reconciler) handleNoticeDeliveryFinished(ctx context.Context, p *process, item *domain.InboxItem, cause error) error {
+	if cause != nil {
+		return r.handleDeliveryFailure(ctx, p, item, cause)
+	}
+	if err := r.inbox.Delivered(ctx, item.ID, r.state(p)); err != nil {
+		return err
+	}
+	r.retire(p, ownerNoticeSent)
+	return nil
+}
+
+func (r *Reconciler) handlePreparationFailed(ctx context.Context, item *domain.InboxItem, cause error) error {
+	if errors.Is(cause, domain.ErrRejected) {
+		r.Notify()
+		return r.inbox.Reject(ctx, item.ID, cause.Error())
+	}
+	return r.failAtOnce(ctx, *item, cause)
+}
+
+func (r *Reconciler) handleInputDeliveryFinished(ctx context.Context, p *process, item *domain.InboxItem, cause error) error {
+	if cause != nil {
+		return r.handleDeliveryFailure(ctx, p, item, cause)
+	}
+	if p.turn == nil {
+		p.turn = &domain.SessionTurn{InputID: item.ID}
+	}
+	if p.unstarted == nil {
+		p.unstarted = make(map[int64]domain.InboxItem)
+	}
+	p.unstarted[item.ID] = *item
+	return r.save(ctx, p)
+}
+
+func (r *Reconciler) handleDeliveryFailure(ctx context.Context, p *process, item *domain.InboxItem, cause error) error {
+	if err := r.retryWithBackoff(ctx, *item, cause); err != nil {
+		return err
+	}
+	r.retire(p, cause.Error())
+	return nil
+}
+
+func (r *Reconciler) handleModelEvent(ctx context.Context, p *process, event domain.ModelEvent) error {
+	if event.Kind == domain.ModelEventInputStarted || event.Kind == domain.ModelEventInputRefused {
+		return r.handleInputAcknowledgement(ctx, p, event)
 	}
 	if p.closing {
 		return nil
 	}
-	if out.err != nil {
-		r.retire(p, out.err.Error())
-		return nil
-	}
-	event := *out.event
 	if err := r.events.SaveModel(ctx, domain.ModelRecord{SessionKey: p.key, Event: event, RecordedAt: time.Now()}); err != nil {
 		return err
 	}
 	switch event.Kind {
 	case domain.ModelEventTurnStarted:
-		if p.turn == nil {
-			p.turn = &domain.SessionTurn{}
-			for id := range p.unstarted {
-				if p.turn.InputID == 0 || id < p.turn.InputID {
-					p.turn.InputID = id
-				}
-			}
-		}
-		if !p.turnStarted {
-			attrs := []any{"session", p.key}
-			if p.turn.InputID != 0 {
-				attrs = append(attrs, "item", p.turn.InputID)
-			}
-			slog.InfoContext(ctx, "Turn started", attrs...)
-			p.turnStarted = true
-		}
+		p.startTurn(ctx)
 	case domain.ModelEventError:
 		p.lastError = event.Err.Error()
 		if p.turn != nil {
 			p.turn.Failure = p.lastError
 		}
 	case domain.ModelEventTurnFinished:
-		attrs := []any{"session", p.key}
-		if p.turn != nil && p.turn.Failure != "" {
-			attrs = append(attrs, "error", p.turn.Failure)
-			if _, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice("turn-failure:"+uuid.NewString(), fmt.Sprintf("Turn in %s failed: %s", p.key, p.turn.Failure))); err != nil {
-				return err
-			}
-		}
-		if p.turnStarted {
-			slog.InfoContext(ctx, "Turn finished", attrs...)
-			p.turnStarted = false
-			p.lastError = ""
-		}
-		p.turn = nil
-		if err := r.save(ctx, p); err != nil {
+		if err := r.finishTurn(ctx, p); err != nil {
 			return err
 		}
-		return nil
 	}
 	return r.save(ctx, p)
+}
+
+func (r *Reconciler) handleInputAcknowledgement(ctx context.Context, p *process, event domain.ModelEvent) error {
+	item, found := p.unstarted[event.InputID]
+	if !found {
+		return nil
+	}
+	delete(p.unstarted, item.ID)
+	if event.Kind == domain.ModelEventInputRefused {
+		if err := r.retryWithBackoff(ctx, item, event.Err); err != nil {
+			return err
+		}
+		if p.turn != nil && p.turn.InputID == item.ID && len(p.unstarted) == 0 {
+			p.turn = nil
+		}
+		return r.save(ctx, p)
+	}
+	if p.turn != nil && p.turnStarted {
+		p.turn.Continuations = max(p.turn.Continuations, item.Payload.Continuations)
+	}
+	return r.inbox.Delivered(ctx, item.ID, r.state(p))
+}
+
+func (p *process) startTurn(ctx context.Context) {
+	if p.turn == nil {
+		p.turn = &domain.SessionTurn{}
+		for id := range p.unstarted {
+			if p.turn.InputID == 0 || id < p.turn.InputID {
+				p.turn.InputID = id
+			}
+		}
+	}
+	if !p.turnStarted {
+		attrs := []any{"session", p.key}
+		if p.turn.InputID != 0 {
+			attrs = append(attrs, "item", p.turn.InputID)
+		}
+		slog.InfoContext(ctx, "Turn started", attrs...)
+		p.turnStarted = true
+	}
+}
+
+func (r *Reconciler) finishTurn(ctx context.Context, p *process) error {
+	attrs := []any{"session", p.key}
+	if p.turn != nil && p.turn.Failure != "" {
+		attrs = append(attrs, "error", p.turn.Failure)
+		if _, err := r.inbox.Enqueue(ctx, domain.NewOwnerNotice("turn-failure:"+uuid.NewString(), fmt.Sprintf("Turn in %s failed: %s", p.key, p.turn.Failure))); err != nil {
+			return err
+		}
+	}
+	if p.turnStarted {
+		slog.InfoContext(ctx, "Turn finished", attrs...)
+		p.turnStarted = false
+		p.lastError = ""
+	}
+	p.turn = nil
+	return nil
+}
+
+func (r *Reconciler) handlePumpExited(ctx context.Context, p *process) error {
+	reason := p.reason
+	if reason == "" {
+		reason = modelProcessExited
+	}
+	if p.model != nil {
+		attrs := []any{"session", p.key, "reason", reason}
+		if reason == modelProcessExited && p.lastError != "" {
+			attrs = append(attrs, "error", p.lastError)
+		}
+		slog.InfoContext(ctx, "Model process exited", attrs...)
+	}
+	if err := r.sessions.Interrupt(ctx, p.key, reason); err != nil {
+		return err
+	}
+	r.retire(p, reason)
+	r.mu.Lock()
+	delete(r.live, p.key)
+	r.mu.Unlock()
+	return nil
 }
 func (r *Reconciler) state(p *process) domain.Session {
 	s := domain.Session{Key: p.key, ResumeToken: p.token, Context: &domain.SessionContext{Workdir: r.config.Workdir}, Turn: p.turn}
@@ -564,13 +598,17 @@ func (r *Reconciler) retire(p *process, reason string) {
 	r.hub.CloseSession(p.key)
 	p.cancel()
 }
-func (r *Reconciler) fail(ctx context.Context, item domain.InboxItem, cause error, limit int) error {
-	if errors.Is(cause, domain.ErrRejected) {
-		r.Notify()
-		return r.inbox.Reject(ctx, item.ID, cause.Error())
-	}
-	retry := time.Now().Add(r.config.RetryDelay * time.Duration(1<<min(item.Attempts, 8)))
-	dead, err := r.inbox.Fail(ctx, item.ID, cause.Error(), limit, retry)
+func (r *Reconciler) retryWithBackoff(ctx context.Context, item domain.InboxItem, cause error) error {
+	return r.recordFailure(ctx, item, cause, r.config.MaxAttempts)
+}
+
+func (r *Reconciler) failAtOnce(ctx context.Context, item domain.InboxItem, cause error) error {
+	return r.recordFailure(ctx, item, cause, 1)
+}
+
+func (r *Reconciler) recordFailure(ctx context.Context, item domain.InboxItem, cause error, maxAttempts int) error {
+	retryAt := time.Now().Add(r.config.RetryDelay * time.Duration(1<<min(item.Attempts, 8)))
+	dead, err := r.inbox.Fail(ctx, item.ID, cause.Error(), maxAttempts, retryAt)
 	if err != nil {
 		return err
 	}
