@@ -572,7 +572,7 @@ func (r *Reconciler) fail(ctx context.Context, item domain.InboxItem, cause erro
 		return r.inbox.Reject(ctx, item.ID, cause.Error())
 	}
 	retry := time.Now().Add(r.config.RetryDelay * time.Duration(1<<min(item.Attempts, 8)))
-	dead, err := r.inbox.Finish(ctx, item.ID, cause.Error(), limit, retry)
+	dead, err := r.inbox.Fail(ctx, item.ID, cause.Error(), limit, retry)
 	if err != nil {
 		return err
 	}

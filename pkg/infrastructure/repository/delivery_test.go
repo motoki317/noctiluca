@@ -129,7 +129,7 @@ func TestInterruptChecksOpeningInput(t *testing.T) {
 			expectedStatus := domain.InboxPending
 			switch status {
 			case domain.InboxDead:
-				_, err := inbox.Finish(t.Context(), id, "refused", 1, time.Now().Add(time.Hour))
+				_, err := inbox.Fail(t.Context(), id, "refused", 1, time.Now().Add(time.Hour))
 				require.NoError(t, err)
 				expectedStatus = domain.InboxDead
 			case domain.InboxDone:

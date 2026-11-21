@@ -74,7 +74,7 @@ type SessionContext struct {
 
 type SessionRepository interface {
 	Recover(context.Context) error
-	Interrupt(context.Context, SessionKey, string) error
+	Interrupt(ctx context.Context, key SessionKey, reason string) error
 	Get(ctx context.Context, key SessionKey) (Session, error)
 	Save(ctx context.Context, session Session) error
 }

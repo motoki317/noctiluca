@@ -278,7 +278,7 @@ func TestNoticeRetrySurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	_, err = inbox.Claim(t.Context(), id)
 	require.NoError(t, err)
-	_, err = inbox.Finish(t.Context(), id, "bad model", 1, time.Now())
+	_, err = inbox.Fail(t.Context(), id, "bad model", 1, time.Now())
 	require.NoError(t, err)
 	makeRunner := func(notify func(context.Context, string) error) *Reconciler {
 		return New(Config{RetryDelay: 10 * time.Millisecond, NotifyOwner: notify}, inbox, repository.NewScheduleRepository(db), repository.NewSessionRepository(db), repository.NewEventRepository(db), &modelFake{opened: make(chan *sessionFake, 1)}, &hubFake{closed: make(chan domain.SessionKey, 4)})
@@ -415,7 +415,7 @@ func TestMainContextNudge(t *testing.T) {
 	item.Status = domain.InboxDispatched
 	id, err := f.inbox.Enqueue(ctx, item)
 	require.NoError(t, err)
-	dead, err := f.inbox.Finish(ctx, id, "test failure", 3, time.Now())
+	dead, err := f.inbox.Fail(ctx, id, "test failure", 3, time.Now())
 	require.NoError(t, err)
 	require.False(t, dead)
 	f.runner.Notify()

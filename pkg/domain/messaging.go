@@ -20,7 +20,7 @@ type SourceInfo struct {
 
 // SourceInfoProvider supplies readable names and an adapter-native location line.
 type SourceInfoProvider interface {
-	SourceInfo(context.Context, InboundEvent, bool) SourceInfo
+	SourceInfo(ctx context.Context, event InboundEvent, fetchRoot bool) SourceInfo
 }
 
 type OutboundMessage struct {
@@ -43,12 +43,12 @@ type UserGroupProvider interface {
 
 // DirectMessageProvider resolves owner notification destinations.
 type DirectMessageProvider interface {
-	DirectMessage(context.Context, string) (ConversationRef, error)
+	DirectMessage(ctx context.Context, userID string) (ConversationRef, error)
 }
 
 // ConversationFilter avoids remote lookups in ignored conversations.
 type ConversationFilter interface {
-	SetConversationFilter(func(ConversationRef) bool)
+	SetConversationFilter(accepts func(ConversationRef) bool)
 }
 
 const PostingGuidance = "Post only when someone addresses you (a mention, a request to you, or a DM), or to report requested work. " +

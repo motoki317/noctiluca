@@ -75,14 +75,14 @@ func NewOwnerNotice(source, text string) InboxItem {
 // Each method commits all of its writes in one transaction: an event with its row,
 // a schedule's next run with its row, a delivery with its session state.
 type InboxRepository interface {
-	Delivered(context.Context, int64, Session) error
-	Reject(context.Context, int64, string) error
-	Enqueue(context.Context, InboxItem) (int64, error)
-	Receive(context.Context, InboundEvent, InboxItem) error
-	Active(context.Context) ([]InboxItem, error)
-	Claim(context.Context, int64) (bool, error)
-	Finish(context.Context, int64, string, int, time.Time) (bool, error)
-	Fire(context.Context, Schedule, time.Time, *InboxItem) error
+	Delivered(ctx context.Context, id int64, session Session) error
+	Reject(ctx context.Context, id int64, reason string) error
+	Enqueue(ctx context.Context, item InboxItem) (int64, error)
+	Receive(ctx context.Context, event InboundEvent, item InboxItem) error
+	Active(ctx context.Context) ([]InboxItem, error)
+	Claim(ctx context.Context, id int64) (bool, error)
+	Fail(ctx context.Context, id int64, failure string, maxAttempts int, retryAt time.Time) (bool, error)
+	Fire(ctx context.Context, schedule Schedule, next time.Time, item *InboxItem) error
 }
 
 type Watch struct {

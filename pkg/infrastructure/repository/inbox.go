@@ -84,11 +84,7 @@ func (r *inboxRepository) Claim(ctx context.Context, id int64) (bool, error) {
 	n, err := result.RowsAffected()
 	return n == 1, err
 }
-func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, limit int, retry time.Time) (bool, error) {
-	if failure == "" {
-		_, err := r.db.ExecContext(ctx, `UPDATE inbox SET status='done' WHERE id=? AND status='dispatched'`, id)
-		return false, err
-	}
+func (r *inboxRepository) Fail(ctx context.Context, id int64, failure string, maxAttempts int, retryAt time.Time) (bool, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -97,7 +93,7 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 	var status domain.InboxStatus
 	var key domain.SessionKey
 	var attempts int
-	err = tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status='dispatched' RETURNING status,session_key,attempts`, limit, retry.UTC(), failure, id).Scan(&status, &key, &attempts)
+	err = tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status='dispatched' RETURNING status,session_key,attempts`, maxAttempts, retryAt.UTC(), failure, id).Scan(&status, &key, &attempts)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
