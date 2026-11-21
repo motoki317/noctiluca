@@ -1,19 +1,21 @@
-"""Social image for a logo candidate: a night sea whose wave crest glows with plankton.
+"""Print the SVG of a social image: a night sea whose wave crest glows with plankton.
 
-usage: python3 -I gen-social.py <width> <height> > social.svg
-Run from assets/
+Run from assets/:
+    python3 -I gen-social.py 1280 640 > social-2x1.svg
+    rsvg-convert social-2x1.svg -o social-2x1.png
+The text renders in Noto Sans CJK JP Light.
 """
 import math, random, re, sys
 
-cand, W, H = "b", int(sys.argv[1]), int(sys.argv[2])
+W, H = int(sys.argv[1]), int(sys.argv[2])
 random.seed(11)
 TAGLINE = "A minimal agent harness that sleeps, dreams, and learns."
 
 logo = open("logo.svg").read()
 inner = logo.split(">", 1)[1].rsplit("</svg>", 1)[0]
-# The mark's box in logo units (cell plus tentacle, without halo or edge), and the cell itself.
-MARK = {"b": ((52, 28, 204, 236), (128, 104, 76)), "c": ((50, 26, 206, 238), (128, 104, 78)),
-        "d": ((50, 34, 206, 225), (128, 88, 78)), "e": ((54, 46, 202, 206), (128, 124, 74))}[cand]
+# The mark in logo units: the cell plus the tentacle, without the halo or the edge.
+MARK_TOP, MARK_BOTTOM, CELL_X = 28, 236, 128
+MARK_HEIGHT = 0.31  # of the image height
 inner = re.sub(r"<!--.*?-->", "", inner, flags=re.S)
 
 
@@ -81,36 +83,18 @@ for _ in range(34):
                  f'opacity="{random.uniform(0.15, 0.45):.2f}"/>')
 
 # Layout. Everything important stays inside the central 80% of the canvas.
-(mx0, my0, mx1, my1), (ccx, ccy, cr) = MARK
 top_room = 0.66 * H  # top of the crest: the free sky ends here
-if cand in ("b", "d", "e"):  # stacked, centred
-    # px per logo unit: the mark is 0.31 of the height; the solid n carries more weight per unit
-    k = (0.25 if cand == "e" else 0.31) * H / (my1 - my0)
-    word, tag = 0.13 * H, 0.036 * H
-    block = (my1 - my0) * k + 0.035 * H + word * 0.75 + 0.06 * H + tag * 0.75
-    ly = max(0.1 * H, (top_room - block) / 2) - my0 * k
-    lx = W / 2 - ccx * k
-    wy = ly + my1 * k + 0.035 * H + word * 0.75
-    ty = wy + 0.06 * H + tag * 0.75
-    text = (f'<text x="{W/2:.0f}" y="{wy:.0f}" text-anchor="middle" font-size="{word:.0f}" '
-            f'font-weight="300" letter-spacing="3">noctiluca</text>\n'
-            f' <text x="{W/2:.0f}" y="{ty:.0f}" text-anchor="middle" font-size="{tag:.0f}" '
-            f'font-weight="300" fill="#9CC7E4">{TAGLINE}</text>')
-else:  # logo left of the words
-    k = 0.34 * 640 / (my1 - my0)
-    word, tag = 0.19 * 640, 0.04 * 640
-    gap = 0.03 * W
-    text_w = 0.52 * W  # measured from the rendered tagline at this size
-    mark_w = (mx1 - mx0) * k
-    x0 = (W - (mark_w + gap + text_w)) / 2
-    lx = x0 - mx0 * k
-    ly = (top_room - (my1 - my0) * k) / 2 + 0.02 * H - my0 * k
-    tx = x0 + mark_w + gap
-    cy = ly + ccy * k  # the words sit on the cell, not on the whole mark
-    text = (f'<text x="{tx:.0f}" y="{cy + word * 0.12:.0f}" font-size="{word:.0f}" '
-            f'font-weight="300" letter-spacing="2">noctiluca</text>\n'
-            f' <text x="{tx + 4:.0f}" y="{cy + word * 0.12 + tag * 2.2:.0f}" font-size="{tag:.0f}" '
-            f'font-weight="300" fill="#9CC7E4">{TAGLINE}</text>')
+k = MARK_HEIGHT * H / (MARK_BOTTOM - MARK_TOP)  # px per logo unit
+word, tag = 0.13 * H, 0.036 * H
+block = (MARK_BOTTOM - MARK_TOP) * k + 0.035 * H + word * 0.75 + 0.06 * H + tag * 0.75
+ly = max(0.1 * H, (top_room - block) / 2) - MARK_TOP * k
+lx = W / 2 - CELL_X * k
+wy = ly + MARK_BOTTOM * k + 0.035 * H + word * 0.75
+ty = wy + 0.06 * H + tag * 0.75
+text = (f'<text x="{W/2:.0f}" y="{wy:.0f}" text-anchor="middle" font-size="{word:.0f}" '
+        f'font-weight="300" letter-spacing="3">noctiluca</text>\n'
+        f' <text x="{W/2:.0f}" y="{ty:.0f}" text-anchor="middle" font-size="{tag:.0f}" '
+        f'font-weight="300" fill="#9CC7E4">{TAGLINE}</text>')
 
 print(f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
 <defs>
