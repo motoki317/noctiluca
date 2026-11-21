@@ -60,7 +60,7 @@ func (a *adapter) SourceInfo(ctx context.Context, event domain.InboundEvent, roo
 	} else {
 		params := &sdk.GetConversationInfoInput{ChannelID: channel}
 		conversation, err := a.bot.GetConversationInfoContext(ctx, params)
-		if a.fallbackReader(err) {
+		if a.needsUserToken(err) {
 			conversation, err = a.reader.GetConversationInfoContext(ctx, params)
 		}
 		if err == nil {
@@ -79,7 +79,7 @@ func (a *adapter) SourceInfo(ctx context.Context, event domain.InboundEvent, roo
 	if root && thread != "" {
 		params := &sdk.GetConversationRepliesParameters{ChannelID: channel, Timestamp: thread, Limit: 1}
 		messages, _, _, err := a.bot.GetConversationRepliesContext(ctx, params)
-		if a.fallbackReader(err) {
+		if a.needsUserToken(err) {
 			messages, _, _, err = a.reader.GetConversationRepliesContext(ctx, params)
 		}
 		if err == nil && len(messages) > 0 && messages[0].Timestamp == thread {

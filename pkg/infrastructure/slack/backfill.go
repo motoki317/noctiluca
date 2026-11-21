@@ -140,7 +140,7 @@ func (a *adapter) readBackfill(ctx context.Context, target backfillTarget) ([]sd
 				ChannelID: target.channel, Timestamp: target.thread, Oldest: since, Latest: until, Limit: backfillLimit, Cursor: cursor,
 			})
 		}
-		if reader == a.bot && a.fallbackReader(err) {
+		if reader == a.bot && a.needsUserToken(err) {
 			reader = a.reader
 			continue
 		}

@@ -169,7 +169,7 @@ func slackError(operation string, err error) error {
 	return errors.New(operation)
 }
 
-func (a *adapter) fallbackReader(err error) bool {
+func (a *adapter) needsUserToken(err error) bool {
 	var response sdk.SlackErrorResponse
 	return a.reader != a.bot && errors.As(err, &response) && (response.Err == "not_in_channel" || response.Err == "channel_not_found")
 }
@@ -177,7 +177,7 @@ func (a *adapter) fallbackReader(err error) bool {
 func (a *adapter) readThread(ctx context.Context, in toolInput) (any, error) {
 	params := &sdk.GetConversationRepliesParameters{ChannelID: in.Channel, Timestamp: in.Thread, Limit: in.Limit, Cursor: in.Cursor}
 	messages, more, cursor, err := a.bot.GetConversationRepliesContext(ctx, params)
-	if a.fallbackReader(err) {
+	if a.needsUserToken(err) {
 		messages, more, cursor, err = a.reader.GetConversationRepliesContext(ctx, params)
 	}
 	if err != nil {
@@ -189,7 +189,7 @@ func (a *adapter) readThread(ctx context.Context, in toolInput) (any, error) {
 func (a *adapter) readHistory(ctx context.Context, in toolInput) (any, error) {
 	params := &sdk.GetConversationHistoryParameters{ChannelID: in.Channel, Limit: in.Limit, Cursor: in.Cursor}
 	result, err := a.bot.GetConversationHistoryContext(ctx, params)
-	if a.fallbackReader(err) {
+	if a.needsUserToken(err) {
 		result, err = a.reader.GetConversationHistoryContext(ctx, params)
 	}
 	if err != nil {
@@ -294,6 +294,7 @@ func (a *adapter) upload(ctx context.Context, in toolInput) (any, error) {
 	if err := a.record(ctx, id, Conversation(a.name, in.Channel, in.Thread), message); err != nil {
 		return nil, err
 	}
+	// The user token may lack access to files the bot uploads.
 	info, _, _, err := a.bot.GetFileInfoContext(ctx, result.ID, 0, 0)
 	var response sdk.SlackErrorResponse
 	if a.reader != a.bot && errors.As(err, &response) && response.Err == "missing_scope" {

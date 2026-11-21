@@ -17,7 +17,7 @@ import (
 
 func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, bool) {
 	var event domain.InboundEvent
-	var channel, thread, reactionUser string
+	var channel, thread, itemAuthor string
 	var mentionsMe bool
 	switch e := data.(type) {
 	case *slackevents.MessageEvent:
@@ -104,7 +104,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 			return event, false
 		}
 		channel = e.Item.Channel
-		reactionUser = e.ItemUser
+		itemAuthor = e.ItemUser
 		// The sender stays a bot until users.info shows a human, so a failed lookup cannot pass a bot as a human.
 		sender := domain.Sender{ID: e.User, Kind: domain.SenderBot}
 		// The target timestamp keeps the reaction useful even when its message is unavailable.
@@ -127,7 +127,7 @@ func (a *adapter) inbound(ctx context.Context, data any) (domain.InboundEvent, b
 	if !event.Direct {
 		switch {
 		case event.Kind == domain.InboundEventReaction:
-			if reactionUser != a.selfUser {
+			if itemAuthor != a.selfUser {
 				return event, false
 			}
 		// In a conversation that the core ignores, the adapter skips the lookup.
@@ -206,18 +206,21 @@ func (a *adapter) isSelf(user, bot string) bool {
 	return (a.selfUser != "" && user == a.selfUser) || (a.selfBot != "" && bot == a.selfBot)
 }
 
+// The lookup runs on the event stream, so it must not hold later events.
+const threadLookupTimeout = 2 * time.Second
+
 func (a *adapter) joinedThread(ctx context.Context, channel, thread string) (bool, error) {
 	ref := Conversation(a.name, channel, thread)
 	if _, ok := a.joinedThreads.Load(ref); ok {
 		return true, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, threadLookupTimeout)
 	defer cancel()
 	params := &sdk.GetConversationRepliesParameters{ChannelID: channel, Timestamp: thread, Limit: 100}
 	reader := a.bot
 	for {
 		messages, _, cursor, err := reader.GetConversationRepliesContext(ctx, params)
-		if reader == a.bot && a.fallbackReader(err) {
+		if reader == a.bot && a.needsUserToken(err) {
 			reader = a.reader
 			messages, _, cursor, err = reader.GetConversationRepliesContext(ctx, params)
 		}
