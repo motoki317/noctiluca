@@ -1,0 +1,17 @@
+CANVAS_WIDTH_PX = 1280
+BASE_CANVAS_HEIGHT_PX = 640
+
+# The relief viewport extends past the top and right edges of the canvas.
+RELIEF_VIEWPORT_LEFT_PX = 866
+RELIEF_VIEWPORT_TOP_PX = -98
+RELIEF_VIEWPORT_WIDTH_PX = 532
+
+LOCKUP_VIEWPORT_LEFT_PX = 92
+LOCKUP_VIEWPORT_TOP_PX = 139
+LOCKUP_SVG_TO_CANVAS_SCALE = 0.6
+TAGLINE_VIEWPORT_LEFT_PX = 120
+TAGLINE_VIEWPORT_TOP_PX = 318
+
+
+def type_y_offset_px(canvas_height_px):
+    return (canvas_height_px - BASE_CANVAS_HEIGHT_PX) / 2
