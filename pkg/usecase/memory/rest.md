@@ -46,7 +46,7 @@ Then add the item, update the entry that covers it, delete entries that it makes
 - Merge rules that say the same thing. Move a rule that only one procedure needs into that procedure. Delete obsolete rules.
 - Delete any step in procedures/rest.md that only repeats a step here.
 - Measure files with `wc -c`. Split a long-term or external file over 8 KB by theme.
-- Shorten `core.md` or `short-term.md` over 8 KB by moving detail to where it belongs.
+- Move detail out of `core.md` and `short-term.md` to where it belongs.
 - Commit each change separately. Keep edits small, because whole-document rewrites lose detail.
 
 ## Check and report
