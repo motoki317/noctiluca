@@ -73,7 +73,7 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 		if ctx.Err() != nil {
 			return errReconnect
 		}
-		joined := target.direct
+		botInChannel := target.direct
 		if !target.direct {
 			bots, response, err := a.api.ChannelAPI.GetChannelBots(ctx, target.channel).Execute()
 			if err != nil {
@@ -82,7 +82,7 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 				}
 				a.warnLookup(ctx, "read traQ channel bots", apiError("read traQ channel bots", response, err), "channel_id", target.channel)
 			} else {
-				joined = slices.ContainsFunc(bots, func(bot sdk.BotUser) bool { return bot.BotUserId == a.self })
+				botInChannel = slices.ContainsFunc(bots, func(bot sdk.BotUser) bool { return bot.BotUserId == a.self })
 			}
 		}
 		messages, response, err := a.api.MessageAPI.GetMessages(ctx, target.channel).Since(target.since).Until(target.until).Inclusive(true).Limit(backfillLimit).Order("desc").Execute()
@@ -111,7 +111,7 @@ func (a *adapter) backfill(ctx context.Context, targets []backfillTarget, consum
 				continue
 			}
 			mentions := a.mentions(message.Content, nil)
-			if !joined && !mentions {
+			if !botInChannel && !mentions {
 				continue
 			}
 			user, err := a.lookupUser(ctx, message.UserId)

@@ -126,7 +126,7 @@ func (a *adapter) message(ctx context.Context, m sdk.Message, edited bool) (*dom
 	}
 	if location.thread != nil && !mentions &&
 		(a.acceptConversation == nil || a.acceptConversation(location.parent)) {
-		joined, err := a.inThread(ctx, *location.thread)
+		joined, err := a.joinedThread(ctx, *location.thread)
 		if err != nil {
 			a.warnLookup(ctx, m.ChannelID, m.ID, err)
 		} else if !joined {
@@ -147,7 +147,7 @@ func (a *adapter) message(ctx context.Context, m sdk.Message, edited bool) (*dom
 	return e, nil
 }
 
-func (a *adapter) inThread(ctx context.Context, thread sdk.GuildThread) (bool, error) {
+func (a *adapter) joinedThread(ctx context.Context, thread sdk.GuildThread) (bool, error) {
 	if a.joinedThreads[thread.ID()] {
 		return true, nil
 	}
