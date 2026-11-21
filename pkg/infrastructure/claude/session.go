@@ -203,7 +203,7 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 			}
 		}
 		s.mu.Lock()
-		s.observeRequest(f)
+		s.recordContextTokens(f)
 		if s.parser.compacting && f.Type == "system" {
 			if f.Subtype == "compact_boundary" {
 				s.contextTokens = f.CompactMetadata.PostTokens
@@ -261,7 +261,7 @@ func (s *session) warnCompactionFailure() {
 	}
 }
 
-func (s *session) observeRequest(f frame) {
+func (s *session) recordContextTokens(f frame) {
 	if f.ParentToolUseID != "" || s.parser.compacting {
 		return
 	}

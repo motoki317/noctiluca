@@ -610,7 +610,7 @@ func TestMainContextTokenTracking(t *testing.T) {
 		t.Helper()
 		f, err := parseFrame([]byte(line))
 		require.NoError(t, err)
-		s.observeRequest(f)
+		s.recordContextTokens(f)
 	}
 	observe(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"first","usage":{"input_tokens":1,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}}`)
 	require.Equal(t, 6, s.ContextTokens())

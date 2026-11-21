@@ -136,22 +136,29 @@ type parser struct {
 	compacting  bool
 }
 
-func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
+func (p *parser) consumesCompactionFrame(f frame) bool {
 	if f.Type == "command_lifecycle" && f.CommandUUID == p.compactUUID && p.compactUUID != "" {
 		if f.State == "started" {
 			p.compacting = true
 		}
-		return nil
+		return true
 	}
 	if f.Type == "user" && p.compacting {
-		return nil
+		return true
 	}
 	if f.Type == "result" && f.LocalCommand == "compact" && p.compactUUID != "" {
 		p.compacting = false
 		p.compactUUID = ""
-		return nil
+		return true
 	}
 	if p.compacting && f.ParentToolUseID == "" && (f.Type == "stream_event" || f.Type == "assistant") {
+		return true
+	}
+	return false
+}
+
+func (p *parser) events(f frame, pending map[string]int64) []domain.ModelEvent {
+	if p.consumesCompactionFrame(f) {
 		return nil
 	}
 	var events []domain.ModelEvent
