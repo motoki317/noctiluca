@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/social-16x9.png" alt="noctiluca: a minimal agent harness that sleeps, dreams, and learns"></p>
+<p align="center"><img src="assets/social-16x9.png" alt="noctiluca: a self-hosted agent harness that sleeps, dreams, and learns by itself"></p>
 
 # noctiluca
 
