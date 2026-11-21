@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/infrastructure/repository"
 	"github.com/motoki317/noctiluca/pkg/usecase/reconcile"
 	"github.com/motoki317/noctiluca/pkg/usecase/toolhub"
@@ -22,7 +23,7 @@ func TestSharedScheduleTools(t *testing.T) {
 	require.NoError(t, err)
 	c := client(t, endpoint)
 	require.False(t, call(t, c, "schedule_add", map[string]any{"name": "daily", "cron": "0 9 * * *", "tz": "UTC", "prompt": "Check tasks"}).IsError)
-	for _, name := range []string{"heartbeat", "rest"} {
+	for _, name := range []string{domain.HeartbeatSchedule, domain.RestSchedule} {
 		require.True(t, call(t, c, "schedule_add", map[string]any{"name": name, "cron": "0 9 * * *", "tz": "UTC", "prompt": "work"}).IsError)
 	}
 	jobs, err := schedules.List(t.Context())

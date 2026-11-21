@@ -163,7 +163,7 @@ func TestRestScheduleIsAnOrdinaryProcedureInput(t *testing.T) {
 	f := newDeliveryRig(t, Config{Procedure: testProcedure})
 	f.model.idle = true
 	require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: domain.MainSessionKey, ResumeToken: "conversation-token", Context: &domain.SessionContext{Conversation: "room"}}))
-	require.NoError(t, repository.NewScheduleRepository(f.db).Save(t.Context(), domain.Schedule{Name: "rest", Cron: "0 4 * * *", TZ: "UTC", NextRun: time.Now()}))
+	require.NoError(t, repository.NewScheduleRepository(f.db).Save(t.Context(), domain.Schedule{Name: domain.RestSchedule, Cron: "0 4 * * *", TZ: "UTC", NextRun: time.Now()}))
 	f.start(t)
 	s := take(t, f.model.opened)
 	require.Equal(t, domain.MainSessionKey, s.config.Key)

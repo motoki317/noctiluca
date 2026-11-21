@@ -14,7 +14,7 @@ import (
 )
 
 func TestFailedScheduleTurnNotifiesWithoutRetry(t *testing.T) {
-	for _, name := range []string{"daily", "heartbeat", "rest"} {
+	for _, name := range []string{"daily", domain.HeartbeatSchedule, domain.RestSchedule} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				notes := make(chan string, 4)

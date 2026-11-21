@@ -79,6 +79,11 @@ type SessionRepository interface {
 	Save(ctx context.Context, session Session) error
 }
 
+const (
+	HeartbeatSchedule = "heartbeat"
+	RestSchedule      = "rest"
+)
+
 type Schedule struct {
 	NextRun time.Time
 	Name    string

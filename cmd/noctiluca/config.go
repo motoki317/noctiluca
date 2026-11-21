@@ -335,8 +335,8 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 		if err := reconcile.ValidateCron(job.Cron); err != nil {
 			return nil, 0, err
 		}
-		if job.Name == "heartbeat" || job.Name == "rest" {
-			return nil, 0, errors.New("heartbeat and rest are reserved cron names")
+		if reconcile.IsBuiltInProcedure(job.Name) {
+			return nil, 0, fmt.Errorf("%s and %s are reserved cron names", domain.HeartbeatSchedule, domain.RestSchedule)
 		}
 	}
 	tokens := make([]messagingTokens, len(c.Messaging))

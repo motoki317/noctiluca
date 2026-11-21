@@ -43,7 +43,7 @@ func TestReadableInput(t *testing.T) {
 	event.Parent, event.Conversation, event.Direct = "", "room", true
 	require.Contains(t, formatInput(item, domain.InputContext{}, domain.SourceInfo{Conversation: "Alex", Sender: "Alex"}, "owner", zone, "").Text, "DM with Alex · top level | ")
 	item.Payload.Event = nil
-	item.Lane, item.Payload.Context.TaskName, item.ReadyAt = domain.LaneTask, "heartbeat", at
+	item.Lane, item.Payload.Context.TaskName, item.ReadyAt = domain.LaneTask, domain.HeartbeatSchedule, at
 	require.Equal(t, "Task heartbeat | system | 16:29:01 JST\n\n", formatInput(item, domain.InputContext{}, info, "owner", zone, "").Text)
 	require.Equal(t, strings.Repeat("あ", 80)+"…", excerpt(strings.Repeat("あ", 81)))
 }

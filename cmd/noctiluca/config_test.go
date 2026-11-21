@@ -181,7 +181,7 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 	require.NoError(t, err)
 	db, err := repository.New(t.Context(), c.Database)
 	require.NoError(t, err)
-	for _, name := range []string{"heartbeat", "rest"} {
+	for _, name := range []string{domain.HeartbeatSchedule, domain.RestSchedule} {
 		require.NoError(t, repository.NewScheduleRepository(db).Save(t.Context(), domain.Schedule{Name: name, Cron: "0 * * * *", TZ: "UTC"}))
 	}
 	require.NoError(t, db.Close())
@@ -194,7 +194,7 @@ func TestDisabledReservedSchedulesAreRemoved(t *testing.T) {
 }
 
 func TestReservedCronNames(t *testing.T) {
-	for _, name := range []string{"heartbeat", "rest"} {
+	for _, name := range []string{domain.HeartbeatSchedule, domain.RestSchedule} {
 		c, err := loadConfig(writeConfig(t, slackEntry+"cron:\n  - {name: "+name+", cron: '0 4 * * *', tz: UTC, prompt: run}\n"))
 		require.NoError(t, err)
 		_, _, err = c.validateRun()

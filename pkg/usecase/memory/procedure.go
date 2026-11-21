@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+
+	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
 //go:embed heartbeat.md
@@ -17,9 +19,9 @@ var restFrame string
 
 func Procedure(_ context.Context, name string) (string, error) {
 	switch name {
-	case "heartbeat":
+	case domain.HeartbeatSchedule:
 		return heartbeatFrame, nil
-	case "rest":
+	case domain.RestSchedule:
 		return restFrame, nil
 	default:
 		return "", fmt.Errorf("unknown procedure %q", name)

@@ -115,22 +115,17 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 
 	jobs := append([]domain.Schedule(nil), config.Cron...)
 	if config.Heartbeat.Enabled {
-		jobs = append(jobs, domain.Schedule{Name: "heartbeat", Cron: "@every " + config.Heartbeat.Interval.String(), TZ: "UTC", Workdir: config.Model.Workdir})
+		jobs = append(jobs, domain.Schedule{Name: domain.HeartbeatSchedule, Cron: "@every " + config.Heartbeat.Interval.String(), TZ: "UTC"})
 	}
 	if config.Rest.Enabled {
-		jobs = append(jobs, domain.Schedule{Name: "rest", Cron: config.Rest.Cron, TZ: config.Rest.TZ, Workdir: config.Model.Workdir})
+		jobs = append(jobs, domain.Schedule{Name: domain.RestSchedule, Cron: config.Rest.Cron, TZ: config.Rest.TZ})
 	}
 	// Schedules persist in SQLite, so a schedule from an earlier run keeps firing until it is deleted.
-	for name, enabled := range map[string]bool{"heartbeat": config.Heartbeat.Enabled, "rest": config.Rest.Enabled} {
+	for name, enabled := range map[string]bool{domain.HeartbeatSchedule: config.Heartbeat.Enabled, domain.RestSchedule: config.Rest.Enabled} {
 		if !enabled {
 			if err := repository.NewScheduleRepository(db).Delete(ctx, name); err != nil {
 				return nil, err
 			}
-		}
-	}
-	for i := range jobs {
-		if jobs[i].Workdir == "" {
-			jobs[i].Workdir = config.Model.Workdir
 		}
 	}
 	agent, err := core.New(core.Config{

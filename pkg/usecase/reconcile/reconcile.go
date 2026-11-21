@@ -154,13 +154,11 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 			return 0, err
 		}
 		var item *domain.InboxItem
-		prompt := schedule.Prompt
-		if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "rest") {
-			prompt = "Run the " + schedule.Name + " procedure."
-		}
-		if prompt != "" {
-			value := TaskItem(schedule.Name, prompt, schedule.Workdir)
-			if r.config.Procedure != nil && (schedule.Name == "heartbeat" || schedule.Name == "rest") {
+		runProcedure := r.config.Procedure != nil && IsBuiltInProcedure(schedule.Name)
+		if runProcedure || schedule.Prompt != "" {
+			value := TaskItem(schedule.Name, schedule.Prompt, schedule.Workdir)
+			if runProcedure {
+				value.Payload.Input.Text = "Run the " + schedule.Name + " procedure."
 				value.Payload.Procedure = schedule.Name
 			}
 			value.SourceKey = fmt.Sprintf("schedule:%s:%s", schedule.Name, schedule.NextRun.Format(time.RFC3339Nano))

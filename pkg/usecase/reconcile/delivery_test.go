@@ -142,14 +142,14 @@ func TestTaskProcedureReplacesInput(t *testing.T) {
 	const text = "procedure instructions"
 	f := newDeliveryRig(t, Config{
 		Procedure: func(_ context.Context, name string) (string, error) {
-			require.Equal(t, "heartbeat", name)
+			require.Equal(t, domain.HeartbeatSchedule, name)
 			return text, nil
 		},
 	})
 	require.NoError(t, f.sessions.Save(t.Context(), domain.Session{Key: domain.MainSessionKey, ResumeToken: "saved"}))
 	f.start(t)
-	item := TaskItem("heartbeat", "run", "")
-	item.Payload.Procedure = "heartbeat"
+	item := TaskItem(domain.HeartbeatSchedule, "run", "")
+	item.Payload.Procedure = domain.HeartbeatSchedule
 	id, err := f.inbox.Enqueue(t.Context(), item)
 	require.NoError(t, err)
 	f.runner.Notify()
