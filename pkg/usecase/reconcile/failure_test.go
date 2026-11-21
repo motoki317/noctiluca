@@ -28,14 +28,14 @@ func TestFailedScheduleTurnNotifiesWithoutRetry(t *testing.T) {
 				f.start(t)
 				s := take(t, f.model.opened)
 				input := take(t, s.inputs)
-				f.status(t, input.ID, "done")
+				f.status(t, input.ID, domain.InboxDone)
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("outage")}
 				s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 				require.Equal(t, "Turn in main failed: outage", take(t, notes))
 				f.turn(t, false)
 				time.Sleep(45 * time.Minute)
 				synctest.Wait()
-				f.status(t, input.ID, "done")
+				f.status(t, input.ID, domain.InboxDone)
 				var attempts int
 				require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", input.ID).Scan(&attempts))
 				require.Zero(t, attempts)
@@ -60,7 +60,7 @@ func TestFailedTurnNotifiesOnceForSeveralInputs(t *testing.T) {
 		stop := f.start(t)
 		s := take(t, f.model.opened)
 		for range 4 {
-			f.status(t, take(t, s.inputs).ID, "done")
+			f.status(t, take(t, s.inputs).ID, domain.InboxDone)
 		}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("turn failed")}
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventError, Err: errors.New("turn failed")}
@@ -83,7 +83,7 @@ func TestFailedTurnNotifiesOnceForSeveralInputs(t *testing.T) {
 		f.turn(t, false)
 		next := f.enqueue(t, "room", "new input")
 		require.Equal(t, "new input", take(t, s.inputs).Text)
-		f.status(t, next, "done")
+		f.status(t, next, domain.InboxDone)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 		f.turn(t, false)
 		synctest.Wait()
@@ -126,7 +126,7 @@ func TestPreparationFailureEndsOnlyItsRow(t *testing.T) {
 						id := f.enqueue(t, "room", "first")
 						s = take(t, f.model.opened)
 						take(t, s.inputs)
-						f.status(t, id, "done")
+						f.status(t, id, domain.InboxDone)
 					}
 					item := TaskItem("broken", "bad", "")
 					if phase == "Procedure" {
@@ -135,7 +135,7 @@ func TestPreparationFailureEndsOnlyItsRow(t *testing.T) {
 					id, err := f.inbox.Enqueue(t.Context(), item)
 					require.NoError(t, err)
 					f.runner.Notify()
-					f.status(t, id, "dead")
+					f.status(t, id, domain.InboxDead)
 					require.Contains(t, take(t, notes), "failed after 1 attempts: cannot")
 					if running {
 						require.Equal(t, "resume-token", f.turn(t, true).ResumeToken)
@@ -145,7 +145,7 @@ func TestPreparationFailureEndsOnlyItsRow(t *testing.T) {
 						s = take(t, f.model.opened)
 					}
 					require.Equal(t, "next", take(t, s.inputs).Text)
-					f.status(t, next, "done")
+					f.status(t, next, domain.InboxDone)
 					synctest.Wait()
 					require.Empty(t, s.closed)
 					require.Empty(t, f.model.opened)
@@ -177,11 +177,11 @@ func TestInterruptedPreparationRecoversAfterRestart(t *testing.T) {
 		first := f.enqueue(t, "room", "first")
 		s := take(t, f.model.opened)
 		take(t, s.inputs)
-		f.status(t, first, "done")
+		f.status(t, first, domain.InboxDone)
 		blocked := f.enqueue(t, "room", "blocked")
 		take(t, entered)
 		stop()
-		f.status(t, blocked, "pending")
+		f.status(t, blocked, domain.InboxPending)
 		var attempts int
 		require.NoError(t, f.db.QueryRow("SELECT attempts FROM inbox WHERE id=?", blocked).Scan(&attempts))
 		require.Zero(t, attempts)
@@ -192,8 +192,8 @@ func TestInterruptedPreparationRecoversAfterRestart(t *testing.T) {
 		require.Equal(t, blocked, take(t, s.inputs).ID)
 		continuation := take(t, s.inputs)
 		require.Contains(t, continuation.Text, "previous turn was interrupted: shutdown")
-		f.status(t, blocked, "done")
-		f.status(t, continuation.ID, "done")
+		f.status(t, blocked, domain.InboxDone)
+		f.status(t, continuation.ID, domain.InboxDone)
 		s.events <- domain.ModelEvent{Kind: domain.ModelEventTurnFinished}
 		f.turn(t, false)
 		synctest.Wait()

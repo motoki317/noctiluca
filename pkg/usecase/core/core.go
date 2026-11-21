@@ -189,9 +189,9 @@ func (c *core) receive(ctx context.Context, event domain.InboundEvent) error {
 	_, accepted := c.accepted(event)
 	c.mu.Unlock()
 	event.Accepted = &accepted
-	item := domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: channel(event), Direct: event.Direct, Workdir: c.config.Workdir}}}
+	item := domain.InboxItem{SourceKey: event.SourceKey, SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation, ReadyAt: event.ReceivedAt, Payload: domain.InboxPayload{Event: &event, Context: domain.SessionContext{Conversation: channel(event), Direct: event.Direct, Workdir: c.config.Workdir}}}
 	if !accepted {
-		item.Status = "done"
+		item.Status = domain.InboxDone
 	}
 	if err := c.inbox.Receive(ctx, event, item); err != nil {
 		return errors.Join(domain.ErrPersistence, err)

@@ -20,7 +20,7 @@ func insertInbox(ctx context.Context, db executor, item domain.InboxItem) (sql.R
 		return nil, err
 	}
 	if item.Status == "" {
-		item.Status = "pending"
+		item.Status = domain.InboxPending
 	}
 	// The schema requires actor and deadline. No code reads them.
 	return db.ExecContext(ctx, `INSERT INTO inbox(source_key,session_key,actor,payload,ready_at,lane,status,retry_at,deadline) VALUES(?,?,'owner',?,?,?,?,?,?) ON CONFLICT(source_key) DO NOTHING`, item.SourceKey, item.SessionKey, string(raw), item.ReadyAt.UTC(), item.Lane, item.Status, item.RetryAt.UTC(), time.Time{})
@@ -94,7 +94,7 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 		return false, err
 	}
 	defer tx.Rollback()
-	var status string
+	var status domain.InboxStatus
 	var key domain.SessionKey
 	var attempts int
 	err = tx.QueryRowContext(ctx, `UPDATE inbox SET attempts=attempts+1,status=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'pending' END,retry_at=?,last_error=? WHERE id=? AND status='dispatched' RETURNING status,session_key,attempts`, limit, retry.UTC(), failure, id).Scan(&status, &key, &attempts)
@@ -104,12 +104,12 @@ func (r *inboxRepository) Finish(ctx context.Context, id int64, failure string, 
 	if err != nil {
 		return false, err
 	}
-	if status == "dead" && !key.IsNotice() {
+	if status == domain.InboxDead && !key.IsNotice() {
 		if err := insertOwnerNotice(ctx, tx, fmt.Sprintf("failure:%d", id), fmt.Sprintf("Work item %d for %s failed after %d attempts: %s", id, key, attempts, failure)); err != nil {
 			return false, err
 		}
 	}
-	return status == "dead", tx.Commit()
+	return status == domain.InboxDead, tx.Commit()
 }
 
 func insertOwnerNotice(ctx context.Context, db executor, source, text string) error {

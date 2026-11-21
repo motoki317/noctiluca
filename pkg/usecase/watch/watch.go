@@ -100,7 +100,7 @@ func (w *watcher) wake(ctx context.Context, raw json.RawMessage) (json.RawMessag
 	if in.At.IsZero() || in.Note == "" {
 		return nil, errors.New("at and note are required")
 	}
-	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation}
 	item.SourceKey = "wake:" + uuid.NewString()
 	item.ReadyAt = in.At
 	item.Payload.Input.Text = in.Note
@@ -127,7 +127,7 @@ func (w *watcher) watch(ctx context.Context, raw json.RawMessage) (json.RawMessa
 	if in.Command == "" || in.CWD == "" {
 		return nil, errors.New("command and cwd are required")
 	}
-	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: "conv"}
+	item := domain.InboxItem{SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.ctx == nil || w.ctx.Err() != nil {

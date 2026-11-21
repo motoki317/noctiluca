@@ -89,11 +89,11 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	}
 	started := true
 	if turn.InputID != 0 {
-		var status string
+		var status domain.InboxStatus
 		if err := tx.QueryRowContext(ctx, `SELECT status FROM inbox WHERE id=?`, turn.InputID).Scan(&status); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		started = status == "done"
+		started = status == domain.InboxDone
 	}
 	now := time.Now()
 	note := "previous turn was interrupted: " + reason
@@ -102,7 +102,7 @@ func (r *sessionRepository) Interrupt(ctx context.Context, key domain.SessionKey
 	}
 	if started && turn.Continuations < 1 {
 		source := fmt.Sprintf("interrupted:%s:%d", key, now.UnixNano())
-		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: "conv", ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\nThe interrupted turn may cover several inputs. Finish each unfinished part, following the posting instructions in its input."}}}
+		item := domain.InboxItem{SourceKey: source, SessionKey: domain.MainSessionKey, Lane: domain.LaneConversation, ReadyAt: now, Payload: domain.InboxPayload{Continuations: turn.Continuations + 1, Input: domain.UserInput{Text: note + "\nThe interrupted turn may cover several inputs. Finish each unfinished part, following the posting instructions in its input."}}}
 		if _, err := insertInbox(ctx, tx, item); err != nil {
 			return err
 		}

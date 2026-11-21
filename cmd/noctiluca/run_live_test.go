@@ -167,18 +167,18 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		}
 		before := launches()
 		id := send(t, "D_OWNER", "", "Reply with exactly QUEUE_SECOND using slack_send.")
-		status := func() string {
-			var status string
+		status := func() domain.InboxStatus {
+			var status domain.InboxStatus
 			_ = app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status)
 			return status
 		}
 		// Claude starts an input that arrives during a tool call only when the tool returns, so the blocked reply holds it at dispatched.
-		require.Eventually(t, func() bool { return status() == "dispatched" }, 10*time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool { return status() == domain.InboxDispatched }, 10*time.Second, 10*time.Millisecond)
 		unblock()
 		reply(t, "D_OWNER", "", "QUEUE_FIRST")
 		reply(t, "D_OWNER", "", "QUEUE_SECOND")
 		idle(t)
-		require.Equal(t, "done", status())
+		require.Equal(t, domain.InboxDone, status())
 		// Claude chooses whether to answer it in the same turn or the next one. Either way, it must reach the running process.
 		require.Equal(t, before, launches(), "second message must reach the running process")
 	})
@@ -216,8 +216,8 @@ exec "$NOCTILUCA_LIVE_CLAUDE" "$@"
 		releaseFollow()
 		// Claude starts the follow-up only after the blocked reply returns.
 		require.Eventually(t, func() bool {
-			var status string
-			return app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status) == nil && status == "done"
+			var status domain.InboxStatus
+			return app.db.QueryRow("SELECT status FROM inbox WHERE source_key=?", id).Scan(&status) == nil && status == domain.InboxDone
 		}, 10*time.Second, 10*time.Millisecond)
 		first := liveTake(t, slack.posts)
 		require.Equal(t, "500.000001", first.Get("thread_ts"))

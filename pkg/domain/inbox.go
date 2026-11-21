@@ -22,14 +22,37 @@ type InboxPayload struct {
 	Event         *InboundEvent `json:",omitempty"`
 }
 
+type InboxStatus string
+
+const (
+	// The row waits for dispatch or for its retry time.
+	InboxPending InboxStatus = "pending"
+	// The reconciler claimed the row for a model process, and the model has not started on it.
+	InboxDispatched InboxStatus = "dispatched"
+	// Nothing is left to send: the model started on the input, the notice went out, or the core did not accept the event.
+	// noctiluca does not send a started input again, because chat posts are not idempotent.
+	// Only a crash before this status is stored can repeat one input.
+	InboxDone InboxStatus = "done"
+	// The row failed for good.
+	InboxDead InboxStatus = "dead"
+)
+
+type Lane string
+
+const (
+	LaneConversation Lane = "conv"
+	// A task row gets a task header instead of a chat header. The lane does not order dispatch.
+	LaneTask Lane = "task"
+)
+
 type InboxItem struct {
 	ID         int64
 	SourceKey  string
 	SessionKey SessionKey
 	Payload    InboxPayload
 	ReadyAt    time.Time
-	Lane       string
-	Status     string
+	Lane       Lane
+	Status     InboxStatus
 	Attempts   int
 	RetryAt    time.Time
 	LastError  string
@@ -39,7 +62,7 @@ func NewOwnerNotice(source, text string) InboxItem {
 	return InboxItem{
 		SourceKey:  source,
 		SessionKey: SessionKey(NoticeSessionPrefix + source),
-		Lane:       "conv",
+		Lane:       LaneConversation,
 		ReadyAt:    time.Now(),
 		Payload: InboxPayload{
 			Notice: text,

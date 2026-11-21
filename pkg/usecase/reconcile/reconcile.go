@@ -196,7 +196,7 @@ func (r *Reconciler) pass(ctx context.Context) (time.Duration, error) {
 		if blocked[item.SessionKey] {
 			continue
 		}
-		if item.Status != "pending" || (p != nil && (p.delivering != nil || p.closing)) {
+		if item.Status != domain.InboxPending || (p != nil && (p.delivering != nil || p.closing)) {
 			continue
 		}
 		at := readyAt(item)

@@ -43,7 +43,7 @@ func Next(s domain.Schedule, now time.Time) (time.Time, error) {
 	return next, nil
 }
 func TaskItem(name, prompt, workdir string) domain.InboxItem {
-	return domain.InboxItem{SourceKey: "task:" + uuid.NewString(), SessionKey: domain.MainSessionKey, Lane: "task", ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: prompt}, Context: domain.SessionContext{TaskName: name, Workdir: workdir}}}
+	return domain.InboxItem{SourceKey: "task:" + uuid.NewString(), SessionKey: domain.MainSessionKey, Lane: domain.LaneTask, ReadyAt: time.Now(), Payload: domain.InboxPayload{Input: domain.UserInput{Text: prompt}, Context: domain.SessionContext{TaskName: name, Workdir: workdir}}}
 }
 func (r *Reconciler) Install(ctx context.Context, schedules []domain.Schedule) error {
 	for _, s := range schedules {
