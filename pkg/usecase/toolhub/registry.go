@@ -17,6 +17,11 @@ type preparedTool struct {
 	schema *jsonschema.Resolved
 }
 
+type registeredTool struct {
+	source          string
+	mainSessionOnly bool
+}
+
 func (h *hub) AddSource(name string, tools []domain.Tool) error {
 	return h.setSource(name, tools, false)
 }
@@ -62,13 +67,13 @@ func (h *hub) setSource(name string, tools []domain.Tool, replace bool) error {
 		return errors.New("tool source already registered")
 	}
 	for tool := range names {
-		if source, ok := h.tools[tool]; ok && source != name {
+		if registered, ok := h.tools[tool]; ok && registered.source != name {
 			return fmt.Errorf("tool %s already registered", tool)
 		}
 	}
 	// Every check runs before the first change, so a rejected source leaves the registered tools as they were.
-	for tool, source := range h.tools {
-		if _, exists := names[tool]; source == name && !exists {
+	for tool, registered := range h.tools {
+		if _, exists := names[tool]; registered.source == name && !exists {
 			h.server.RemoveTools(tool)
 			delete(h.tools, tool)
 		}
@@ -79,7 +84,7 @@ func (h *hub) setSource(name string, tools []domain.Tool, replace bool) error {
 			tool.Meta = h.alwaysOfferedMeta
 		}
 		h.server.AddTool(tool, p.call)
-		h.tools[p.tool.Name] = name
+		h.tools[p.tool.Name] = registeredTool{source: name, mainSessionOnly: p.tool.MainSessionOnly}
 	}
 	h.sources[name] = struct{}{}
 	return nil

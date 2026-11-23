@@ -65,7 +65,7 @@ func (m *namedMessaging) ToolNotes(context.Context) string {
 }
 func (m *namedMessaging) Tools() []domain.Tool {
 	return []domain.Tool{
-		{Name: m.name + "_send", WritesChat: true, Description: "Send a message.", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Name: m.name + "_send", MainSessionOnly: true, Description: "Send a message.", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Name: m.name + "_read", ReadOnly: true, Description: "Read messages.", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}
 }
@@ -118,7 +118,6 @@ func TestMultipleMessagingRoutesInputsAndOwner(t *testing.T) {
 	impl := f.core.(*core)
 	beta.in <- message("beta:room", "primary", "first owner")
 	first := take(t, f.model.opened)
-	require.Equal(t, []string{"beta_send", "alpha_send"}, first.config.ChatWritingTools)
 	require.Contains(t, take(t, first.inputs).Text, "beta user (owner)")
 	require.Equal(t, sourceCall{"beta:room", "primary"}, take(t, beta.info))
 	alpha.in <- message("alpha:room", "primary", "same ID on another messaging entry")

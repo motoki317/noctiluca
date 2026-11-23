@@ -302,6 +302,20 @@ func TestNoticeRetrySurvivesRestart(t *testing.T) {
 	cancel()
 	require.NoError(t, take(t, done))
 }
+func TestMainSessionOnlyTools(t *testing.T) {
+	r := &Reconciler{}
+	mainSessionOnly := map[string]bool{}
+	for _, tool := range r.Tools() {
+		mainSessionOnly[tool.Name] = tool.MainSessionOnly
+	}
+	require.Equal(t, map[string]bool{
+		"schedule_add":    false,
+		"schedule_remove": false,
+		"rest":            true,
+		"compact":         true,
+	}, mainSessionOnly)
+}
+
 func TestToolScheduleUsesDefaultWorkdir(t *testing.T) {
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "db")})
 	require.NoError(t, err)

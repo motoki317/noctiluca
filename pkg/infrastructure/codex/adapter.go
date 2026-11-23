@@ -20,9 +20,15 @@ type adapter struct{ executable, model, effort string }
 
 const backgroundInstruction = "In this harness, a command you leave running in the background never reports back to you. Run any command that may outlast the turn with the watch tool, never with nohup or &.\n" +
 	"This main session delegates long or parallel work to subagents with spawn_agent. These instructions authorize it. Never call wait_agent. " +
-	"Each brief must say that the subagent never posts and never calls a messaging tool that writes to chat. Continue a subagent with send_input. Close each finished agent."
+	"Each brief must say that the subagent never posts%s. Continue a subagent with send_input. Close each finished agent."
 
-func developerInstructions(prompt string) string { return prompt + "\n\n" + backgroundInstruction }
+func developerInstructions(prompt string, mainSessionTools []string) string {
+	var toolRestriction string
+	if len(mainSessionTools) > 0 {
+		toolRestriction = " and never calls these noctiluca tools: " + strings.Join(mainSessionTools, ", ")
+	}
+	return prompt + "\n\n" + fmt.Sprintf(backgroundInstruction, toolRestriction)
+}
 
 func promptHash(prompt string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))[:16] }
 
@@ -75,7 +81,7 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 			"http_headers": map[string]string{"Authorization": "Bearer " + config.ToolHub.BearerToken},
 		}
 	}
-	prompt := developerInstructions(config.SystemPrompt)
+	prompt := developerInstructions(config.SystemPrompt, config.ToolHub.MainSessionTools)
 	threadID, previousHash := parseResumeToken(config.ResumeToken)
 	params := threadParams{Cwd: workdir, Model: a.model, DeveloperInstructions: prompt,
 		ApprovalPolicy: "never", Sandbox: "danger-full-access", Config: overrides, ThreadID: threadID}

@@ -406,11 +406,11 @@ func TestHistoryTokenFallbackAndErrors(t *testing.T) {
 	}
 }
 
-func TestChatWritingTools(t *testing.T) {
+func TestMainSessionOnlyTools(t *testing.T) {
 	a := &adapter{name: "entry"}
-	writes := map[string]bool{}
+	mainSessionOnly := map[string]bool{}
 	for _, tool := range a.Tools() {
-		writes[tool.Name] = tool.WritesChat
+		mainSessionOnly[tool.Name] = tool.MainSessionOnly
 	}
 	require.Equal(t, map[string]bool{
 		"entry_read_thread":   false,
@@ -422,5 +422,5 @@ func TestChatWritingTools(t *testing.T) {
 		"entry_unreact":       true,
 		"entry_set_status":    true,
 		"entry_send":          true,
-	}, writes)
+	}, mainSessionOnly)
 }

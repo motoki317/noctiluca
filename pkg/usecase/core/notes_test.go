@@ -42,6 +42,8 @@ func TestMainSessionNotes(t *testing.T) {
 		"- Keep open-ended work here, because this session must know the whole state to answer every message. Split it into closed tasks: each a question to answer or a change to make, with a defined result. " +
 			"Give a subagent only a closed task.",
 		"- Never wait on a subagent.",
+		"- A subagent sees none of the chat. It can read chat itself, so tell it what to read instead of reading it here first. " +
+			"The results of watch and wake_at arrive here, not in the subagent, so a subagent cannot wait with them.",
 	} {
 		require.Contains(t, notes, rule)
 	}

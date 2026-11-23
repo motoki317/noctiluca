@@ -130,6 +130,33 @@ func TestSessionLifetime(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, requestStatus(t, endpoint, "Bearer "+endpoint.BearerToken))
 }
 
+func TestOpenSessionMainSessionTools(t *testing.T) {
+	h := startHub(t, toolhub.Config{})
+	empty, err := h.OpenSession("empty-session")
+	require.NoError(t, err)
+	require.Empty(t, empty.MainSessionTools)
+
+	removed := echo("zulu_send")
+	removed.MainSessionOnly = true
+	reclassified := echo("beta_send")
+	reclassified.MainSessionOnly = true
+	retained := echo("alpha_send")
+	retained.MainSessionOnly = true
+	require.NoError(t, h.AddSource("first", []domain.Tool{removed, reclassified, echo("zulu_read")}))
+	require.NoError(t, h.AddSource("second", []domain.Tool{echo("alpha_read"), retained}))
+
+	first, err := h.OpenSession("first-session")
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha_send", "beta_send", "zulu_send"}, first.MainSessionTools)
+
+	reclassified.MainSessionOnly = false
+	require.NoError(t, h.ReplaceSource("first", []domain.Tool{reclassified}))
+	second, err := h.OpenSession("second-session")
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha_send"}, second.MainSessionTools)
+	require.Equal(t, []string{"alpha_send", "beta_send", "zulu_send"}, first.MainSessionTools)
+}
+
 func requestStatus(t *testing.T, endpoint domain.MCPEndpoint, authorization string) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))

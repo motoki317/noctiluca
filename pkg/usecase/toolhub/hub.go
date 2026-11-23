@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +38,7 @@ type hub struct {
 	http              *http.Server
 	listener          net.Listener
 	sources           map[string]struct{}
-	tools             map[string]string
+	tools             map[string]registeredTool
 	sessions          map[domain.SessionKey]*grant
 	tokens            map[string]*grant
 	started, closed   bool
@@ -49,7 +50,7 @@ func New(config Config) (domain.ToolHub, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen for tool hub: %w", err)
 	}
-	h := &hub{listener: listener, server: mcp.NewServer(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, nil), alwaysOfferedMeta: config.AlwaysOfferedMeta, sources: make(map[string]struct{}), tools: make(map[string]string), sessions: make(map[domain.SessionKey]*grant), tokens: make(map[string]*grant)}
+	h := &hub{listener: listener, server: mcp.NewServer(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, nil), alwaysOfferedMeta: config.AlwaysOfferedMeta, sources: make(map[string]struct{}), tools: make(map[string]registeredTool), sessions: make(map[domain.SessionKey]*grant), tokens: make(map[string]*grant)}
 	// The bearer identifies the model session. Transport connections need no separate lifetime.
 	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return h.server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, PropagateRequestCancellation: true})
 	h.http = &http.Server{Handler: h.authorize(http.NewCrossOriginProtection().Handler(transport)), ReadHeaderTimeout: 10 * time.Second}
@@ -129,7 +130,19 @@ func (h *hub) OpenSession(key domain.SessionKey) (domain.MCPEndpoint, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &grant{session: domain.ToolSession{Key: key}, token: token, ctx: ctx, cancel: cancel}
 	h.sessions[key], h.tokens[token] = g, g
-	return domain.MCPEndpoint{URL: "http://" + h.listener.Addr().String() + "/mcp", BearerToken: token}, nil
+
+	var mainSessionTools []string
+	for name, tool := range h.tools {
+		if tool.mainSessionOnly {
+			mainSessionTools = append(mainSessionTools, name)
+		}
+	}
+	slices.Sort(mainSessionTools)
+	return domain.MCPEndpoint{
+		URL:              "http://" + h.listener.Addr().String() + "/mcp",
+		BearerToken:      token,
+		MainSessionTools: mainSessionTools,
+	}, nil
 }
 
 // CloseSession revokes access independently of model turns and transport connections.

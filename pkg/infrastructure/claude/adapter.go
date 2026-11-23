@@ -29,7 +29,7 @@ const MinimumVersion = "2.1.316"
 // so its schema survives compaction. A server-level alwaysLoad: false in --mcp-config overrides it.
 var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
 
-const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the chat-writing tools.`
+const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the tools that the worker lacks, such as the send tools and watch.`
 
 func systemPrompt(prompt string) string {
 	if prompt == "" {
@@ -119,8 +119,8 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 		return nil, fmt.Errorf("write claude prompt: %w", err)
 	}
 	args = append(args, "--append-system-prompt-file", promptPath)
-	disallowed := make([]string, 0, len(config.ChatWritingTools))
-	for _, name := range config.ChatWritingTools {
+	disallowed := make([]string, 0, len(config.ToolHub.MainSessionTools))
+	for _, name := range config.ToolHub.MainSessionTools {
 		disallowed = append(disallowed, "mcp__noctiluca__"+name)
 	}
 	agents, err := json.Marshal(map[string]any{"worker": map[string]any{
