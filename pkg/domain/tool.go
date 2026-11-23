@@ -8,7 +8,8 @@ import (
 
 type Tool struct {
 	ReadOnly bool
-	// MainSessionOnly applies to tools that write to chat or whose effect or result lands in the main session.
+	// MainSessionOnly marks a tool that writes to chat, that delivers its result to the main session as a later input, or that compacts or closes the main session.
+	// Subagents share that session's tool endpoint, so model adapters withhold these tools from subagents, or forbid them where the CLI cannot withhold a tool.
 	MainSessionOnly bool
 	// OnDemand lets the model CLI load the schema when needed. Other tools carry the hub's always-offered metadata.
 	OnDemand    bool

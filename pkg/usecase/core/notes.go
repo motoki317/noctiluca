@@ -44,7 +44,7 @@ func (c *core) toolNotes(ctx context.Context) string {
 		"- Why: each call in this session re-reads the whole session. Material from other conversations in this session lowers the quality of its work. A subagent's context holds only its task, and its reads stay out of this session. " +
 		"When two contexts split dependent steps, the second re-reads what the first saw and loses what the first noticed.\n" +
 		"- Never wait on a subagent. Its draft arrives as a new input in a later turn.\n" +
-		"- A subagent sees none of the chat. It can call every tool except the chat-writing ones, so it can read chat itself. Tell it what to read instead of reading it here first.\n" +
+		"- A subagent sees none of the chat. It can read chat itself, so tell it what to read instead of reading it here first. The results of watch and wake_at arrive here, not in the subagent, so a subagent cannot wait with them.\n" +
 		"- A brief states the objective and why, the facts and rules that apply, the sources and tools, the scope, the stop condition, and the exact output. " +
 		"It also names the IDs of the conversation that the task serves. Ask the subagent to return those IDs with its draft.\n" +
 		"- A subagent never posts. Ask for a reply draft with its evidence, under about 2,000 tokens. Ask it to put a large artifact in a file and return the path.\n" +

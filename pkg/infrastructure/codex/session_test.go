@@ -416,13 +416,19 @@ func nextTurnEvent(t *testing.T, s domain.ModelSession) domain.ModelEvent {
 }
 
 func TestOpenResumeAndSettings(t *testing.T) {
-	token := "thread-1:" + promptHash(developerInstructions("System instructions"))
+	mainSessionTools := []string{"compact", "entry_send", "rest", "wake_at", "watch"}
+	wantPrompt := "System instructions\n\n" +
+		"In this harness, a command you leave running in the background never reports back to you. Run any command that may outlast the turn with the watch tool, never with nohup or &.\n" +
+		"This main session delegates long or parallel work to subagents with spawn_agent. These instructions authorize it. Never call wait_agent. " +
+		"Each brief must say that the subagent never posts and never calls these noctiluca tools: compact, entry_send, rest, wake_at, watch. " +
+		"Continue a subagent with send_input. Close each finished agent."
+	token := "thread-1:" + promptHash(wantPrompt)
 	for _, resume := range []string{"", token} {
 		t.Run("resume="+resume, func(t *testing.T) {
 			path, dir := fakeServer(t, "normal")
 			s, err := New(path, "test-model", "low").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir,
 				ResumeToken: resume, SystemPrompt: "System instructions", ToolHub: domain.MCPEndpoint{
-					URL: "http://127.0.0.1:1234/mcp", BearerToken: "secret-bearer", MainSessionTools: []string{"entry_send"},
+					URL: "http://127.0.0.1:1234/mcp", BearerToken: "secret-bearer", MainSessionTools: mainSessionTools,
 				}})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
@@ -449,10 +455,7 @@ func TestOpenResumeAndSettings(t *testing.T) {
 			require.Equal(t, threadID, params.ThreadID)
 			require.Equal(t, resume != "", params.ExcludeTurns)
 			require.Equal(t, dir, params.Cwd)
-			require.Equal(t, "System instructions\n\n"+
-				"In this harness, a command you leave running in the background never reports back to you. Run any command that may outlast the turn with the watch tool, never with nohup or &.\n"+
-				"This main session delegates long or parallel work to subagents with spawn_agent. These instructions authorize it. Never call wait_agent. "+
-				"Each brief must say that the subagent never posts and never calls a messaging tool that writes to chat. Continue a subagent with send_input. Close each finished agent.", params.DeveloperInstructions)
+			require.Equal(t, wantPrompt, params.DeveloperInstructions)
 			require.Equal(t, "test-model", params.Model)
 			require.Equal(t, map[string]any{"features.apps": false, "model_reasoning_effort": "low", "mcp_servers.noctiluca": map[string]any{
 				"url": "http://127.0.0.1:1234/mcp", "http_headers": map[string]any{"Authorization": "Bearer secret-bearer"}}}, params.Config)
@@ -465,7 +468,7 @@ func TestMissingThreadFallback(t *testing.T) {
 	s, err := New(path, "", "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ResumeToken: "missing"})
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
-	require.Equal(t, "thread-1:"+promptHash(developerInstructions("")), s.ResumeToken())
+	require.Equal(t, "thread-1:"+promptHash(developerInstructions("", nil)), s.ResumeToken())
 	frames := requests(t, dir)
 	require.Len(t, frames, 4)
 	require.Equal(t, "thread/resume", frames[2].Method)

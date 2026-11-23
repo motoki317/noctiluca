@@ -96,8 +96,8 @@ func (r *Reconciler) Tools() []domain.Tool {
 			r.Notify()
 			return json.Marshal(map[string]string{"name": in.Name})
 		}},
-		{Name: "rest", Description: "After the rest procedure, close this session when it becomes idle. The next process starts fresh.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`), Handler: r.rest},
-		{Name: "compact", Description: "Compact the main session's context after this turn ends. The session continues from a summary. Background tasks keep running. Call it at a break when an input includes a Context line.",
+		{Name: "rest", MainSessionOnly: true, Description: "After the rest procedure, close this session when it becomes idle. The next process starts fresh.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`), Handler: r.rest},
+		{Name: "compact", MainSessionOnly: true, Description: "Compact the main session's context after this turn ends. The session continues from a summary. Background tasks keep running. Call it at a break when an input includes a Context line.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`), Handler: r.compact},
 	}
 }

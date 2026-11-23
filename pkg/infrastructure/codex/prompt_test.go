@@ -10,14 +10,17 @@ import (
 )
 
 func TestPromptRefresh(t *testing.T) {
-	token := "thread-1:" + promptHash(developerInstructions("old prompt"))
+	const systemPrompt = "updated memory"
+	token := "thread-1:" + promptHash(developerInstructions(systemPrompt, []string{"watch"}))
 	path, dir := fakeServer(t, "normal")
-	config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: token, SystemPrompt: "updated memory"}
+	config := domain.ModelSessionConfig{Workdir: dir, ResumeToken: token, SystemPrompt: systemPrompt}
+	wantPrompt := developerInstructions(systemPrompt, nil)
+	require.Contains(t, wantPrompt, "Each brief must say that the subagent never posts. Continue a subagent with send_input.")
 	s, err := New(path, "", "").Open(t.Context(), config)
 	require.NoError(t, err)
 	config.ResumeToken = s.ResumeToken()
 	require.NoError(t, s.Close())
-	require.Equal(t, "thread-1:"+promptHash(developerInstructions(config.SystemPrompt)), config.ResumeToken)
+	require.Equal(t, "thread-1:"+promptHash(wantPrompt), config.ResumeToken)
 	frames := requests(t, dir)
 	require.Len(t, frames, 4)
 	require.Equal(t, "thread/resume", frames[2].Method)
@@ -26,7 +29,7 @@ func TestPromptRefresh(t *testing.T) {
 	require.NoError(t, json.Unmarshal(frames[3].Params, &injected))
 	require.Equal(t, map[string]any{"threadId": "thread-1", "items": []any{map[string]any{
 		"type": "message", "role": "developer", "content": []any{map[string]any{
-			"type": "input_text", "text": "updated memory\n\n" + backgroundInstruction,
+			"type": "input_text", "text": wantPrompt,
 		}},
 	}}}, injected)
 	s, err = New(path, "", "").Open(t.Context(), config)
@@ -51,7 +54,7 @@ func TestPromptInjectionUnavailable(t *testing.T) {
 			require.NoError(t, json.Unmarshal(frames[4].Params, &params))
 			require.Empty(t, params.ThreadID)
 			require.False(t, params.ExcludeTurns)
-			require.Equal(t, developerInstructions("new prompt"), params.DeveloperInstructions)
+			require.Equal(t, developerInstructions("new prompt", nil), params.DeveloperInstructions)
 			require.Equal(t, "thread-1:"+promptHash(params.DeveloperInstructions), s.ResumeToken())
 		})
 	}

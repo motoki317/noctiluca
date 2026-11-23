@@ -59,6 +59,18 @@ func toolContext(t *testing.T) context.Context {
 	return domain.WithToolSession(t.Context(), domain.ToolSession{Key: domain.MainSessionKey})
 }
 
+func TestMainSessionOnlyTools(t *testing.T) {
+	w := &watcher{}
+	mainSessionOnly := map[string]bool{}
+	for _, tool := range w.Tools() {
+		mainSessionOnly[tool.Name] = tool.MainSessionOnly
+	}
+	require.Equal(t, map[string]bool{
+		"watch":   true,
+		"wake_at": true,
+	}, mainSessionOnly)
+}
+
 func TestWakeupPersistsWithoutDelivery(t *testing.T) {
 	_, inbox, factory := setup(t)
 	at := time.Now().Add(time.Hour).UTC()

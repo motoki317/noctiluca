@@ -680,7 +680,9 @@ func TestSessionResumeAndConfig(t *testing.T) {
 	require.False(t, inv.HasSimple)
 	require.EqualValues(t, 0o600, inv.FileMode)
 	require.EqualValues(t, 0o700, inv.DirMode)
-	require.Equal(t, "Owner instructions\n\n"+subagentInstruction, inv.Prompt)
+	require.Equal(t, "Owner instructions\n\n"+
+		`Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. `+
+		"Do not use forks or other subagent types, because they keep the tools that the worker lacks, such as the send tools and watch.", inv.Prompt)
 	require.JSONEq(t, `{"mcpServers":{"noctiluca":{"type":"http","url":"http://127.0.0.1:1234/mcp","headers":{"Authorization":"Bearer test-bearer"}}}}`, string(inv.MCP))
 	joined := strings.Join(inv.Args, " ")
 	require.NotContains(t, joined, "--bare")
@@ -721,7 +723,7 @@ func TestSessionResumeAndConfig(t *testing.T) {
 }
 
 func TestWorkerDisallowsMainSessionTools(t *testing.T) {
-	for _, names := range [][]string{nil, {"entry_send", "other_upload_file"}} {
+	for _, names := range [][]string{nil, {"compact", "entry_send", "other_upload_file", "rest", "wake_at", "watch"}} {
 		t.Run(fmt.Sprint(names), func(t *testing.T) {
 			path, dir := fakeCLI(t, "echo")
 			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{
