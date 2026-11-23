@@ -119,8 +119,8 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 		return nil, fmt.Errorf("write claude prompt: %w", err)
 	}
 	args = append(args, "--append-system-prompt-file", promptPath)
-	disallowed := make([]string, 0, len(config.ChatWritingTools))
-	for _, name := range config.ChatWritingTools {
+	disallowed := make([]string, 0, len(config.ToolHub.MainSessionTools))
+	for _, name := range config.ToolHub.MainSessionTools {
 		disallowed = append(disallowed, "mcp__noctiluca__"+name)
 	}
 	agents, err := json.Marshal(map[string]any{"worker": map[string]any{

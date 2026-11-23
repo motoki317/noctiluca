@@ -25,15 +25,14 @@ const (
 )
 
 type Config struct {
-	Workdir          string
-	ChatWritingTools []string
-	Accept           func(domain.SessionContext) bool
-	RetryDelay       time.Duration
-	MaxAttempts      int
-	Prompt           domain.PromptAssembler
-	Prepare          func(context.Context, domain.InboxItem) (domain.UserInput, error)
-	Procedure        func(context.Context, string) (string, error)
-	NotifyOwner      func(context.Context, string) error
+	Workdir     string
+	Accept      func(domain.SessionContext) bool
+	RetryDelay  time.Duration
+	MaxAttempts int
+	Prompt      domain.PromptAssembler
+	Prepare     func(context.Context, domain.InboxItem) (domain.UserInput, error)
+	Procedure   func(context.Context, string) (string, error)
+	NotifyOwner func(context.Context, string) error
 }
 
 type Reconciler struct {
@@ -348,7 +347,7 @@ func (r *Reconciler) pump(ctx context.Context, p *process, token string, endpoin
 				if err == nil {
 					model, err = r.model.Open(ctx, domain.ModelSessionConfig{
 						Key: p.key, ResumeToken: token, ToolHub: endpoint, Workdir: r.config.Workdir, SystemPrompt: prompt,
-						ChatWritingTools: r.config.ChatWritingTools, OnCompactionDone: r.Notify,
+						OnCompactionDone: r.Notify,
 					})
 				}
 				if err == nil {

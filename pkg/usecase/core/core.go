@@ -52,16 +52,9 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 		return nil, err
 	}
 	c := &core{config: config, messaging: router, events: events, inbox: inbox, hub: hub, external: external, done: make(chan struct{})}
-	var chatWritingTools []string
 	for _, instance := range router.instances {
-		tools := instance.config.Adapter.Tools()
-		if err := hub.AddSource("messaging:"+instance.config.Name, tools); err != nil {
+		if err := hub.AddSource("messaging:"+instance.config.Name, instance.config.Adapter.Tools()); err != nil {
 			return nil, err
-		}
-		for _, tool := range tools {
-			if tool.WritesChat {
-				chatWritingTools = append(chatWritingTools, tool.Name)
-			}
 		}
 		if filter, ok := instance.config.Adapter.(domain.ConversationFilter); ok {
 			filter.SetConversationFilter(func(ref domain.ConversationRef) bool {
@@ -76,7 +69,7 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 			})
 		}
 	}
-	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, ChatWritingTools: chatWritingTools, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
+	c.reconciler = reconcile.New(reconcile.Config{Workdir: config.Workdir, RetryDelay: config.RetryDelay, MaxAttempts: config.MaxAttempts, Prepare: c.prepare, Prompt: func(ctx context.Context, session domain.ToolSession) (string, error) {
 		return memoryusecase.Prompt(memory, c.toolNotes(ctx), prompt)(ctx, session)
 	}, Accept: c.acceptSession, Procedure: config.Procedure, NotifyOwner: c.notifyOwner}, inbox, schedules, sessions, events, model, hub)
 	c.watcher = watch.New(watches, inbox, c.reconciler.Notify)

@@ -356,11 +356,11 @@ func TestConstructorValidation(t *testing.T) {
 	}
 }
 
-func TestChatWritingTools(t *testing.T) {
+func TestMainSessionOnlyTools(t *testing.T) {
 	a := &adapter{name: "entry"}
-	writes := map[string]bool{}
+	mainSessionOnly := map[string]bool{}
 	for _, tool := range a.Tools() {
-		writes[tool.Name] = tool.WritesChat
+		mainSessionOnly[tool.Name] = tool.MainSessionOnly
 	}
 	require.Equal(t, map[string]bool{
 		"entry_send":          true,
@@ -370,5 +370,5 @@ func TestChatWritingTools(t *testing.T) {
 		"entry_download_file": false,
 		"entry_upload_file":   true,
 		"entry_react":         true,
-	}, writes)
+	}, mainSessionOnly)
 }

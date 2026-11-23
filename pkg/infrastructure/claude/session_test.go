@@ -720,11 +720,13 @@ func TestSessionResumeAndConfig(t *testing.T) {
 	}
 }
 
-func TestWorkerDisallowsChatWritingTools(t *testing.T) {
+func TestWorkerDisallowsMainSessionTools(t *testing.T) {
 	for _, names := range [][]string{nil, {"entry_send", "other_upload_file"}} {
 		t.Run(fmt.Sprint(names), func(t *testing.T) {
 			path, dir := fakeCLI(t, "echo")
-			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{Workdir: dir, ChatWritingTools: names})
+			s, err := New(path, "").Open(t.Context(), domain.ModelSessionConfig{
+				Workdir: dir, ToolHub: domain.MCPEndpoint{MainSessionTools: names},
+			})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
 			inv := readInvocation(t, dir)

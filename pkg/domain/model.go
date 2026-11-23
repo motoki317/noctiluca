@@ -12,6 +12,8 @@ const MainSessionKey SessionKey = "main"
 type MCPEndpoint struct {
 	URL         string
 	BearerToken string
+	// MainSessionTools contains the sorted names of tools to withhold from subagents.
+	MainSessionTools []string
 }
 
 type ModelSessionConfig struct {
@@ -20,8 +22,6 @@ type ModelSessionConfig struct {
 	SystemPrompt string
 	ToolHub      MCPEndpoint
 	Workdir      string
-	// Subagents must not get these tools.
-	ChatWritingTools []string
 	// OnCompactionDone runs when a requested compaction ends, whether it succeeded or failed.
 	// It is optional and must return immediately.
 	OnCompactionDone func()

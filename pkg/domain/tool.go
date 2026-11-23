@@ -8,8 +8,8 @@ import (
 
 type Tool struct {
 	ReadOnly bool
-	// Subagents must not get a tool that writes to chat.
-	WritesChat bool
+	// MainSessionOnly applies to tools that write to chat or whose effect or result lands in the main session.
+	MainSessionOnly bool
 	// OnDemand lets the model CLI load the schema when needed. Other tools carry the hub's always-offered metadata.
 	OnDemand    bool
 	Name        string
