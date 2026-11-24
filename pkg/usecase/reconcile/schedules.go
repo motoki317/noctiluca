@@ -13,6 +13,8 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+var errReservedTaskName = errors.New("reserved task name")
+
 func ValidateCron(expression string) error {
 	fields := strings.Fields(expression)
 	if len(fields) != 5 {
@@ -73,11 +75,14 @@ func (r *Reconciler) Tools() []domain.Tool {
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return nil, err
 			}
+			if IsBuiltInProcedure(s.Name) {
+				return nil, errReservedTaskName
+			}
 			if err := ValidateCron(s.Cron); err != nil {
 				return nil, err
 			}
-			if IsBuiltInProcedure(s.Name) || strings.TrimSpace(s.Prompt) == "" {
-				return nil, errors.New("reserved task name or empty prompt")
+			if strings.TrimSpace(s.Prompt) == "" {
+				return nil, errors.New("empty prompt")
 			}
 			if err := r.Install(ctx, []domain.Schedule{s}); err != nil {
 				return nil, err
@@ -89,6 +94,9 @@ func (r *Reconciler) Tools() []domain.Tool {
 			var in struct{ Name string }
 			if err := json.Unmarshal(raw, &in); err != nil {
 				return nil, err
+			}
+			if IsBuiltInProcedure(in.Name) {
+				return nil, errReservedTaskName
 			}
 			if err := r.schedules.Delete(ctx, in.Name); err != nil {
 				return nil, err
