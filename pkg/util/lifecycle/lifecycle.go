@@ -55,6 +55,12 @@ func (g *Group) Shutdown(ctx context.Context) error {
 	}
 	done := g.done
 	g.mu.Unlock()
+	// A finished group reports success even if ctx is already done. A single select over done and ctx.Done() picks one at random.
+	select {
+	case <-done:
+		return nil
+	default:
+	}
 	select {
 	case <-done:
 		return nil
