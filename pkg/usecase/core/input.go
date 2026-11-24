@@ -42,14 +42,23 @@ func (c *core) prepare(ctx context.Context, item domain.InboxItem) (domain.UserI
 }
 
 func formatInput(item domain.InboxItem, history domain.InputContext, info domain.SourceInfo, owner string, location *time.Location, workdir string) domain.UserInput {
+	const clockLayout = "15:04:05 MST"
 	input := item.Payload.Input
+	if external := item.Payload.External; external != nil {
+		header := fmt.Sprintf("Event %s | external | %s\n", external.Name, item.ReadyAt.In(location).Format(clockLayout))
+		if external.Truncated {
+			header += "The body was cut. Read the rest from its source.\n"
+		}
+		input.Text = header + "\n" + input.Text
+		return input
+	}
 	event := item.Payload.Event
 	if event == nil {
 		if prefix, _, ok := strings.Cut(item.SourceKey, ":"); ok && (prefix == "watch" || prefix == "wake") {
 			return input
 		}
 		if item.Lane == domain.LaneTask {
-			header := fmt.Sprintf("Task %s | system | %s\n", item.Payload.Context.TaskName, item.ReadyAt.In(location).Format("15:04:05 MST"))
+			header := fmt.Sprintf("Task %s | system | %s\n", item.Payload.Context.TaskName, item.ReadyAt.In(location).Format(clockLayout))
 			if hint := item.Payload.Context.Workdir; hint != "" && hint != workdir {
 				header += "workdir: " + hint + "\n"
 			}
@@ -81,7 +90,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 	if conversation != "" && conversation != channelRef {
 		thread = "thread"
 		if !info.ThreadAt.IsZero() {
-			thread += " " + info.ThreadAt.In(location).Format("15:04:05 MST")
+			thread += " " + info.ThreadAt.In(location).Format(clockLayout)
 		}
 		if history.Root != nil && history.Root.Deleted {
 			thread += " (root deleted)"
@@ -96,7 +105,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 	if mentioned {
 		sender += " → you"
 	}
-	header := fmt.Sprintf("%s | %s | %s\n", where, sender, at.In(location).Format("15:04:05 MST"))
+	header := fmt.Sprintf("%s | %s | %s\n", where, sender, at.In(location).Format(clockLayout))
 	if kind == domain.InboundEventMessageEdited {
 		if item.Payload.Event.Deleted {
 			header += "Message deleted.\n"
@@ -112,7 +121,7 @@ func formatInput(item domain.InboxItem, history domain.InputContext, info domain
 		if conversation != channelRef {
 			place = "this thread"
 		}
-		header += fmt.Sprintf("Sent at %s, before your reply at %s in %s.\n", at.In(location).Format("15:04:05 MST"), history.LastReply.In(location).Format("15:04:05 MST"), place)
+		header += fmt.Sprintf("Sent at %s, before your reply at %s in %s.\n", at.In(location).Format(clockLayout), history.LastReply.In(location).Format(clockLayout), place)
 	} else if history.Running {
 		input.SentDuringTurn = true
 	}

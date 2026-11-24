@@ -19,7 +19,13 @@ type InboxPayload struct {
 	Notice        string `json:",omitempty"`
 	Input         UserInput
 	Context       SessionContext
-	Event         *InboundEvent `json:",omitempty"`
+	Event         *InboundEvent  `json:",omitempty"`
+	External      *ExternalEvent `json:",omitempty"`
+}
+
+type ExternalEvent struct {
+	Name      string
+	Truncated bool
 }
 
 type InboxStatus string

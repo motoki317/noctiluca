@@ -57,6 +57,22 @@ func TestPrepareBackgroundInput(t *testing.T) {
 	}
 }
 
+func TestExternalEventInput(t *testing.T) {
+	at := time.Date(2026, 11, 24, 6, 4, 5, 0, time.UTC)
+	zone := time.FixedZone("JST", 9*60*60)
+	item := domain.InboxItem{
+		ReadyAt: at,
+		Payload: domain.InboxPayload{
+			External: &domain.ExternalEvent{Name: "calendar"},
+			Input:    domain.UserInput{Text: " body\n"},
+		},
+	}
+	const header = "Event calendar | external | 15:04:05 JST\n"
+	require.Equal(t, header+"\n body\n", formatInput(item, domain.InputContext{}, domain.SourceInfo{}, "", zone, "").Text)
+	item.Payload.External.Truncated = true
+	require.Equal(t, header+"The body was cut. Read the rest from its source.\n\n body\n", formatInput(item, domain.InputContext{}, domain.SourceInfo{}, "", zone, "").Text)
+}
+
 type rootMessaging struct {
 	*namedMessaging
 	fetchRoot bool
