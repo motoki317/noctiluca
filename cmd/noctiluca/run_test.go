@@ -91,6 +91,10 @@ func TestRunCLIHelper(t *testing.T) {
 			continue
 		}
 		fmt.Printf("{\"type\":\"command_lifecycle\",\"command_uuid\":%q,\"state\":\"started\"}\n", frame.UUID)
+		if strings.HasPrefix(frame.Message.Content, "Event ") {
+			fmt.Println(`{"type":"result","subtype":"success","session_id":"run-session"}`)
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		client := mcp.NewClient(&mcp.Implementation{Name: "fake-claude", Version: "1"}, nil)
 		session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint.URL, HTTPClient: &http.Client{Transport: bearerTransport(endpoint.Headers["Authorization"])}}, nil)
@@ -130,6 +134,12 @@ func TestRunAssemblyReplyAndShutdown(t *testing.T) {
 	dir := newRunCLI(t)
 	t.Setenv("TEST_APP_TOKEN", "xapp-fake")
 	t.Setenv("TEST_BOT_TOKEN", "xoxb-fake")
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	eventsAddr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	const eventsToken = "events-test-token"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "events-token"), []byte(eventsToken+"\n"), 0600))
 	api := newRunSlack(t, nil)
 	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(slackEntry+`    slack:
@@ -139,7 +149,7 @@ model: {executable: ./claude}
 heartbeat: {enabled: true}
 cron:
   - {name: daily, cron: '0 9 * * *', tz: UTC, prompt: Check tasks}
-`), 0600))
+`+fmt.Sprintf("events: {listen: %q, token: {file: events-token}}\n", eventsAddr)), 0600))
 	c, err := loadConfig(path)
 	require.NoError(t, err)
 	var logs bytes.Buffer
@@ -194,6 +204,26 @@ cron:
 		return err == nil && json.Unmarshal(data, &capture) == nil
 	}, time.Second, time.Millisecond)
 	require.Equal(t, c.Model.Workdir, capture.Workdir)
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+eventsAddr+"/events/calendar", strings.NewReader("new invitation"))
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+eventsToken)
+	request.Header.Set("Idempotency-Key", "assembly")
+	client := &http.Client{Timeout: 3 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+	response, err := client.Do(request)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusAccepted, response.StatusCode)
+	var sessionKey domain.SessionKey
+	var rawPayload string
+	require.NoError(t, app.db.QueryRow("SELECT session_key, payload FROM inbox WHERE source_key = 'events/calendar/assembly'").Scan(&sessionKey, &rawPayload))
+	require.Equal(t, domain.MainSessionKey, sessionKey)
+	var payload domain.InboxPayload
+	require.NoError(t, json.Unmarshal([]byte(rawPayload), &payload))
+	require.Equal(t, &domain.ExternalEvent{Name: "calendar"}, payload.External)
+	require.Equal(t, "new invitation", payload.Input.Text)
+
 	cancel()
 	select {
 	case err := <-done:
@@ -208,6 +238,7 @@ cron:
 	require.NoError(t, app.Shutdown(t.Context()))
 	require.NotContains(t, logs.String(), "xoxb-fake")
 	require.NotContains(t, logs.String(), "xapp-fake")
+	require.NotContains(t, logs.String(), eventsToken)
 	require.NoFileExists(t, capture.MCPFile)
 	endpoint, err := url.Parse(capture.URL)
 	require.NoError(t, err)

@@ -38,6 +38,13 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	if err != nil {
 		return nil, err
 	}
+	var eventsToken string
+	if config.Events.Listen != "" {
+		eventsToken, err = config.Events.Token.read(true)
+		if err != nil {
+			return nil, fmt.Errorf("events.token: %w", err)
+		}
+	}
 	if err := os.MkdirAll(config.Model.Workdir, 0700); err != nil {
 		return nil, err
 	}
@@ -134,6 +141,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 	agent, err := core.New(core.Config{
 		Workdir: config.Model.Workdir,
 		Jobs:    jobs, Procedure: memoryusecase.Procedure,
+		EventsListen: config.Events.Listen, EventsToken: eventsToken,
 	}, messaging, model, hub, events, repository.NewSessionRepository(db), nil,
 		repository.NewScheduleRepository(db), repository.NewWatchRepository(db), external, store, repository.NewInboxRepository(db))
 	if err != nil {
