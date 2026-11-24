@@ -735,23 +735,69 @@ func TestWorkerDisallowsMainSessionTools(t *testing.T) {
 			index := slices.Index(inv.Args, "--agents")
 			require.NotEqual(t, -1, index)
 			var agents map[string]struct {
-				Description     string   `json:"description"`
-				Prompt          string   `json:"prompt"`
-				DisallowedTools []string `json:"disallowedTools"`
-				Tools           []string `json:"tools"`
+				Description     string          `json:"description"`
+				Prompt          string          `json:"prompt"`
+				DisallowedTools []string        `json:"disallowedTools"`
+				Tools           []string        `json:"tools"`
+				Hooks           json.RawMessage `json:"hooks"`
 			}
 			require.NoError(t, json.Unmarshal([]byte(inv.Args[index+1]), &agents))
 			require.Len(t, agents, 1)
 			worker, ok := agents["worker"]
 			require.True(t, ok)
 			require.NotEmpty(t, worker.Description)
-			require.NotEmpty(t, worker.Prompt)
 			require.Nil(t, worker.Tools, "inherit read, download, and native tools")
 			want := []string{}
 			for _, name := range names {
 				want = append(want, "mcp__noctiluca__"+name)
 			}
 			require.Equal(t, want, worker.DisallowedTools)
+
+			require.NotEmpty(t, workerForegroundRule)
+			require.Contains(t, worker.Prompt, workerForegroundRule)
+			var hooks map[string][]struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			}
+			decoder := json.NewDecoder(bytes.NewReader(worker.Hooks))
+			decoder.DisallowUnknownFields()
+			require.NoError(t, decoder.Decode(&hooks), "decode worker hooks")
+			require.Len(t, hooks, 1)
+			preToolUse := hooks["PreToolUse"]
+			require.Len(t, preToolUse, 1)
+			require.Equal(t, "Agent", preToolUse[0].Matcher)
+			require.Len(t, preToolUse[0].Hooks, 1)
+			hook := preToolUse[0].Hooks[0]
+			require.Equal(t, "command", hook.Type)
+
+			for _, tc := range []struct {
+				name, input string
+				exitCode    int
+				stderr      string
+			}{
+				{"background", `{"tool_input":{"run_in_background":true}}`, 2, workerForegroundRule + "\n"},
+				{"foreground", `{"tool_input":{"run_in_background":false,"prompt":"say \"run_in_background\": true"}}`, 0, ""},
+				{"default", `{"tool_input":{"prompt":"x"}}`, 0, ""},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					cmd := exec.CommandContext(t.Context(), "sh", "-c", hook.Command)
+					cmd.Stdin = strings.NewReader(tc.input)
+					var stderr bytes.Buffer
+					cmd.Stderr = &stderr
+					err := cmd.Run()
+					if tc.exitCode == 0 {
+						require.NoError(t, err)
+					} else {
+						var exitErr *exec.ExitError
+						require.ErrorAs(t, err, &exitErr)
+						require.Equal(t, tc.exitCode, exitErr.ExitCode())
+					}
+					require.Equal(t, tc.stderr, stderr.String())
+				})
+			}
 		})
 	}
 }
