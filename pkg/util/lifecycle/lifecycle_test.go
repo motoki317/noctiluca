@@ -27,7 +27,7 @@ func TestShutdownAcrossPhases(t *testing.T) {
 	defer stop()
 	require.ErrorIs(t, g.Shutdown(wait), context.DeadlineExceeded)
 	done()
-	require.NoError(t, g.Shutdown(t.Context()))
+	require.NoError(t, g.Shutdown(wait))
 	require.NoError(t, g.Shutdown(t.Context()))
 	_, _, err = g.Begin(t.Context())
 	require.Error(t, err)
@@ -38,4 +38,13 @@ func TestShutdownBeforeStart(t *testing.T) {
 	require.NoError(t, g.Shutdown(t.Context()))
 	_, _, err := g.Begin(t.Context())
 	require.Error(t, err)
+}
+
+func TestShutdownIdleWithCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for range 100 {
+		var g Group
+		require.NoError(t, g.Shutdown(ctx))
+	}
 }
