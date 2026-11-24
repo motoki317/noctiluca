@@ -84,6 +84,12 @@ database:
 toolhub:
   listen: 127.0.0.1:0  # port 0 picks a free port
 
+# Optional. Local programs post events to http://<listen>/events/<name>, and
+# each event reaches the agent as an input (docs/events.md).
+# events:
+#   listen: 127.0.0.1:8790  # a fixed port, so that senders know where to post
+#   token: {file: events-token}  # senders send it as a Bearer token
+
 # The heartbeat makes the agent check its open work.
 heartbeat:
   enabled: true

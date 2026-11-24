@@ -155,6 +155,10 @@ type Config struct {
 	ToolHub  struct {
 		Listen string `mapstructure:"listen"`
 	} `mapstructure:"toolhub"`
+	Events struct {
+		Listen string    `mapstructure:"listen"`
+		Token  secretRef `mapstructure:"token"`
+	} `mapstructure:"events"`
 	Heartbeat struct {
 		Interval time.Duration `mapstructure:"interval"`
 		Enabled  bool          `mapstructure:"enabled"`
@@ -166,6 +170,25 @@ type Config struct {
 	} `mapstructure:"log"`
 	path     string
 	logLevel slog.Level
+}
+
+type labeledTokenRef struct {
+	ref         *secretRef
+	formatError string
+}
+
+func (c *Config) tokenRefs() []labeledTokenRef {
+	var refs []labeledTokenRef
+	for i := range c.Messaging {
+		formatError := fmt.Sprintf("invalid config: messaging entry %d: write each token as {env: NAME} or {file: path}", i+1)
+		for _, ref := range c.Messaging[i].tokenRefs() {
+			refs = append(refs, labeledTokenRef{ref: ref, formatError: formatError})
+		}
+	}
+	return append(refs, labeledTokenRef{
+		ref:         &c.Events.Token,
+		formatError: "invalid config: write events.token as {env: NAME} or {file: path}",
+	})
 }
 
 func loadConfig(path string) (Config, error) {
@@ -255,13 +278,11 @@ func loadConfig(path string) (Config, error) {
 	if config.Model.Workdir == "" {
 		config.Model.Workdir = filepath.Join(filepath.Dir(config.Database.Path), "work")
 	}
-	for i := range config.Messaging {
-		for _, ref := range config.Messaging[i].tokenRefs() {
-			if len(ref.Unknown) != 0 {
-				return Config{}, fmt.Errorf("invalid config: messaging entry %d: write each token as {env: NAME} or {file: path}", i+1)
-			}
-			ref.File = absolute(ref.File)
+	for _, token := range config.tokenRefs() {
+		if len(token.ref.Unknown) != 0 {
+			return Config{}, errors.New(token.formatError)
 		}
+		token.ref.File = absolute(token.ref.File)
 	}
 	if strings.ContainsRune(config.Model.Executable, filepath.Separator) {
 		config.Model.Executable = absolute(config.Model.Executable)
@@ -316,6 +337,12 @@ func validateConfigShape(v *viper.Viper) ([]any, error) {
 	return entries, nil
 }
 
+func loopbackPort(address string, minPort int) (int, bool) {
+	host, port, err := net.SplitHostPort(address)
+	number, numberErr := strconv.Atoi(port)
+	return number, err == nil && host == "127.0.0.1" && numberErr == nil && number >= minPort && number <= 65535
+}
+
 func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if len(c.Messaging) == 0 {
 		return nil, 0, errors.New("messaging requires at least one entry")
@@ -336,10 +363,14 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if c.Heartbeat.Interval <= 0 {
 		return nil, 0, errors.New("heartbeat.interval must be positive")
 	}
-	host, port, err := net.SplitHostPort(c.ToolHub.Listen)
-	number, numberErr := strconv.Atoi(port)
-	if err != nil || host != "127.0.0.1" || numberErr != nil || number < 0 || number > 65535 {
+	port, ok := loopbackPort(c.ToolHub.Listen, 0)
+	if !ok {
 		return nil, 0, errors.New("toolhub.listen must be 127.0.0.1:<port>, with port 0 through 65535")
+	}
+	if c.Events.Listen != "" {
+		if _, ok := loopbackPort(c.Events.Listen, 1); !ok {
+			return nil, 0, errors.New("events.listen must be 127.0.0.1:<port>, with port 1 through 65535")
+		}
 	}
 	if err := c.validateWorkdir(); err != nil {
 		return nil, 0, err
@@ -410,7 +441,7 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 			*field.target = value
 		}
 	}
-	return tokens, number, nil
+	return tokens, port, nil
 }
 
 var slackConversationIDPattern = regexp.MustCompile(`^[CDG][A-Z0-9]+$`)
@@ -490,10 +521,8 @@ func (c Config) validateWorkdir() error {
 		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	}
 	paths := []string{c.path, c.Database.Path, c.Memory.Dir}
-	for _, instance := range c.Messaging {
-		for _, ref := range instance.tokenRefs() {
-			paths = append(paths, ref.File)
-		}
+	for _, token := range c.tokenRefs() {
+		paths = append(paths, token.ref.File)
 	}
 	for _, path := range paths {
 		if path == "" {

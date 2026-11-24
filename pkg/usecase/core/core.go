@@ -13,15 +13,18 @@ import (
 	memoryusecase "github.com/motoki317/noctiluca/pkg/usecase/memory"
 	"github.com/motoki317/noctiluca/pkg/usecase/reconcile"
 	"github.com/motoki317/noctiluca/pkg/usecase/watch"
+	"github.com/motoki317/noctiluca/pkg/usecase/webhook"
 	"golang.org/x/sync/errgroup"
 )
 
 type Config struct {
-	RetryDelay  time.Duration
-	MaxAttempts int
-	Workdir     string
-	Jobs        []domain.Schedule
-	Procedure   func(context.Context, string) (string, error)
+	RetryDelay   time.Duration
+	MaxAttempts  int
+	Workdir      string
+	Jobs         []domain.Schedule
+	Procedure    func(context.Context, string) (string, error)
+	EventsListen string
+	EventsToken  string
 }
 type rule struct {
 	users, bots            map[string]struct{}
@@ -36,6 +39,7 @@ type core struct {
 	hub              domain.ToolHub
 	reconciler       *reconcile.Reconciler
 	watcher          domain.Background
+	webhook          domain.Background
 	external         domain.ExternalTools
 	mu               sync.Mutex
 	cancel           context.CancelFunc
@@ -78,6 +82,12 @@ func New(config Config, messaging []Messaging, model domain.ModelAdapter, hub do
 	if err := hub.AddSource("core", tools); err != nil {
 		return nil, err
 	}
+	if config.EventsListen != "" {
+		c.webhook, err = webhook.New(config.EventsListen, config.EventsToken, inbox, c.reconciler.Notify)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return c, nil
 }
 
@@ -98,10 +108,7 @@ func (c *core) Start(ctx context.Context) (result error) {
 		c.mu.Unlock()
 		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		result = errors.Join(result, c.hub.Shutdown(stop), c.messaging.Shutdown(stop), c.watcher.Shutdown(stop))
-		if c.external != nil {
-			result = errors.Join(result, c.external.Shutdown(stop))
-		}
+		result = errors.Join(result, c.shutdownServices(stop))
 		if ctx.Err() != nil && errors.Is(result, ctx.Err()) {
 			result = nil
 		}
@@ -125,6 +132,9 @@ func (c *core) Start(ctx context.Context) (result error) {
 	g.Go(func() error { return c.hub.Start(runCtx) })
 	g.Go(func() error { return c.reconciler.Start(runCtx) })
 	g.Go(func() error { return c.watcher.Start(runCtx) })
+	if c.webhook != nil {
+		g.Go(func() error { return c.webhook.Start(runCtx) })
+	}
 	for _, instance := range c.messaging.instances {
 		g.Go(func() error { return c.runMessaging(runCtx, instance) })
 		if provider, ok := instance.config.Adapter.(domain.UserGroupProvider); ok && len(instance.groupIDs) > 0 {
@@ -140,12 +150,24 @@ func (c *core) Start(ctx context.Context) (result error) {
 	}
 	return result
 }
+
+func (c *core) shutdownServices(ctx context.Context) error {
+	err := errors.Join(c.hub.Shutdown(ctx), c.messaging.Shutdown(ctx), c.watcher.Shutdown(ctx))
+	if c.webhook != nil {
+		err = errors.Join(err, c.webhook.Shutdown(ctx))
+	}
+	if c.external != nil {
+		err = errors.Join(err, c.external.Shutdown(ctx))
+	}
+	return err
+}
+
 func (c *core) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
 	if !c.started {
 		c.stopped = true
 		c.mu.Unlock()
-		return errors.Join(c.hub.Shutdown(ctx), c.messaging.Shutdown(ctx))
+		return c.shutdownServices(ctx)
 	}
 	c.cancel()
 	c.mu.Unlock()

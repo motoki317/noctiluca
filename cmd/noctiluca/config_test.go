@@ -124,6 +124,84 @@ func TestExampleConfig(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEventsConfig(t *testing.T) {
+	t.Run("file", func(t *testing.T) {
+		path := writeConfig(t, "events: {listen: '127.0.0.1:1', token: {file: events-token}}\n")
+		file := filepath.Join(filepath.Dir(path), "events-token")
+		require.NoError(t, os.WriteFile(file, []byte("event-secret\n"), 0600))
+		c, err := loadConfig(path)
+		require.NoError(t, err)
+		require.Equal(t, "127.0.0.1:1", c.Events.Listen)
+		require.Equal(t, file, c.Events.Token.File)
+		value, err := c.Events.Token.read(true)
+		require.NoError(t, err)
+		require.Equal(t, "event-secret", value)
+	})
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("TEST_EVENTS_TOKEN", "event-secret")
+		c, err := loadConfig(writeConfig(t, "events: {listen: '127.0.0.1:65535', token: {env: TEST_EVENTS_TOKEN}}\n"))
+		require.NoError(t, err)
+		require.Equal(t, "127.0.0.1:65535", c.Events.Listen)
+		value, err := c.Events.Token.read(true)
+		require.NoError(t, err)
+		require.Equal(t, "event-secret", value)
+	})
+	t.Run("disabled", func(t *testing.T) {
+		c, err := loadConfig(writeConfig(t, ""))
+		require.NoError(t, err)
+		require.Empty(t, c.Events.Listen)
+	})
+}
+
+const eventsMessaging = slackEntry + "    slack: {app_token: {env: TEST_EVENTS_APP_TOKEN}, bot_token: {env: TEST_EVENTS_BOT_TOKEN}}\n"
+
+func TestInvalidEventsRunConfig(t *testing.T) {
+	t.Setenv("TEST_EVENTS_APP_TOKEN", "app-example")
+	t.Setenv("TEST_EVENTS_BOT_TOKEN", "bot-example")
+	for _, tc := range []struct {
+		name, settings, want string
+	}{
+		{"non-loopback", "listen: '0.0.0.0:1234'", "events.listen"},
+		{"zero port", "listen: '127.0.0.1:0'", "events.listen"},
+		{"port out of range", "listen: '127.0.0.1:65536'", "events.listen"},
+		{"missing token", "listen: '127.0.0.1:1234'", "events.token"},
+		{"token in workdir", "listen: '127.0.0.1:1234', token: {file: work/events-token}", "model.workdir"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := loadConfig(writeConfig(t, eventsMessaging+"events: {"+tc.settings+"}\n"))
+			require.NoError(t, err)
+			_, err = newApplication(t.Context(), c, nil)
+			require.ErrorContains(t, err, tc.want)
+			require.NoFileExists(t, c.Database.Path)
+			require.NoDirExists(t, c.Model.Workdir)
+		})
+	}
+}
+
+func TestMalformedEventsTokenDoesNotExposeValues(t *testing.T) {
+	t.Setenv("TEST_EVENTS_APP_TOKEN", "app-example")
+	t.Setenv("TEST_EVENTS_BOT_TOKEN", "bot-example")
+	t.Setenv("TEST_EVENTS_TOKEN", "event-example")
+	t.Setenv("TEST_EMPTY_EVENTS_TOKEN", "")
+	for _, tc := range []struct{ token, extra string }{
+		{"secret-value", ""},
+		{"[secret-value]", ""},
+		{"{secret-value: {}}", ""},
+		{"{secret-value}", ""},
+		{"{env: [secret-value]}", ""},
+		{"{env: TEST_EVENTS_TOKEN}", "events.token.secret-value: true\n"},
+		{"{env: TEST_EMPTY_EVENTS_TOKEN}", "events.token: secret-value\n"},
+	} {
+		settings := "events: {listen: '127.0.0.1:1234', token: " + tc.token + "}\n" + tc.extra
+		c, err := loadConfig(writeConfig(t, eventsMessaging+settings))
+		if err == nil {
+			_, err = newApplication(t.Context(), c, nil)
+		}
+		require.ErrorContains(t, err, "events.token", settings)
+		require.NotContains(t, err.Error(), "secret-value", settings)
+	}
+}
+
 func TestRemovedTimeoutConfig(t *testing.T) {
 	_, err := loadConfig(writeConfig(t, slackEntry))
 	require.NoError(t, err)

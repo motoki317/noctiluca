@@ -16,6 +16,7 @@
 - Daily scheduled posts with file uploads.
 - Long PR reviews and delegated coding runs.
 - External tools: an issue tracker, a wiki, an error tracker, and a read-only metrics CLI.
+- Events that local programs push, such as new mail that a timer script finds.
 - Reading any thread, searching the workspace, and downloading files.
 - Nightly rest: saving session context, learning from the owner's teachings and corrections, and keeping memory short.
 - Many tasks in one long session, which needs context compaction.
