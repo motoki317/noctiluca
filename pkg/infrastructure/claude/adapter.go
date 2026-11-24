@@ -31,6 +31,10 @@ var AlwaysOfferedToolMeta = map[string]any{"anthropic/alwaysLoad": true}
 
 const subagentInstruction = `Claude Code delegation: use the Agent tool with subagent_type "worker" and run_in_background: true. Do not use forks or other subagent types, because they keep the tools that the worker lacks, such as the send tools and watch.`
 
+// In claude -p, a background nested subagent reports to the main session if it outlasts its spawner.
+// https://code.claude.com/docs/en/sub-agents#let-subagents-spawn-their-own-subagents
+const workerForegroundRule = "Run subagents with run_in_background: false so their results reach you. A background subagent that outlasts you reports to the main session. To run several at once, call them in one message."
+
 func systemPrompt(prompt string) string {
 	if prompt == "" {
 		return subagentInstruction
@@ -125,8 +129,19 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 	}
 	agents, err := json.Marshal(map[string]any{"worker": map[string]any{
 		"description":     "Complete a delegated task and return the result to the main session.",
-		"prompt":          "Complete the delegated task. Return your findings and any reply draft to the main session.",
+		"prompt":          "Complete the delegated task. Return your findings and any reply draft to the main session. " + workerForegroundRule,
 		"disallowedTools": disallowed,
+		// Measured on CLI 2.1.330: Agent(run_in_background:true) in disallowedTools removes the whole Agent tool,
+		// and a hook "if" field with that rule never fires. So the hook command reads the tool input itself.
+		"hooks": map[string][]map[string]any{
+			"PreToolUse": {{
+				"matcher": "Agent",
+				"hooks": []map[string]string{{
+					"type":    "command",
+					"command": `grep -Eq '"run_in_background" *: *true' || exit 0; echo '` + workerForegroundRule + `' >&2; exit 2`,
+				}},
+			}},
+		},
 	}})
 	if err != nil {
 		return nil, fmt.Errorf("encode claude agents: %w", err)
