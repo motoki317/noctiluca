@@ -316,6 +316,12 @@ func validateConfigShape(v *viper.Viper) ([]any, error) {
 	return entries, nil
 }
 
+func loopbackPort(address string, minPort int) (int, bool) {
+	host, port, err := net.SplitHostPort(address)
+	number, numberErr := strconv.Atoi(port)
+	return number, err == nil && host == "127.0.0.1" && numberErr == nil && number >= minPort && number <= 65535
+}
+
 func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if len(c.Messaging) == 0 {
 		return nil, 0, errors.New("messaging requires at least one entry")
@@ -336,9 +342,8 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 	if c.Heartbeat.Interval <= 0 {
 		return nil, 0, errors.New("heartbeat.interval must be positive")
 	}
-	host, port, err := net.SplitHostPort(c.ToolHub.Listen)
-	number, numberErr := strconv.Atoi(port)
-	if err != nil || host != "127.0.0.1" || numberErr != nil || number < 0 || number > 65535 {
+	port, ok := loopbackPort(c.ToolHub.Listen, 0)
+	if !ok {
 		return nil, 0, errors.New("toolhub.listen must be 127.0.0.1:<port>, with port 0 through 65535")
 	}
 	if err := c.validateWorkdir(); err != nil {
@@ -410,7 +415,7 @@ func (c Config) validateRun() ([]messagingTokens, int, error) {
 			*field.target = value
 		}
 	}
-	return tokens, number, nil
+	return tokens, port, nil
 }
 
 var slackConversationIDPattern = regexp.MustCompile(`^[CDG][A-Z0-9]+$`)
