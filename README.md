@@ -22,5 +22,6 @@ flowchart LR
 
 - [Running](docs/running.md): install, configure, and run it.
 - [Design](docs/design.md): how it works and why.
+- [Events](docs/events.md): let local programs push events to the agent.
 
 noctiluca uses the [MIT License](LICENSE). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) credits the projects and papers behind it.

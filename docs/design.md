@@ -8,7 +8,7 @@
 4. The model works on the input: this is a turn. It uses the CLI's own tools and, over MCP, the tools that noctiluca provides.
 5. The model replies by calling the send tool of a messaging adapter.
 
-Scheduled tasks enter the same inbox as rows. So do the notes that the model sets for a later time with the `wake_at` tool, and the results of the background commands that it starts with the `watch` tool.
+Scheduled tasks enter the same inbox as rows. So do the notes that the model sets for a later time with the `wake_at` tool, and the results of the background commands that it starts with the `watch` tool. So do the [events](events.md) that local programs post to noctiluca over HTTP.
 
 ## Decisions
 
