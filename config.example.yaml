@@ -115,6 +115,8 @@ cron: []
 # External MCP servers. The agent can use their tools.
 # Log in once per server: noctiluca --config config.yaml mcp-login <name>
 # When a login expires, noctiluca tells the owner. Log in again and restart noctiluca.
+# A server can ask the owner to approve a tool call. Read Trust in
+# docs/design.md before you rely on that approval.
 mcp_servers: []
 # mcp_servers:
 #   - name: tracker
