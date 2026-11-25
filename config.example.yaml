@@ -121,6 +121,9 @@ mcp_servers: []
 #     url: https://tracker.example/mcp
 #     scopes: [read, offline_access]  # the OAuth scopes that mcp-login requests
 #     tools: [search]  # only these tools load. Omit it to load all.
+#     client_id: example-client-id  # OAuth client ID registered in advance.
+#     client_secret: {env: TRACKER_CLIENT_SECRET}  # Optional OAuth client secret reference.
+#     authorization_server: https://auth.tracker.example  # Issuer URL required with client_id.
 
 log:
   level: INFO  # DEBUG, INFO, WARN, or ERROR

@@ -115,7 +115,7 @@ func newApplication(ctx context.Context, config Config, logger *slog.Logger, sla
 		messaging = append(messaging, core.Messaging{Name: instance.Name, Adapter: adapter, Owner: instance.Owner, Rules: rules,
 			Trust: trust, GroupRefreshInterval: instance.groupRefreshInterval()})
 	}
-	external, err := mcpclient.New(config.MCPServers, repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, logger)
+	external, err := mcpclient.New(config.mcpServerConfigs(), repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db), hub, logger)
 	if err != nil {
 		return nil, err
 	}

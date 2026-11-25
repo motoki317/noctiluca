@@ -134,6 +134,11 @@ type cronConfig struct {
 	Workdir string `mapstructure:"workdir"`
 }
 
+type mcpServerConfig struct {
+	mcpclient.ServerConfig `mapstructure:",squash"`
+	ClientSecretRef        secretRef `mapstructure:"client_secret"`
+}
+
 type Config struct {
 	Rest struct {
 		Enabled bool   `mapstructure:"enabled"`
@@ -163,8 +168,8 @@ type Config struct {
 		Interval time.Duration `mapstructure:"interval"`
 		Enabled  bool          `mapstructure:"enabled"`
 	} `mapstructure:"heartbeat"`
-	Cron       []cronConfig             `mapstructure:"cron"`
-	MCPServers []mcpclient.ServerConfig `mapstructure:"mcp_servers"`
+	Cron       []cronConfig      `mapstructure:"cron"`
+	MCPServers []mcpServerConfig `mapstructure:"mcp_servers"`
 	Log        struct {
 		Level string `mapstructure:"level"`
 	} `mapstructure:"log"`
@@ -185,10 +190,24 @@ func (c *Config) tokenRefs() []labeledTokenRef {
 			refs = append(refs, labeledTokenRef{ref: ref, formatError: formatError})
 		}
 	}
+	for i := range c.MCPServers {
+		refs = append(refs, labeledTokenRef{
+			ref:         &c.MCPServers[i].ClientSecretRef,
+			formatError: fmt.Sprintf("invalid config: MCP server entry %d: write client_secret as {env: NAME} or {file: path}", i+1),
+		})
+	}
 	return append(refs, labeledTokenRef{
 		ref:         &c.Events.Token,
 		formatError: "invalid config: write events.token as {env: NAME} or {file: path}",
 	})
+}
+
+func (c Config) mcpServerConfigs() []mcpclient.ServerConfig {
+	var servers []mcpclient.ServerConfig
+	for _, config := range c.MCPServers {
+		servers = append(servers, config.ServerConfig)
+	}
+	return servers
 }
 
 func loadConfig(path string) (Config, error) {
@@ -284,13 +303,19 @@ func loadConfig(path string) (Config, error) {
 		}
 		token.ref.File = absolute(token.ref.File)
 	}
+	for i, server := range config.MCPServers {
+		ref := server.ClientSecretRef
+		if server.ClientID == "" && (ref.Env != "" || ref.File != "") {
+			return Config{}, fmt.Errorf("invalid config: MCP server entry %d: client_secret requires client_id", i+1)
+		}
+	}
 	if strings.ContainsRune(config.Model.Executable, filepath.Separator) {
 		config.Model.Executable = absolute(config.Model.Executable)
 	}
 	for i := range config.Cron {
 		config.Cron[i].Workdir = absolute(config.Cron[i].Workdir)
 	}
-	return config, mcpclient.Validate(config.MCPServers)
+	return config, mcpclient.Validate(config.mcpServerConfigs())
 }
 
 func validateConfigShape(v *viper.Viper) ([]any, error) {

@@ -76,6 +76,10 @@ func newRootCommand() *cobra.Command {
 				if server.Name != args[0] {
 					continue
 				}
+				clientSecret, err := server.ClientSecretRef.read(false)
+				if err != nil {
+					return fmt.Errorf("MCP server %s client_secret: %w", server.Name, err)
+				}
 				db, err := repository.New(cmd.Context(), config.Database)
 				if err != nil {
 					return err
@@ -83,7 +87,7 @@ func newRootCommand() *cobra.Command {
 				defer db.Close()
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 				defer stop()
-				if err := mcpclient.Login(ctx, server, "", repository.NewOAuthTokenRepository(db), cmd.OutOrStdout(), openBrowser); err != nil {
+				if err := mcpclient.Login(ctx, server.ServerConfig, clientSecret, repository.NewOAuthTokenRepository(db), cmd.OutOrStdout(), openBrowser); err != nil {
 					return err
 				}
 				_, err = fmt.Fprintln(cmd.ErrOrStderr(), "MCP login saved")
@@ -103,7 +107,7 @@ func main() {
 	}
 }
 
-func openBrowser(url string) error {
+var openBrowser = func(url string) error {
 	browser.Stdout, browser.Stderr = io.Discard, io.Discard
 	return browser.OpenURL(url)
 }
