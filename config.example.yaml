@@ -119,8 +119,16 @@ mcp_servers: []
 # mcp_servers:
 #   - name: tracker
 #     url: https://tracker.example/mcp
-#     scopes: [read, offline_access]  # the OAuth scopes that mcp-login requests
+#     scopes: [read]  # the OAuth scopes that mcp-login requests
 #     tools: [search]  # only these tools load. Omit it to load all.
+#     # mcp-login registers noctiluca as an OAuth client of the server on its own.
+#     # For a server that does not allow this, register a client yourself and
+#     # describe it with the next keys (docs/running.md, step 7).
+#     client_id: CLIENT_ID
+#     client_secret: {file: tracker-client-secret}  # omit it for a client without a secret
+#     # The issuer URL of the authorization server where you registered the
+#     # client. mcp-login stops if the server names a different one.
+#     authorization_server: https://auth.tracker.example
 
 log:
   level: INFO  # DEBUG, INFO, WARN, or ERROR

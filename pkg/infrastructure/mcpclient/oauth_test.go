@@ -30,12 +30,19 @@ type oauthFixture struct {
 	mcp               *mcp.Server
 	registrations     atomic.Int32
 	authorizations    atomic.Int32
+	tokenRequests     atomic.Int32
 	metadataGets      atomic.Int32
+	preregistered     bool
+	clientID          string
+	clientSecret      string
 	loginStepUp       bool
 	loginForbidden    bool
+	openHandshake     bool
+	anonymousClosed   atomic.Bool
 	refreshes         atomic.Int32
 	refreshStatus     atomic.Int32
 	initializations   atomic.Int32
+	bearerInits       atomic.Int32
 	mu                sync.Mutex
 	authorization     url.Values
 	redirect          string
@@ -44,10 +51,11 @@ type oauthFixture struct {
 	sendIss           bool // returns iss without advertising RFC 9207 support, as Slite does
 	noOffline         bool
 	rootResource      bool
+	omitPRM           bool
 	grantedScope      *string
 	wrongIss          bool
 	advertiseIss      bool
-	denyCode          bool
+	exchangeError     string
 	runtimeStatus     atomic.Int32
 	insufficientScope bool
 	defaultScopes     bool
@@ -57,7 +65,7 @@ type oauthFixture struct {
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Helper()
-	f := &oauthFixture{mcp: mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, &mcp.ServerOptions{PageSize: 1}), access: "initial-access", refresh: "initial-refresh"}
+	f := &oauthFixture{mcp: mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, &mcp.ServerOptions{PageSize: 1}), clientID: "registered-client", access: "initial-access", refresh: "initial-refresh"}
 	mux := http.NewServeMux()
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
@@ -66,7 +74,8 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		f.mu.Lock()
 		access := f.access
 		f.mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer "+access {
+		bearer := r.Header.Get("Authorization")
+		if bearer != "Bearer "+access && (!f.openHandshake || bearer != "") {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/.well-known/oauth-protected-resource/mcp"`)
 			if f.challengeScope != "" {
 				w.Header().Set("WWW-Authenticate", w.Header().Get("WWW-Authenticate")+`, scope="`+f.challengeScope+`"`)
@@ -100,22 +109,36 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			}
 			if json.Unmarshal(body, &request) == nil && request.Method == "initialize" {
 				f.initializations.Add(1)
+				if bearer != "" {
+					f.bearerInits.Add(1)
+				}
 			}
+		}
+		if f.openHandshake && r.Method == http.MethodDelete && bearer == "" && r.Header.Get("Mcp-Session-Id") != "" {
+			f.anonymousClosed.Store(true)
 		}
 		mcpHandler.ServeHTTP(w, r)
 	})
 	prmHandler := func(w http.ResponseWriter, r *http.Request) {
-		if f.rootResource {
+		if f.rootResource || f.omitPRM {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		writeJSON(w, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
+		issuer := f.server.URL
+		if f.preregistered {
+			issuer += "/"
+		}
+		writeJSON(w, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{issuer}, "scopes_supported": []string{"read", "write"}})
 	}
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", prmHandler)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		if f.omitPRM {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeJSON(w, map[string]any{"resource": f.server.URL, "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{"read", "write"}})
 	})
-	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+	authMetadata := func(w http.ResponseWriter, r *http.Request) {
 		f.metadataGets.Add(1)
 		scopes := []string{"read", "write"}
 		if !f.noOffline {
@@ -125,9 +148,19 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		if f.codeOnly {
 			grants = []string{"authorization_code"}
 		}
-		writeJSON(w, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "registration_endpoint": f.server.URL + "/register", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": f.advertiseIss, "grant_types_supported": grants})
-	})
+		metadata := map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "code_challenge_methods_supported": []string{"S256"}, "scopes_supported": scopes, "authorization_response_iss_parameter_supported": f.advertiseIss, "grant_types_supported": grants}
+		if f.preregistered {
+			metadata["token_endpoint_auth_methods_supported"] = []string{"client_secret_post", "client_secret_basic"}
+		} else {
+			metadata["registration_endpoint"] = f.server.URL + "/register"
+			metadata["token_endpoint_auth_methods_supported"] = []string{"none"}
+		}
+		writeJSON(w, metadata)
+	}
+	mux.HandleFunc("/.well-known/oauth-authorization-server", authMetadata)
+	mux.HandleFunc("/.well-known/oauth-authorization-server/{$}", authMetadata)
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		f.registrations.Add(1)
 		var metadata struct {
 			RedirectURIs []string `json:"redirect_uris"`
 			Scope        string   `json:"scope"`
@@ -145,16 +178,22 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		f.mu.Lock()
 		f.redirect = metadata.RedirectURIs[0]
 		f.mu.Unlock()
-		f.registrations.Add(1)
-		writeJSON(w, map[string]any{"client_id": "registered-client", "token_endpoint_auth_method": "none", "redirect_uris": metadata.RedirectURIs})
+		writeJSON(w, map[string]any{"client_id": f.clientID, "token_endpoint_auth_method": "none", "redirect_uris": metadata.RedirectURIs})
 	})
 	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
 		round := f.authorizations.Add(1)
+		if f.openHandshake {
+			assert.True(t, f.anonymousClosed.Load(), "close the anonymous session before consent")
+		}
 		q := r.URL.Query()
 		assert.Equal(t, "S256", q.Get("code_challenge_method"))
 		assert.NotEmpty(t, q.Get("code_challenge"))
 		assert.NotEmpty(t, q.Get("state"))
-		assert.Equal(t, "registered-client", q.Get("client_id"))
+		assert.Equal(t, f.clientID, q.Get("client_id"))
+		assert.NotContains(t, q, "client_secret")
+		if f.clientSecret != "" {
+			assert.NotContains(t, r.URL.RawQuery, url.QueryEscape(f.clientSecret))
+		}
 		scopes := []string{"read"}
 		if f.defaultScopes {
 			scopes = append(scopes, "write")
@@ -172,6 +211,9 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		assert.Equal(t, f.resource(), q.Get("resource"))
 		f.mu.Lock()
 		f.authorization = q
+		if f.preregistered {
+			f.redirect = q.Get("redirect_uri")
+		}
 		redirect := f.redirect
 		f.mu.Unlock()
 		values := url.Values{"code": {"auth-code"}, "state": {q.Get("state")}}
@@ -184,18 +226,26 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 		http.Redirect(w, r, redirect+"?"+values.Encode(), http.StatusFound)
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		f.tokenRequests.Add(1)
 		if r.ParseForm() != nil {
 			http.Error(w, "bad form", 400)
 			return
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		assert.Equal(t, "registered-client", r.Form.Get("client_id"))
+		assert.Equal(t, f.clientID, r.PostForm.Get("client_id"))
+		assert.Empty(t, r.Header.Get("Authorization"))
+		if f.clientSecret == "" {
+			assert.NotContains(t, r.PostForm, "client_secret")
+		} else {
+			assert.Equal(t, f.clientSecret, r.PostForm.Get("client_secret"))
+		}
 		switch r.Form.Get("grant_type") {
 		case "authorization_code":
-			if f.denyCode {
+			if f.exchangeError != "" {
+				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, `{"error":"invalid_grant"}`)
+				writeJSON(w, map[string]string{"error": f.exchangeError, "error_description": r.PostForm.Get("client_secret")})
 				return
 			}
 			assert.Equal(t, "auth-code", r.Form.Get("code"))
@@ -210,9 +260,13 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			}
 			assert.Equal(t, f.resource(), r.Form.Get("resource"))
 			assert.Equal(t, f.refresh, r.Form.Get("refresh_token"))
-			f.refreshes.Add(1)
+			round := f.refreshes.Add(1)
 			f.access = "rotated-access"
 			f.refresh = "rotated-refresh"
+			if round > 1 {
+				f.access = fmt.Sprintf("rotated-access-%d", round)
+				f.refresh = fmt.Sprintf("rotated-refresh-%d", round)
+			}
 		default:
 			http.Error(w, "bad grant", 400)
 			return
@@ -261,7 +315,7 @@ func TestLoginPersistsAndRefreshes(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
+	require.NoError(t, Login(t.Context(), config, "", repo, browser(t), nil))
 	stored, err := repo.Get(t.Context(), "tracker")
 	require.NoError(t, err)
 	assert.Equal(t, "initial-refresh", stored.RefreshToken)
@@ -293,6 +347,162 @@ func TestLoginPersistsAndRefreshes(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
+func newPreregisteredOAuthFixture(t *testing.T, secret string) (*oauthFixture, ServerConfig) {
+	t.Helper()
+	f := newOAuthFixture(t)
+	f.preregistered, f.noOffline, f.advertiseIss, f.sendIss = true, true, true, true
+	f.clientID, f.clientSecret = "preregistered-client", secret
+	return f, ServerConfig{
+		Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"},
+		ClientID: f.clientID, AuthorizationServer: f.server.URL,
+	}
+}
+
+func TestPreregisteredLoginPersistsAndRefreshes(t *testing.T) {
+	f, config := newPreregisteredOAuthFixture(t, "test-client-secret")
+	repo := loginRepo(t)
+	require.NoError(t, Login(t.Context(), config, f.clientSecret, repo, browser(t), nil))
+	stored, err := repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	assert.Equal(t, "initial-refresh", stored.RefreshToken)
+	stored.Expiry = time.Now().Add(-time.Minute)
+	require.NoError(t, repo.Save(t.Context(), config.Name, stored))
+	source, err := restoreTokens(t.Context(), config, repo)
+	require.NoError(t, err)
+	token, err := source.Token()
+	require.NoError(t, err)
+	assert.Equal(t, "rotated-access", token.AccessToken)
+	stored, err = repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	assert.Equal(t, "rotated-refresh", stored.RefreshToken)
+	require.NoError(t, source.refreshRejected("Bearer "+token.AccessToken))
+	stored, err = repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	assert.Equal(t, "rotated-access-2", stored.AccessToken)
+	assert.Equal(t, "rotated-refresh-2", stored.RefreshToken)
+	assert.EqualValues(t, 2, f.refreshes.Load())
+	assert.EqualValues(t, 3, f.tokenRequests.Load())
+	assert.EqualValues(t, 1, f.metadataGets.Load())
+	assert.Zero(t, f.registrations.Load())
+}
+
+func TestPreregisteredPublicClientLogin(t *testing.T) {
+	f, config := newPreregisteredOAuthFixture(t, "")
+	repo := loginRepo(t)
+	require.NoError(t, Login(t.Context(), config, "", repo, browser(t), nil))
+	_, err := repo.Get(t.Context(), config.Name)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, f.tokenRequests.Load())
+	assert.Zero(t, f.registrations.Load())
+}
+
+func TestPreregisteredLoginWithOpenHandshake(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		forbidden bool
+	}{
+		{name: "authenticated handshake succeeds"},
+		{name: "authenticated handshake fails", forbidden: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f, config := newPreregisteredOAuthFixture(t, "test-client-secret")
+			f.openHandshake, f.loginForbidden = true, test.forbidden
+			repo := loginRepo(t)
+
+			err := Login(t.Context(), config, f.clientSecret, repo, browser(t), nil)
+			assert.EqualValues(t, 1, f.authorizations.Load())
+			assert.EqualValues(t, 1, f.tokenRequests.Load())
+			assert.Zero(t, f.registrations.Load())
+			if test.forbidden {
+				require.ErrorContains(t, err, "Forbidden")
+				_, err = repo.Get(t.Context(), config.Name)
+				require.ErrorIs(t, err, domain.ErrNotFound)
+				return
+			}
+			require.NoError(t, err)
+			stored, err := repo.Get(t.Context(), config.Name)
+			require.NoError(t, err)
+			assert.Equal(t, "initial-access", stored.AccessToken)
+			assert.EqualValues(t, 2, f.initializations.Load())
+			assert.EqualValues(t, 1, f.bearerInits.Load())
+		})
+	}
+}
+
+func TestDynamicLoginWithOpenHandshake(t *testing.T) {
+	f := newOAuthFixture(t)
+	f.openHandshake = true
+	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp"}
+	repo := loginRepo(t)
+
+	err := Login(t.Context(), config, "", repo, browser(t), nil)
+	require.ErrorContains(t, err, "MCP server did not request OAuth authorization")
+	assert.Contains(t, err.Error(), "needs client_id and authorization_server (docs/running.md, step 7)")
+	assert.EqualValues(t, 1, f.initializations.Load())
+	assert.Zero(t, f.registrations.Load())
+	assert.Zero(t, f.authorizations.Load())
+	assert.Zero(t, f.tokenRequests.Load())
+	_, err = repo.Get(t.Context(), config.Name)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestPreregisteredLoginRejectsMismatchedIssuer(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		openHandshake bool
+		omitPRM       bool
+	}{
+		{name: "discovered issuer"},
+		{name: "guessed issuer", openHandshake: true, omitPRM: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f, config := newPreregisteredOAuthFixture(t, "test-client-secret")
+			f.openHandshake, f.omitPRM = test.openHandshake, test.omitPRM
+			config.AuthorizationServer = "https://other.example"
+			repo := loginRepo(t)
+			var output bytes.Buffer
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			err := Login(ctx, config, f.clientSecret, repo, &output, func(string) error {
+				cancel()
+				return nil
+			})
+			require.ErrorContains(t, err, "does not match pre-registered credentials issuer")
+			assert.Empty(t, output.String())
+			assert.Positive(t, f.metadataGets.Load())
+			assert.Zero(t, f.registrations.Load())
+			assert.Zero(t, f.authorizations.Load())
+			assert.Zero(t, f.tokenRequests.Load())
+			_, err = repo.Get(t.Context(), config.Name)
+			require.ErrorIs(t, err, domain.ErrNotFound)
+		})
+	}
+}
+
+func TestPreregisteredLoginHidesSecretInExchangeError(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		secret string
+		code   string
+		detail string
+	}{
+		{name: "plain secret", secret: "test-client-secret", code: "invalid_grant", detail: ", invalid_grant"},
+		{name: "quoted secret", secret: `test-"client\secret`, code: "invalid_grant", detail: ", invalid_grant"},
+		{name: "resource rejected", secret: "test-client-secret", code: "invalid_target", detail: ", invalid_target"},
+		{name: "encoded echo in error code", secret: `test-"client\secret`, code: url.QueryEscape(`test-"client\secret`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f, config := newPreregisteredOAuthFixture(t, test.secret)
+			f.exchangeError = test.code
+			err := Login(t.Context(), config, test.secret, loginRepo(t), browser(t), nil)
+			require.EqualError(t, err, "MCP login failed: token request rejected (400 Bad Request"+test.detail+")")
+			assert.NotContains(t, err.Error(), test.secret)
+			assert.Positive(t, f.tokenRequests.Load())
+		})
+	}
+}
+
 func TestLoginCancellationAndState(t *testing.T) {
 	f := newOAuthFixture(t)
 	db, err := repository.New(t.Context(), repository.Config{Path: filepath.Join(t.TempDir(), "oauth.db")})
@@ -312,7 +522,7 @@ func TestLoginCancellationAndState(t *testing.T) {
 		return len(p), nil
 	})
 	repo := repository.NewOAuthTokenRepository(db)
-	err = Login(ctx, ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, repo, output, nil)
+	err = Login(ctx, ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}, "", repo, output, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = repo.Get(t.Context(), "tracker")
 	require.ErrorIs(t, err, domain.ErrNotFound)
@@ -330,7 +540,7 @@ func TestLoginWithoutRefreshToken(t *testing.T) {
 	defer db.Close()
 	repo := repository.NewOAuthTokenRepository(db)
 	config := ServerConfig{Name: "tracker", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
+	require.NoError(t, Login(t.Context(), config, "", repo, browser(t), nil))
 	stored, err := repo.Get(t.Context(), "tracker")
 	require.NoError(t, err)
 	assert.Equal(t, "initial-access", stored.AccessToken)

@@ -42,7 +42,7 @@ func TestRuntimeAuthFailureDisablesAndNotifiesOnce(t *testing.T) {
 			defer db.Close()
 			repo, inbox := repository.NewOAuthTokenRepository(db), repository.NewInboxRepository(db)
 			config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-			require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
+			require.NoError(t, Login(t.Context(), config, "", repo, browser(t), nil))
 			stored, err := repo.Get(t.Context(), config.Name)
 			require.NoError(t, err)
 			if scenario == "expired-startup" {
@@ -198,7 +198,7 @@ func TestRuntime401RefreshAndRetry(t *testing.T) {
 	f := newOAuthFixture(t)
 	repo := loginRepo(t)
 	config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-	require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
+	require.NoError(t, Login(t.Context(), config, "", repo, browser(t), nil))
 	tokens, err := restoreTokens(t.Context(), config, repo)
 	require.NoError(t, err)
 	hub, err := toolhub.New(toolhub.Config{})
@@ -273,7 +273,7 @@ func TestExpiryWarningOnlyWithinThirtyDays(t *testing.T) {
 			f.refresh = ""
 			repo := loginRepo(t)
 			config := ServerConfig{Name: "wiki", URL: f.server.URL + "/mcp", Scopes: []string{"read"}}
-			require.NoError(t, Login(t.Context(), config, repo, browser(t), nil))
+			require.NoError(t, Login(t.Context(), config, "", repo, browser(t), nil))
 			stored, err := repo.Get(t.Context(), config.Name)
 			require.NoError(t, err)
 			stored.Expiry = time.Now().Add(time.Duration(days) * 24 * time.Hour)
