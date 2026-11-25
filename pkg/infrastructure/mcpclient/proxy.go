@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -21,6 +22,8 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 	"github.com/motoki317/noctiluca/pkg/util/lifecycle"
 )
+
+const mcpRetryKey = "_mcp_retry"
 
 // The SDK exposes no second-401 hook. Keep the retry local to each request so
 // concurrent calls cannot clear or inherit another request's authentication failure.
@@ -139,12 +142,28 @@ func (m *manager) Connect(ctx context.Context) error {
 		if expiry := r.tokens.expiresWithoutRefresh(); !expiry.IsZero() && !expiry.After(time.Now().Add(30*24*time.Hour)) {
 			m.logger.WarnContext(ctx, "MCP login expires without a refresh token", "server", config.Name, "expiry", expiry.UTC().Format(time.RFC3339), "command", "noctiluca mcp-login "+config.Name)
 		}
-		r.client = mcp.NewClient(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, &mcp.ClientOptions{KeepAlive: time.Minute, ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
-			select {
-			case r.changed <- struct{}{}:
-			default:
+		r.client = mcp.NewClient(&mcp.Implementation{Name: "noctiluca", Version: "0.1.0"}, &mcp.ClientOptions{
+			KeepAlive: time.Minute,
+			Capabilities: &mcp.ClientCapabilities{
+				Elicitation: &mcp.ElicitationCapabilities{Form: &mcp.FormElicitationCapabilities{}},
+			},
+			MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
+			ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+				select {
+				case r.changed <- struct{}{}:
+				default:
+				}
+			},
+		})
+		r.client.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+				// Legacy elicitation requires a mid-call answer, and a turn cannot wait for the owner.
+				if params, ok := request.GetParams().(*mcp.InitializeParams); ok {
+					params.Capabilities.Elicitation = nil
+				}
+				return next(ctx, method, request)
 			}
-		}})
+		})
 		if err := m.hub.AddSource("external:"+config.Name, nil); err != nil {
 			return err
 		}
@@ -203,6 +222,7 @@ func (r *remote) connect(ctx context.Context) error {
 
 func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error {
 	var tools []domain.Tool
+	inputRequired := supportsInputRequired(session)
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
 			return fmt.Errorf("MCP tool discovery failed: %w", err)
@@ -215,7 +235,12 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 			r.logger.WarnContext(ctx, "Skipping invalid MCP tool name", "server", r.config.Name, "tool", name)
 			continue
 		}
-		schema, err := json.Marshal(tool.InputSchema)
+		inputSchema := tool.InputSchema
+		retryEnabled := false
+		if inputRequired {
+			inputSchema, retryEnabled = addRetryProperty(inputSchema)
+		}
+		schema, err := json.Marshal(inputSchema)
 		if err != nil {
 			return errors.New("MCP tool schema is invalid")
 		}
@@ -223,7 +248,11 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 			if err := r.tokens.err(); err != nil {
 				return nil, err
 			}
-			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool.Name, Arguments: input})
+			params, err := toolCallParams(tool.Name, input, retryEnabled)
+			if err != nil {
+				return nil, err
+			}
+			result, err := session.CallTool(ctx, params)
 			// A call can have side effects, so the handler never retries a failed call.
 			if err != nil {
 				if authErr := r.tokens.err(); authErr != nil {
@@ -231,6 +260,9 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 				}
 				r.logger.WarnContext(ctx, "MCP tool call failed", "server", r.config.Name, "tool", name)
 				return nil, errors.New("external MCP call failed")
+			}
+			if result.NeedsInput() {
+				return inputRequiredResult(name, result, retryEnabled)
 			}
 			var parts []string
 			for _, content := range result.Content {
@@ -246,6 +278,94 @@ func (r *remote) register(ctx context.Context, session *mcp.ClientSession) error
 		}})
 	}
 	return r.hub.ReplaceSource("external:"+r.config.Name, tools)
+}
+
+func supportsInputRequired(session *mcp.ClientSession) bool {
+	return session.InitializeResult().ProtocolVersion >= "2026-07-28"
+}
+
+func addRetryProperty(input any) (any, bool) {
+	schema, ok := input.(map[string]any)
+	if !ok || schema == nil {
+		return input, false
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok && schema["properties"] != nil {
+		return input, false
+	}
+	if _, exists := properties[mcpRetryKey]; exists {
+		return input, false
+	}
+	// The SDK can cache the listed schema, so amend copies for the hub.
+	schema = maps.Clone(schema)
+	properties = maps.Clone(properties)
+	if properties == nil {
+		properties = make(map[string]any)
+	}
+	properties[mcpRetryKey] = map[string]any{"type": "object", "description": "Set this only when a result of this tool asks for it."}
+	schema["properties"] = properties
+	return schema, true
+}
+
+func toolCallParams(name string, input json.RawMessage, retryEnabled bool) (*mcp.CallToolParams, error) {
+	params := &mcp.CallToolParams{Name: name, Arguments: input}
+	if !retryEnabled {
+		return params, nil
+	}
+	// Raw values preserve the digits of numbers the server may bind to its request state.
+	var arguments map[string]json.RawMessage
+	if err := json.Unmarshal(input, &arguments); err != nil {
+		return nil, errors.New("invalid MCP tool arguments")
+	}
+	raw, ok := arguments[mcpRetryKey]
+	if !ok {
+		return params, nil
+	}
+	var retry struct {
+		RequestState   string               `json:"requestState"`
+		InputResponses mcp.InputResponseMap `json:"inputResponses"`
+	}
+	if err := json.Unmarshal(raw, &retry); err != nil || len(retry.InputResponses) == 0 {
+		return nil, fmt.Errorf("invalid %s: expected inputResponses with form answers", mcpRetryKey)
+	}
+	for _, response := range retry.InputResponses {
+		if _, ok := response.(*mcp.ElicitResult); !ok {
+			return nil, fmt.Errorf("invalid %s: inputResponses must contain only form answers", mcpRetryKey)
+		}
+	}
+	delete(arguments, mcpRetryKey)
+	params.Arguments = arguments
+	params.RequestState = retry.RequestState
+	params.InputResponses = retry.InputResponses
+	return params, nil
+}
+
+func inputRequiredResult(name string, result *mcp.CallToolResult, retryEnabled bool) (json.RawMessage, error) {
+	if len(result.InputRequests) == 0 {
+		return nil, fmt.Errorf("%s did not run because the MCP server is busy", name)
+	}
+	for _, request := range result.InputRequests {
+		form, ok := request.(*mcp.ElicitParams)
+		if !ok || (form.Mode != "form" && form.Mode != "") {
+			return nil, fmt.Errorf("%s did not run because noctiluca cannot pass on this MCP input request", name)
+		}
+	}
+	if !retryEnabled {
+		return nil, fmt.Errorf("%s did not run because noctiluca cannot pass on an MCP form for this tool", name)
+	}
+	challenge, err := json.Marshal(struct {
+		InputRequests mcp.InputRequestMap `json:"inputRequests"`
+		RequestState  string              `json:"requestState"`
+	}{result.InputRequests, result.RequestState})
+	if err != nil {
+		return nil, fmt.Errorf("%s did not run because noctiluca could not encode the MCP form", name)
+	}
+	instructions := fmt.Sprintf(`%[1]s did not run: its MCP server needs the owner's answer first.
+Ask the owner in chat. For each input request below, show its message, the title of each property in its requestedSchema, and the names of the choices (enumNames or oneOf titles), but not the requestState. Do not wait for the answer. Never choose for the owner, even if the owner asked for the action. If the reply fits more than one choice, ask again.
+When the owner picks a choice that allows the call, call %[1]s again with the same arguments plus "%[2]s": {"requestState": <requestState below>, "inputResponses": {<key under inputRequests>: {"action": "accept", "content": {<property in requestedSchema>: <value of the chosen choice, from enum or const>}}}}.
+If the owner picks a choice that denies the call, or drops the request, do not call %[1]s again. If the owner wants other arguments, or you no longer have the requestState, call %[1]s without "%[2]s" to get a new request.
+%[3]s`, name, mcpRetryKey, challenge)
+	return json.Marshal(instructions)
 }
 
 func (r *remote) run(ctx context.Context, notify func()) error {
