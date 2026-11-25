@@ -28,5 +28,6 @@ Scheduled tasks enter the same inbox as rows. So do the notes that the model set
 
 - In a DM, every message starts a turn. In a channel that the bot is in, these start a turn: a top-level message, a message that mentions the bot, a post in a thread that the bot takes part in, and a reaction to one of its posts.
 - Anyone who can reach the bot can send these, unless an optional `trust` allowlist in the config names the senders.
-- Every turn has every tool, including a shell that runs as the Unix user of noctiluca. No tool call asks for approval.
+- Every turn has every tool, including a shell that runs as the Unix user of noctiluca. noctiluca asks for no approval of a tool call.
+- An external MCP server on MCP 2026-07-28 or newer can ask you to approve one of its tool calls. The model then asks you in chat. It can answer instead of you, so this approval does not stop the model from making the call.
 - Nothing isolates the model from noctiluca's config, tokens, and database. Isolation is out of scope for noctiluca.
