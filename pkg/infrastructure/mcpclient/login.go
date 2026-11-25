@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 )
 
 // Login ignores a failed open, because the printed URL still works.
-func Login(ctx context.Context, config ServerConfig, repository domain.OAuthTokenRepository, output io.Writer, open func(string) error) error {
+func Login(ctx context.Context, config ServerConfig, clientSecret string, repository domain.OAuthTokenRepository, output io.Writer, open func(string) error) error {
 	if err := Validate([]ServerConfig{config}); err != nil {
 		return err
 	}
@@ -37,15 +38,11 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	redirect := "http://" + listener.Addr().String() + "/callback"
 	var reg *registration
 	var audience string
-	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
+	handlerConfig := &auth.AuthorizationCodeHandlerConfig{
 		RedirectURL:         redirect,
 		RequestRefreshToken: true,
 		// Slite returns a matching iss without advertising RFC 9207 support. The SDK still rejects a mismatch.
 		AcceptUnadvertisedIss: true,
-		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{
-			ClientName: "noctiluca", RedirectURIs: []string{redirect},
-			GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: "none",
-		}},
 		ScopeFilter: func(discovered []string) []string {
 			if config.Scopes != nil {
 				return config.Scopes
@@ -66,7 +63,19 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 			reg.OAuth.Scopes = grantedScopes(token, cfg.Scopes)
 			return refreshSource(refreshCtx, cfg, token, audience), nil
 		},
-	})
+	}
+	if config.ClientID == "" {
+		handlerConfig.DynamicClientRegistrationConfig = &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{
+			ClientName: "noctiluca", RedirectURIs: []string{redirect},
+			GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: "none",
+		}}
+	} else {
+		handlerConfig.PreregisteredClient = &oauthex.ClientCredentials{ClientID: config.ClientID, Issuer: config.AuthorizationServer}
+		if clientSecret != "" {
+			handlerConfig.PreregisteredClient.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: clientSecret}
+		}
+	}
+	handler, err := auth.NewAuthorizationCodeHandler(handlerConfig)
 	if err != nil {
 		return err
 	}
@@ -75,6 +84,21 @@ func Login(ctx context.Context, config ServerConfig, repository domain.OAuthToke
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		var rejected *oauth2.RetrieveError
+		if clientSecret != "" && errors.As(err, &rejected) {
+			// Token responses can echo credentials even in the OAuth error code.
+			statusCode := rejected.Response.StatusCode
+			status := strconv.Itoa(statusCode)
+			if text := http.StatusText(statusCode); text != "" {
+				status += " " + text
+			}
+			switch code := rejected.ErrorCode; code {
+			case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client", "unsupported_grant_type", "invalid_scope",
+				"invalid_target", "server_error", "temporarily_unavailable":
+				status += ", " + code
+			}
+			return fmt.Errorf("MCP login failed: token request rejected (%s)", status)
 		}
 		// The cause names the failed OAuth step (registration, consent, token exchange).
 		return fmt.Errorf("MCP login failed: %w", err)

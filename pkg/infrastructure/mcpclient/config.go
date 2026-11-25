@@ -2,15 +2,18 @@ package mcpclient
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 )
 
 type ServerConfig struct {
-	Name   string   `mapstructure:"name"`
-	URL    string   `mapstructure:"url"`
-	Scopes []string `mapstructure:"scopes"`
-	Tools  []string `mapstructure:"tools"`
+	Name                string   `mapstructure:"name"`
+	URL                 string   `mapstructure:"url"`
+	Scopes              []string `mapstructure:"scopes"`
+	Tools               []string `mapstructure:"tools"`
+	ClientID            string   `mapstructure:"client_id"`
+	AuthorizationServer string   `mapstructure:"authorization_server"`
 }
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -23,11 +26,19 @@ func Validate(configs []ServerConfig) error {
 		}
 		names[config.Name] = true
 		if !validURL(config.URL) {
-			return errors.New("MCP server URL must use HTTPS (HTTP is allowed on loopback), without credentials or fragments")
+			return errors.New("MCP server URL must use " + urlRule)
+		}
+		if config.ClientID == "" && config.AuthorizationServer != "" {
+			return fmt.Errorf("MCP server %s: authorization_server requires client_id", config.Name)
+		}
+		if config.ClientID != "" && !validURL(config.AuthorizationServer) {
+			return fmt.Errorf("MCP server %s: client_id requires an authorization_server URL using %s", config.Name, urlRule)
 		}
 	}
 	return nil
 }
+
+const urlRule = "HTTPS (HTTP is allowed on loopback), without credentials or fragments"
 
 func validURL(raw string) bool {
 	u, err := url.Parse(raw)

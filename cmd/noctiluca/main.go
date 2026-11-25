@@ -83,7 +83,7 @@ func newRootCommand() *cobra.Command {
 				defer db.Close()
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 				defer stop()
-				if err := mcpclient.Login(ctx, server, repository.NewOAuthTokenRepository(db), cmd.OutOrStdout(), openBrowser); err != nil {
+				if err := mcpclient.Login(ctx, server, "", repository.NewOAuthTokenRepository(db), cmd.OutOrStdout(), openBrowser); err != nil {
 					return err
 				}
 				_, err = fmt.Fprintln(cmd.ErrOrStderr(), "MCP login saved")
