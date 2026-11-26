@@ -71,6 +71,40 @@ func TestReadTools(t *testing.T) {
 	require.Contains(t, string(result), `"text":"Block-only match"`)
 }
 
+func TestReadToolsTables(t *testing.T) {
+	const message = `{"text":"Report","ts":"123.000001","blocks":[{"type":"table","rows":[
+		[{"type":"raw_text","text":"Count"}],[{"type":"raw_number","value":3}]
+	]}]}`
+	const want = "Report\n\n| Count |\n| --- |\n| 3 |"
+	for _, tc := range []struct {
+		name, path string
+		args       map[string]string
+	}{
+		{"slack_read_thread", "/conversations.replies", map[string]string{"channel": "CTEST", "thread_ts": "123.000001"}},
+		{"slack_read_history", "/conversations.history", map[string]string{"channel": "CTEST"}},
+		{"slack_search", "/search.messages", map[string]string{"query": "report"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, tc.path, r.URL.Path)
+				messages := "[" + message + "]"
+				if tc.path == "/search.messages" {
+					messages = `{"matches":` + messages + `,"total":1}`
+				}
+				_, _ = io.WriteString(w, `{"ok":true,"messages":`+messages+`}`)
+			}, true)
+			result := invoke(t, a, tc.name, tc.args)
+			var response struct {
+				Messages, Matches []struct{ Text string }
+			}
+			require.NoError(t, json.Unmarshal(result, &response))
+			messages := append(response.Messages, response.Matches...)
+			require.Len(t, messages, 1)
+			require.Equal(t, want, messages[0].Text)
+		})
+	}
+}
+
 func TestReadToolsReactions(t *testing.T) {
 	a := apiAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/conversations.history", r.URL.Path)

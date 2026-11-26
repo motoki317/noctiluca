@@ -74,6 +74,76 @@ func TestInboundNotifications(t *testing.T) {
 			accepted: true, text: "Hello *team*",
 		},
 		{
+			name: "table only keeps placeholder",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"This message contains interactive elements.","blocks":[
+				{"type":"table","rows":[
+					[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"Item","style":{"bold":true}}]}]},{"type":"raw_text","text":"Amount"}],
+					[{"type":"raw_text","text":"A"},{"type":"raw_number","value":3}],
+					[{"type":"raw_text","text":"B"},{"type":"raw_number","value":1.5,"text":"$1.50"}]
+				]}
+			]}`,
+			accepted: true, text: "This message contains interactive elements.\n\n| Item | Amount |\n| --- | --- |\n| A | 3 |\n| B | $1.50 |",
+		},
+		{
+			name: "rich text body followed by table",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"See below","blocks":[
+				{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"See below"}]}]},
+				{"type":"table","rows":[[{"type":"raw_text","text":"Value"},null]]}
+			]}`,
+			accepted: true, text: "See below\n\n| Value |  |\n| --- | --- |",
+		},
+		{
+			name: "multiple tables with ragged rows",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Summary","blocks":[
+				{"type":"table","rows":[
+					[{"type":"raw_text","text":"First"}],
+					[{"type":"raw_text","text":"left|right\r\nnext\nlast\rend"},{"type":"raw_number","value":-1e-7}],
+					[null]
+				]},
+				{"type":"table","rows":[]},
+				{"type":"section","text":{"type":"mrkdwn","text":"Details"}},
+				{"type":"table","rows":[[{"type":"raw_text","text":"Second"}]]}
+			],"attachments":[{"is_share":true,"text":"Forwarded text","blocks":[{"type":"table","rows":[[{"type":"raw_text","text":"Attachment table"}]]}]}]}`,
+			accepted: true, text: "Details\n\n| First |  |\n| --- | --- |\n| left\\|right<br>next<br>last<br>end | -0.0000001 |\n|  |  |\n\n| Second |\n| --- |\n\nForwarded text",
+		},
+		{
+			name: "empty table with attachment",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Summary",
+				"blocks":[{"type":"table","rows":[]}],
+				"attachments":[{"is_share":true,"text":"Forwarded text"}]
+			}`,
+			accepted: true, text: "Summary\nForwarded text",
+		},
+		{
+			name: "table rich text cells",
+			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","blocks":[
+				{"type":"table","rows":[[{"type":"rich_text","elements":[
+					{"type":"rich_text_section","elements":[
+						{"type":"text","text":"See ","style":{"bold":true}},
+						{"type":"link","url":"https://example.test","text":"docs"},
+						{"type":"text","text":" with "},{"type":"user","user_id":"UMEMBER"},
+						{"type":"text","text":" in "},{"type":"channel","channel_id":"CTEST"},
+						{"type":"text","text":" "},{"type":"usergroup","usergroup_id":"STEAM"}
+					]},
+					{"type":"rich_text_list","style":"bullet","elements":[
+						{"type":"rich_text_section","elements":[{"type":"broadcast","range":"here"},{"type":"emoji","name":"wave"}]},
+						{"type":"rich_text_section","elements":[{"type":"broadcast","range":"channel"},{"type":"broadcast","range":"everyone"}]}
+					]},
+					{"type":"rich_text_quote","elements":[
+						{"type":"link","url":"https://example.test/one"},
+						{"type":"link","url":"https://example.test/two","text":"https://example.test/two"}
+					]},
+					{"type":"rich_text_preformatted","elements":[
+						{"type":"text","text":"Date: "},{"type":"date","fallback":"today"},
+						{"type":"date"},{"type":"future_inline"}
+					]},
+					{"type":"future_block"}
+				]}]]}
+			]}`,
+			accepted: true, text: "| See <https://example.test\\|docs> with <@UMEMBER> in <#CTEST> <!subteam^STEAM>" +
+				"<br><!here>:wave:<br><!channel><!everyone><br><https://example.test/one><https://example.test/two><br>Date: today |\n| --- |",
+		},
+		{
 			name: "empty block text keeps message text",
 			event: `{"type":"message","channel":"CTEST","user":"UMEMBER","ts":"2","text":"Summary","blocks":[
 				{"type":"section","text":{"type":"mrkdwn","text":""}},

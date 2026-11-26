@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,8 +183,123 @@ func blockText(blocks sdk.Blocks) string {
 	return strings.Join(parts, "\n")
 }
 
+func messageBodyText(text string, blocks sdk.Blocks) string {
+	var parts []string
+	if body := cmp.Or(blockText(blocks), text); body != "" {
+		parts = append(parts, body)
+	}
+	for _, block := range blocks.BlockSet {
+		if table, ok := block.(*sdk.TableBlock); ok {
+			if rendered := renderTable(table.Rows); rendered != "" {
+				parts = append(parts, rendered)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+var tableCellEscapes = strings.NewReplacer("|", `\|`, "\r\n", "<br>", "\n", "<br>", "\r", "<br>")
+
+func tableWidth(rows [][]sdk.TableCell) int {
+	columns := 0
+	for _, row := range rows {
+		columns = max(columns, len(row))
+	}
+	return columns
+}
+
+func renderTable(rows [][]sdk.TableCell) string {
+	columns := tableWidth(rows)
+	if columns == 0 {
+		return ""
+	}
+
+	var table strings.Builder
+	for i, row := range rows {
+		if i > 0 {
+			table.WriteByte('\n')
+		}
+		table.WriteByte('|')
+		for column := range columns {
+			table.WriteByte(' ')
+			if column < len(row) {
+				table.WriteString(tableCellEscapes.Replace(tableCellText(row[column])))
+			}
+			table.WriteString(" |")
+		}
+		if i == 0 {
+			table.WriteString("\n|" + strings.Repeat(" --- |", columns))
+		}
+	}
+	return table.String()
+}
+
+func tableCellText(cell sdk.TableCell) string {
+	switch c := cell.(type) {
+	case *sdk.TableRawTextCell:
+		return c.Text
+	case *sdk.TableRawNumberCell:
+		if c.Text != "" {
+			return c.Text
+		}
+		return strconv.FormatFloat(c.Value, 'f', -1, 64)
+	case *sdk.TableRichTextCell:
+		return strings.Join(richTextLines(c.Elements), "\n")
+	default:
+		return ""
+	}
+}
+
+func richTextLines(elements []sdk.RichTextElement) []string {
+	var lines []string
+	for _, element := range elements {
+		switch e := element.(type) {
+		case *sdk.RichTextSection:
+			lines = append(lines, richTextLine(e.Elements))
+		case *sdk.RichTextQuote:
+			lines = append(lines, richTextLine(e.Elements))
+		case *sdk.RichTextPreformatted:
+			lines = append(lines, richTextLine(e.Elements))
+		case *sdk.RichTextList:
+			lines = append(lines, richTextLines(e.Elements)...)
+		}
+	}
+	return lines
+}
+
+func richTextLine(elements []sdk.RichTextSectionElement) string {
+	var line strings.Builder
+	for _, element := range elements {
+		switch e := element.(type) {
+		case *sdk.RichTextSectionTextElement:
+			line.WriteString(e.Text)
+		case *sdk.RichTextSectionLinkElement:
+			if e.Text == "" || e.Text == e.URL {
+				line.WriteString("<" + e.URL + ">")
+			} else {
+				line.WriteString("<" + e.URL + "|" + e.Text + ">")
+			}
+		case *sdk.RichTextSectionUserElement:
+			line.WriteString("<@" + e.UserID + ">")
+		case *sdk.RichTextSectionChannelElement:
+			line.WriteString("<#" + e.ChannelID + ">")
+		case *sdk.RichTextSectionUserGroupElement:
+			line.WriteString("<!subteam^" + e.UsergroupID + ">")
+		case *sdk.RichTextSectionBroadcastElement:
+			line.WriteString("<!" + e.Range + ">")
+		case *sdk.RichTextSectionEmojiElement:
+			line.WriteString(":" + e.Name + ":")
+		case *sdk.RichTextSectionDateElement:
+			if e.Fallback != nil {
+				line.WriteString(*e.Fallback)
+			}
+		}
+	}
+	return line.String()
+}
+
 func messageText(m *sdk.Msg) string {
-	parts := []string{cmp.Or(blockText(m.Blocks), m.Text)}
+	parts := []string{messageBodyText(m.Text, m.Blocks)}
 	for _, attachment := range m.Attachments {
 		// People can only attach forwarded messages, so their other attachments are unfurls.
 		if (m.BotID == "" && !attachment.IsShare) || (m.BotID != "" && attachment.OriginalURL != "") {
@@ -199,6 +315,13 @@ func messageText(m *sdk.Msg) string {
 		}
 	}
 	parts = slices.DeleteFunc(parts, func(part string) bool { return part == "" })
+	if len(parts) > 1 && slices.ContainsFunc(m.Blocks.BlockSet, func(block sdk.Block) bool {
+		table, ok := block.(*sdk.TableBlock)
+		return ok && tableWidth(table.Rows) > 0
+	}) {
+		// A blank line keeps attachment text from becoming a table row.
+		return parts[0] + "\n\n" + strings.Join(parts[1:], "\n")
+	}
 	return strings.Join(parts, "\n")
 }
 
