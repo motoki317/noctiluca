@@ -262,17 +262,10 @@ func (s *session) warnCompactionFailure() {
 }
 
 func (s *session) recordContextTokens(f frame) {
-	if f.ParentToolUseID != "" || s.parser.compacting {
+	if f.Type != "assistant" || f.ParentToolUseID != "" || s.parser.compacting {
 		return
 	}
-	var u *usage
-	switch {
-	case f.Type == "stream_event" && f.Event.Type == "message_start":
-		u = f.Event.Message.Usage
-	case f.Type == "assistant":
-		u = f.Message.Usage
-	}
-	if u != nil {
+	if u := f.Message.Usage; u != nil {
 		s.contextTokens = u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 	}
 }
