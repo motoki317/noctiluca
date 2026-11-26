@@ -46,6 +46,7 @@ Write %[1]s_send text and %[1]s_upload_file captions in Markdown, not in the Sla
 - Start each list item with "- " or "1. ", because "•" stays plain text.
 - Write each URL as <url>, <url|label>, or [label](url). A bare URL that touches other text links wrongly or not at all.
 - Mentions such as <@U…> and <#C…> work as in mrkdwn.
+- A pipe table shows as a table.
 If an answer needs any tool besides %[1]s_send, first show that you started, in the place where you will answer.
 For a thread, including one that you start, call %[1]s_set_status. Call it again when work continues after a post. At top level, call %[1]s_react with channel and timestamp.`, a.name)
 	if a.owner == "" {
