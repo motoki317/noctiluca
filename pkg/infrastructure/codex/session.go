@@ -239,7 +239,7 @@ func (s *session) read(stdout io.ReadCloser) {
 		var started *runningTurn
 		var wake, compactionFinished bool
 		s.mu.Lock()
-		compacting := s.current != nil && s.current.compaction != nil
+		compacting := s.compactionInFlight()
 		switch f.Method {
 		case "thread/tokenUsage/updated":
 			if tokens := n.TokenUsage.Last.TotalTokens; tokens != nil && s.threadID != "" && n.ThreadID == s.threadID {
@@ -321,8 +321,8 @@ func (s *session) read(stdout io.ReadCloser) {
 	}
 	if s.ctx.Err() == nil {
 		s.mu.Lock()
-		if t := s.current; t != nil && t.compaction != nil {
-			t.settleID()
+		if s.compactionInFlight() {
+			s.current.settleID()
 			s.current = nil
 			slog.WarnContext(s.ctx, "Codex compaction failed when the stream closed", "thread", s.threadID)
 		}
@@ -462,8 +462,13 @@ func (s *session) ResumeToken() string {
 func (s *session) ContextTokens() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.compactRequested || s.compactionInFlight() {
+		return 0
+	}
 	return s.contextTokens
 }
+func (s *session) compactionInFlight() bool { return s.current != nil && s.current.compaction != nil }
+
 func (s *session) Compact() {
 	s.mu.Lock()
 	s.compactRequested = true

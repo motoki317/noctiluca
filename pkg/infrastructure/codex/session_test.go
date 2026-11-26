@@ -23,6 +23,8 @@ import (
 	"github.com/motoki317/noctiluca/pkg/domain"
 )
 
+const testCompactionTurnID = "compact-1"
+
 func fakeServer(t *testing.T, mode string) (string, string) {
 	t.Helper()
 	binary, err := os.Executable()
@@ -76,9 +78,8 @@ func TestAppServerHelper(t *testing.T) {
 		notify(method, map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": "turn-1", "status": status}})
 	}
 	initialized := false
-	const compactID = "compact-1"
 	compactTurnNote := func(method, status string) {
-		notify(method, map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": compactID, "status": status}})
+		notify(method, map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": testCompactionTurnID, "status": status}})
 	}
 	handleInput := inputTestServer(mode, emit, notify)
 	scan := bufio.NewScanner(os.Stdin)
@@ -140,15 +141,13 @@ func TestAppServerHelper(t *testing.T) {
 			if mode == "input-compact-crash" {
 				os.Exit(1)
 			}
-			notify("item/agentMessage/delta", map[string]string{"threadId": "thread-1", "turnId": compactID, "delta": "internal text"})
+			notify("item/agentMessage/delta", map[string]string{"threadId": "thread-1", "turnId": testCompactionTurnID, "delta": "internal text"})
 		case "test/compact-complete":
 			status := "completed"
 			if mode == "input-compact-fail" {
 				status = "failed"
-				notify("error", map[string]any{"threadId": "thread-1", "turnId": compactID, "willRetry": false,
+				notify("error", map[string]any{"threadId": "thread-1", "turnId": testCompactionTurnID, "willRetry": false,
 					"error": map[string]string{"message": "private diagnostic"}})
-			} else {
-				notify("thread/tokenUsage/updated", tokenUsageNote("thread-1", compactID, 80))
 			}
 			compactTurnNote("turn/completed", status)
 			respond(map[string]any{})
@@ -203,15 +202,11 @@ func TestAppServerHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func tokenUsageNote(threadID, turnID string, tokens int) map[string]any {
-	return map[string]any{"threadId": threadID, "turnId": turnID, "tokenUsage": map[string]any{
-		"last": map[string]int{"totalTokens": tokens}, "total": map[string]int{"totalTokens": 987654},
-	}}
-}
-
-func sendTokenUsage(t *testing.T, s *session, threadID string, tokens int) {
+func sendTokenUsage(t *testing.T, s *session, threadID, turnID string, tokens int) {
 	t.Helper()
-	params, err := json.Marshal(tokenUsageNote(threadID, "turn-1", tokens))
+	params, err := json.Marshal(map[string]any{"threadId": threadID, "turnId": turnID, "tokenUsage": map[string]any{
+		"last": map[string]int{"totalTokens": tokens}, "total": map[string]int{"totalTokens": 987654},
+	}})
 	require.NoError(t, err)
 	control(t, s, "notify", rpcFrame{Method: "thread/tokenUsage/updated", Params: params})
 }
@@ -219,9 +214,9 @@ func sendTokenUsage(t *testing.T, s *session, threadID string, tokens int) {
 func TestSessionContextTokens(t *testing.T) {
 	s, _ := openInputSession(t, "input-normal")
 	require.Zero(t, s.ContextTokens())
-	sendTokenUsage(t, s, "thread-1", 234567)
-	sendTokenUsage(t, s, "other-thread", 345678)
-	sendTokenUsage(t, s, "", 456789)
+	sendTokenUsage(t, s, "thread-1", "turn-1", 234567)
+	sendTokenUsage(t, s, "other-thread", "turn-1", 345678)
+	sendTokenUsage(t, s, "", "turn-1", 456789)
 	require.Equal(t, 234567, s.ContextTokens())
 	require.Empty(t, s.events)
 }
@@ -231,7 +226,7 @@ func waitForCompactionTurn(t *testing.T, s *session) {
 	require.Eventually(t, func() bool {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		return s.current != nil && s.current.id == "compact-1"
+		return s.current != nil && s.current.id == testCompactionTurnID
 	}, 5*time.Second, time.Millisecond)
 	require.False(t, s.Idle())
 }
@@ -259,13 +254,18 @@ func TestSessionRequestedCompaction(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	sendAndStart(t, s, "first turn")
-	sendTokenUsage(t, s, "thread-1", 200000)
+	sendTokenUsage(t, s, "thread-1", "turn-1", 200000)
+	require.Equal(t, 200000, s.ContextTokens())
 	s.Compact()
+	require.Zero(t, s.ContextTokens())
 	s.Compact()
 	requireCompactionBlocked(t, s)
 	control(t, s, "complete", nil)
 	require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
 	waitForCompactionTurn(t, s)
+	require.Zero(t, s.ContextTokens())
+	sendTokenUsage(t, s, "thread-1", testCompactionTurnID, 80)
+	require.Zero(t, s.ContextTokens())
 	require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 2, Text: "after compaction"}))
 	control(t, s, "compact-complete", nil)
 	select {
@@ -273,10 +273,10 @@ func TestSessionRequestedCompaction(t *testing.T) {
 	default:
 		t.Fatal("compaction completion did not wake the caller")
 	}
+	require.Equal(t, 80, s.ContextTokens())
 	requireEvents(t, s, domain.ModelEvent{Kind: domain.ModelEventTurnStarted},
 		domain.ModelEvent{Kind: domain.ModelEventInputStarted, InputID: 2},
 		domain.ModelEvent{Kind: domain.ModelEventText, Text: "turn/start:after compaction"})
-	require.Equal(t, 80, s.ContextTokens())
 	control(t, s, "complete", nil)
 	require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
 	require.Eventually(t, s.Idle, time.Second, time.Millisecond)
@@ -308,8 +308,8 @@ func TestSessionSubagentCompletionDuringCompaction(t *testing.T) {
 	s, _ := openInputSession(t, "input-normal")
 	s.Compact()
 	waitForCompactionTurn(t, s)
-	control(t, s, "notify", rpcFrame{Method: "item/completed", Params: json.RawMessage(
-		`{"threadId":"thread-1","turnId":"compact-1","item":{"type":"subAgentActivity","kind":"completed","agentThreadId":"child-1"}}`)})
+	control(t, s, "notify", rpcFrame{Method: "item/completed", Params: json.RawMessage(fmt.Sprintf(
+		`{"threadId":"thread-1","turnId":%q,"item":{"type":"subAgentActivity","kind":"completed","agentThreadId":"child-1"}}`, testCompactionTurnID))})
 	require.Equal(t, domain.ModelEventBackgroundDone, nextEvent(t, s).Kind)
 	control(t, s, "compact-complete", nil)
 	require.Equal(t, domain.ModelEventTurnStarted, nextEvent(t, s).Kind)
@@ -346,6 +346,8 @@ func TestSessionCompactionFailure(t *testing.T) {
 			previous := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(previous) })
+			wantTokens := 200000
+			sendTokenUsage(t, s, "thread-1", "turn-1", wantTokens)
 			s.Compact()
 			if mode == "input-compact-crash" {
 				event := nextEvent(t, s)
@@ -354,6 +356,8 @@ func TestSessionCompactionFailure(t *testing.T) {
 			} else {
 				if mode == "input-compact-fail" {
 					waitForCompactionTurn(t, s)
+					wantTokens = 120000
+					sendTokenUsage(t, s, "thread-1", testCompactionTurnID, wantTokens)
 					require.NoError(t, s.Send(t.Context(), domain.UserInput{ID: 1, Text: "after failure"}))
 					control(t, s, "compact-complete", nil)
 				} else {
@@ -370,6 +374,7 @@ func TestSessionCompactionFailure(t *testing.T) {
 				control(t, s, "complete", nil)
 				require.Equal(t, domain.ModelEventTurnFinished, nextEvent(t, s).Kind)
 			}
+			require.Equal(t, wantTokens, s.ContextTokens())
 			require.NoError(t, s.Close())
 			require.Empty(t, s.events)
 			var record struct{ Level string }

@@ -418,6 +418,7 @@ func TestSessionRequestedCompaction(t *testing.T) {
 	require.Equal(t, "active", nextEvent(t, s).Text)
 	require.Equal(t, 200000, s.ContextTokens())
 	s.Compact()
+	require.Zero(t, s.ContextTokens())
 	s.Compact()
 	require.Never(t, func() bool {
 		s.mu.RLock()
@@ -482,6 +483,7 @@ func TestSessionInputDuringCompaction(t *testing.T) {
 		defer s.mu.RUnlock()
 		return s.parser.compacting
 	}, 5*time.Second, time.Millisecond)
+	require.Zero(t, s.ContextTokens())
 	require.False(t, s.Idle())
 	s.mu.RLock()
 	require.Empty(t, s.pending, "compaction must not enter the pending input map")
@@ -510,6 +512,7 @@ func TestSessionAutonomousTurnBeforeCompaction(t *testing.T) {
 	require.False(t, compacting, "compaction must wait for its own started frame")
 	require.NotEmpty(t, compactUUID)
 	require.Equal(t, 42, contextTokens, "the autonomous turn must update the main-thread context")
+	require.Zero(t, s.ContextTokens())
 	compactTurn(t, s, 2, "small")
 	require.True(t, s.Idle())
 	require.NoError(t, s.Close())
@@ -546,9 +549,9 @@ func TestSessionRequestedCompactionFailure(t *testing.T) {
 				defer s.mu.RUnlock()
 				return !s.compactRequested && s.idle()
 			}, 5*time.Second, time.Millisecond)
+			require.Equal(t, 199999, s.ContextTokens())
 			require.NoError(t, s.Close())
 			require.Empty(t, s.events)
-			require.Equal(t, 199999, s.ContextTokens())
 			var record struct{ Level, Msg string }
 			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one warning per failure")
 			require.Equal(t, "WARN", record.Level)

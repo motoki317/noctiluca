@@ -77,7 +77,10 @@ type ModelSession interface {
 	Send(ctx context.Context, input UserInput) error
 	Events() <-chan ModelEvent
 	ResumeToken() string
-	// ContextTokens reports the size of the session's own context after its last model request, or zero if unknown.
+	// ContextTokens reports the size of the session's own context after its last model request or compaction,
+	// or zero if unknown. From a Compact call until no requested compaction is pending or running, it reports
+	// zero. The adapter picks when compaction runs, so the caller cannot tell whether the next input reaches
+	// the model before or after it.
 	// Subagent contexts do not count.
 	ContextTokens() int
 	// Compact requests compaction between turns and returns immediately.

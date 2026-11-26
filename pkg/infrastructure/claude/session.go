@@ -215,9 +215,9 @@ func (s *session) read(stdout io.ReadCloser, dir string) {
 			}
 		}
 		wasIdle := s.idle()
-		hadCompaction := s.parser.compactUUID != ""
+		hadCompaction := s.compactionInFlight()
 		events := s.parser.events(f, s.pending)
-		compactionFinished := hadCompaction && s.parser.compactUUID == ""
+		compactionFinished := hadCompaction && !s.compactionInFlight()
 		if compactionFinished && f.failedResult() {
 			s.warnCompactionFailure()
 		}
@@ -411,6 +411,9 @@ func (s *session) ResumeToken() string              { s.mu.RLock(); defer s.mu.R
 func (s *session) ContextTokens() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.compactRequested || s.compactionInFlight() {
+		return 0
+	}
 	return s.contextTokens
 }
 
@@ -431,6 +434,9 @@ func (s *session) idle() bool {
 }
 
 func (s *session) canCompact() bool {
-	return len(s.pending) == 0 && !s.parser.active && s.parser.compactUUID == ""
+	return len(s.pending) == 0 && !s.parser.active && !s.compactionInFlight()
 }
+
+func (s *session) compactionInFlight() bool { return s.parser.compactUUID != "" }
+
 func (s *session) Close() error { s.cancel(); <-s.done; return s.closeErr }
