@@ -118,6 +118,8 @@ func TestDeletedMessageKeepsSenderAndThread(t *testing.T) {
 }
 
 func TestUnfurlEditsAreDropped(t *testing.T) {
+	const oldTable = `"text":"same","blocks":[{"type":"table","rows":[[{"type":"raw_text","text":"old"}]]}]`
+	const newTable = `"text":"same","blocks":[{"type":"table","rows":[[{"type":"raw_text","text":"new"}]]}]`
 	for _, tc := range []struct {
 		name, before, after string
 		accepted            bool
@@ -126,6 +128,8 @@ func TestUnfurlEditsAreDropped(t *testing.T) {
 		{"text", `"text":"old"`, `"text":"new"`, true},
 		{"file", `"text":"same","files":[{"id":"F1"}]`, `"text":"same","files":[{"id":"F2"}]`, true},
 		{"file metadata", `"text":"same","files":[{"id":"F1","name":"old"}]`, `"text":"same","files":[{"id":"F1","name":"new","size":120}]`, false},
+		{"table cell change", oldTable, newTable, true},
+		{"table with added unfurl", oldTable, oldTable + `,"attachments":[{"title":"preview"}]`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := `{"type":"event_callback","event":{"type":"message","subtype":"message_changed","channel":"CTEST","previous_message":{"user":"UMEMBER",` + tc.before + `},"message":{"user":"UMEMBER",` + tc.after + `}}}`
