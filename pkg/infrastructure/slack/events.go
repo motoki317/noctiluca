@@ -182,8 +182,12 @@ func blockText(blocks sdk.Blocks) string {
 	return strings.Join(parts, "\n")
 }
 
+func messageBodyText(text string, blocks sdk.Blocks) string {
+	return cmp.Or(blockText(blocks), text)
+}
+
 func messageText(m *sdk.Msg) string {
-	parts := []string{cmp.Or(blockText(m.Blocks), m.Text)}
+	parts := []string{messageBodyText(m.Text, m.Blocks)}
 	for _, attachment := range m.Attachments {
 		// People can only attach forwarded messages, so their other attachments are unfurls.
 		if (m.BotID == "" && !attachment.IsShare) || (m.BotID != "" && attachment.OriginalURL != "") {
