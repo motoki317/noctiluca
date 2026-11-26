@@ -171,9 +171,10 @@ func TestCLIHelper(t *testing.T) {
 		emit(`{"type":"system","subtype":"task_notification","task_id":"background","status":"completed","summary":"done"}`)
 	}
 	backgroundTurn := func() {
-		emit(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"task-turn","usage":{"input_tokens":42}}}}`)
+		usage := `{"input_tokens":42}`
+		emit(fmt.Sprintf(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"task-turn","usage":%s}}}`, usage))
 		emit(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"background text"}}}`)
-		emit(`{"type":"assistant","message":{"id":"task-turn","content":[{"type":"tool_use","id":"background-tool","name":"reply","input":{}}]}}`)
+		emit(fmt.Sprintf(`{"type":"assistant","message":{"id":"task-turn","content":[{"type":"tool_use","id":"background-tool","name":"reply","input":{}}],"usage":%s}}`, usage))
 		emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"background-tool","is_error":true,"content":"background tool failed"}]}}`)
 		emit(`{"type":"result","subtype":"success","result":"background result"}`)
 	}
@@ -418,6 +419,7 @@ func TestSessionRequestedCompaction(t *testing.T) {
 	require.Equal(t, "active", nextEvent(t, s).Text)
 	require.Equal(t, 200000, s.ContextTokens())
 	s.Compact()
+	require.Zero(t, s.ContextTokens())
 	s.Compact()
 	require.Never(t, func() bool {
 		s.mu.RLock()
@@ -482,6 +484,7 @@ func TestSessionInputDuringCompaction(t *testing.T) {
 		defer s.mu.RUnlock()
 		return s.parser.compacting
 	}, 5*time.Second, time.Millisecond)
+	require.Zero(t, s.ContextTokens())
 	require.False(t, s.Idle())
 	s.mu.RLock()
 	require.Empty(t, s.pending, "compaction must not enter the pending input map")
@@ -510,6 +513,7 @@ func TestSessionAutonomousTurnBeforeCompaction(t *testing.T) {
 	require.False(t, compacting, "compaction must wait for its own started frame")
 	require.NotEmpty(t, compactUUID)
 	require.Equal(t, 42, contextTokens, "the autonomous turn must update the main-thread context")
+	require.Zero(t, s.ContextTokens())
 	compactTurn(t, s, 2, "small")
 	require.True(t, s.Idle())
 	require.NoError(t, s.Close())
@@ -546,9 +550,9 @@ func TestSessionRequestedCompactionFailure(t *testing.T) {
 				defer s.mu.RUnlock()
 				return !s.compactRequested && s.idle()
 			}, 5*time.Second, time.Millisecond)
+			require.Equal(t, 199999, s.ContextTokens())
 			require.NoError(t, s.Close())
 			require.Empty(t, s.events)
-			require.Equal(t, 199999, s.ContextTokens())
 			var record struct{ Level, Msg string }
 			require.NoError(t, json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record), "one warning per failure")
 			require.Equal(t, "WARN", record.Level)
@@ -613,10 +617,10 @@ func TestMainContextTokenTracking(t *testing.T) {
 		s.recordContextTokens(f)
 	}
 	observe(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"first","usage":{"input_tokens":1,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}}`)
-	require.Equal(t, 6, s.ContextTokens())
+	require.Zero(t, s.ContextTokens())
 	observe(`{"type":"assistant","message":{"id":"first","content":[],"usage":{"input_tokens":2,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}`)
 	require.Equal(t, 7, s.ContextTokens())
-	observe(`{"type":"stream_event","parent_tool_use_id":"child","event":{"type":"message_start","message":{"id":"child","usage":{"input_tokens":999999}}}}`)
+	observe(`{"type":"assistant","parent_tool_use_id":"child","message":{"id":"child","content":[],"usage":{"input_tokens":999999}}}`)
 	require.Equal(t, 7, s.ContextTokens())
 }
 

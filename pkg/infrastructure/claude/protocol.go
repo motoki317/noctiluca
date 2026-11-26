@@ -54,9 +54,8 @@ type frame struct {
 		RequestID string `json:"request_id"`
 	} `json:"response"`
 	Event struct {
-		Type    string  `json:"type"`
-		Message message `json:"message"`
-		Delta   struct {
+		Type  string `json:"type"`
+		Delta struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"delta"`
