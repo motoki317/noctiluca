@@ -33,7 +33,8 @@ const subagentInstruction = `Claude Code delegation: use the Agent tool with sub
 
 // In claude -p, a background nested subagent reports to the main session if it outlasts its spawner.
 // https://code.claude.com/docs/en/sub-agents#let-subagents-spawn-their-own-subagents
-const workerForegroundRule = "Run subagents with run_in_background: false so their results reach you. A background subagent that outlasts you reports to the main session. To run several at once, call them in one message."
+const workerForegroundRule = "Run subagents with run_in_background: false so their results reach you. A background subagent that outlasts you reports to the main session. To run several at once, call them in one message." +
+	" You cannot continue a finished subagent, so start a new foreground subagent with the context it needs."
 
 func systemPrompt(prompt string) string {
 	if prompt == "" {
@@ -123,7 +124,9 @@ func (a *adapter) Open(ctx context.Context, config domain.ModelSessionConfig) (d
 		return nil, fmt.Errorf("write claude prompt: %w", err)
 	}
 	args = append(args, "--append-system-prompt-file", promptPath)
-	disallowed := make([]string, 0, len(config.ToolHub.MainSessionTools))
+	// In claude -p, SendMessage can resume a subagent in the background and send its result to the main session.
+	// https://code.claude.com/docs/en/sub-agents#resume-subagents
+	disallowed := []string{"SendMessage"}
 	for _, name := range config.ToolHub.MainSessionTools {
 		disallowed = append(disallowed, "mcp__noctiluca__"+name)
 	}
