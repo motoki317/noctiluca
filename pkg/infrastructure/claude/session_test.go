@@ -751,14 +751,14 @@ func TestWorkerDisallowsMainSessionTools(t *testing.T) {
 			require.True(t, ok)
 			require.NotEmpty(t, worker.Description)
 			require.Nil(t, worker.Tools, "inherit read, download, and native tools")
-			want := []string{}
+			want := []string{"SendMessage"}
 			for _, name := range names {
 				want = append(want, "mcp__noctiluca__"+name)
 			}
 			require.Equal(t, want, worker.DisallowedTools)
 
-			require.NotEmpty(t, workerForegroundRule)
 			require.Contains(t, worker.Prompt, workerForegroundRule)
+			require.Contains(t, worker.Prompt, "start a new foreground subagent with the context it needs")
 			var hooks map[string][]struct {
 				Matcher string `json:"matcher"`
 				Hooks   []struct {
